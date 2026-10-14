@@ -1,0 +1,19 @@
+frontend/node_modules/
+frontend/dist/
+backend/.venv/
+backend/__pycache__/
+backend/app/__pycache__/
+*.db
+
+# Local data, generated previews and credentials
+backend/media/
+review/
+**/__pycache__/
+*.pyc
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+.codex/
+图片_来自小红书.jpg
