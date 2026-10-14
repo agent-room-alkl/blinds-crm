@@ -28,3 +28,10 @@ SQLite database defaults backend/vera.db; set VERA_DB to use another file. Demo 
 - `python test_products.py` runs in temporary database/media directories.
 
 - Product `image_urls[]` is an ordered gallery of up to12 local images. The first entry is the cover and is mirrored to image_url. Admin can reorder/remove images by updating the array. Public catalogue and website share the order. Published products require a cover. Legacy products without a saved gallery get coherent original room/detail demo pairs.
+
+## Direct orders and inquiry email
+- POST /api/orders/manual: authenticated direct order with existing customer_id or company/contact_name/channel; source phone/email/wechat/other, optional reference, confirmation_note, unique submission_key, currency/charges/terms/lines. Does not create a quote or inquiry. Repeating the same payload/key returns the same order; changing it returns409. Stores an immutable customer/product/price snapshot; stages use the existing order status API.
+- GET /api/email/config: authenticated delivery readiness and sender only.
+- POST /api/inquiries/{id}/email: recipient, subject and plaintext body. Sends only on an explicit user action via configured SMTP; records successful delivery in followups. SMTP errors are sanitized and tell the user to check the mailbox before retrying an ambiguous delivery.
+- Configure SMTP_HOST, SMTP_PORT, SMTP_SECURITY=starttls (587) or ssl (465), SMTP_FROM, SMTP_USERNAME, SMTP_PASSWORD in server environment; never frontend or Git.
+- python backend/test_manual_email.py uses isolated data and mocked SMTP; sends no real mail.

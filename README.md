@@ -30,7 +30,7 @@ npm run dev
 
 
 ## Current demo workflows
-- A website inquiry creates customer details and an inquiry. CRM → Quotations → latest version → Customer accepted → record acceptance evidence → Create order. Existing orders link back to their quote version; revisions never change frozen orders.
+- A website inquiry creates customer details and an inquiry. CRM → Quotations → latest version → Customer accepted → record acceptance evidence → Create order. External phone/email orders can also be recorded directly in Orders → Record an order. Existing orders link back to their quote version; revisions never change frozen orders.
 - Products: administrators manage bilingual details, dimension ranges, options and local images. Sales users can view them. Published products share the same API and IDs with the website; hidden products are excluded.
 - Product image uploads persist in `backend/media/`; back this directory up with the SQLite database. Both contain local state and are excluded from Git.
 - Assistant drafts currently use deterministic rules. No external AI model is connected. Draft generation does not send messages or persist follow-ups automatically.
@@ -42,3 +42,7 @@ npm run dev
 ## Shared PostgreSQL and cloud deployment
 
 Server loads backend/.env, then root .env (environment variables take precedence). With DATABASE_URL/POSTGRES_URL configured, it uses the isolated vera PostgreSQL schema; without configuration it retains the local SQLite demo. Cloud product images use the private Cloudflare R2 bucket. See DEPLOYMENT.md and backend/.env.example. PostgreSQL migration preserves existing users but not old sessions; sign in again after switching. Cloud deployment needs Services root ./ and the server variables described in DEPLOYMENT.md.
+
+## CRM editing and communication
+Quotation editing uses a compact three-step flow with validation before advancing. Inquiries expose Create quote and Send email instead of the old five assistant actions. Direct orders record customer/source/reference, manually priced specifications and acceptance evidence without creating a fake quotation; retrying the same submission does not duplicate it.
+Optional SMTP settings and deployment setup are documented in DEPLOYMENT.md. Email is sent only by clicking Send email; the provider must first be configured server-side. Tests use a mocked mail server and send no real messages.
