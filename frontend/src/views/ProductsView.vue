@@ -39,7 +39,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.page{background:#faf9f6}.catalogue-intro{padding:32px 0 30px}.catalogue-label{font-size:11px;letter-spacing:.12em;color:#64766b;margin:0 0 12px}.page h1 {
+.page,.photo-panel{background:#faf9f6}.catalogue-intro{padding:32px 0 30px}.catalogue-label{font-size:11px;letter-spacing:.12em;color:#64766b;margin:0 0 12px}.page h1 {
   font-weight: 600;
   font-size: clamp(28px, 2.6vw, 38px);
   line-height: 1.25;
