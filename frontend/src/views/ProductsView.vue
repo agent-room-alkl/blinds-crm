@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { listProducts, materialPhoto, type ApiProduct } from "../api";
+import { listProducts, type ApiProduct } from "../api";
+import CatalogueGallery from '../components/CatalogueGallery.vue';
 
 const { t, locale } = useI18n();
 const products = ref<ApiProduct[]>([]);
@@ -14,33 +15,36 @@ onMounted(async () => {
 
 <template>
   <main class="page">
-    <h1 :class="{ 'title-zh': lang === 'zh' }">{{ t("products.title") }}</h1>
-    <p class="lead">{{ t("products.lead") }}</p>
+    <header class="catalogue-intro">
+      <p class="catalogue-label">VERA / {{ lang === 'zh' ? '材料与选型' : 'MATERIALS & OPTIONS' }}</p>
+      <h1>{{ t("products.title") }}</h1>
+      <p class="lead">{{ t("products.lead") }}</p>
+    </header>
     <div class="gallery">
-      <router-link
+      <article
         v-for="product in products"
         :key="product.id"
         class="photo-panel"
-        :to="`/products/${product.id}`"
       >
-        <img :src="materialPhoto(product)" :alt="lang === 'en' ? product.name_en : product.name_zh" />
+        <CatalogueGallery :product="product" :lang="lang" />
         <div class="photo-copy">
           <p v-if="product.sample" class="badge">{{ t("sample") }}</p>
           <h2>{{ lang === "en" ? product.name_en : product.name_zh }}</h2>
           <p>{{ lang === "en" ? product.description_en : product.description_zh }}</p>
+          <router-link class="detail-link" :to="`/products/${product.id}`">{{ lang === 'zh' ? '查看规格与详情' : 'View specifications & details' }} ↗</router-link>
         </div>
-      </router-link>
+      </article>
     </div>
   </main>
 </template>
 
 <style scoped>
-.page h1 {
+.page{background:#faf9f6}.catalogue-intro{padding:32px 0 30px}.catalogue-label{font-size:11px;letter-spacing:.12em;color:#64766b;margin:0 0 12px}.page h1 {
   font-weight: 600;
-  font-size: clamp(34px, 3.2vw, 46px);
+  font-size: clamp(28px, 2.6vw, 38px);
   line-height: 1.25;
   letter-spacing: 0;
-  margin: 20px 0 10px;
+  margin: 0 0 10px;
 }
-.page h1.title-zh { letter-spacing: 0.08em; }
+.lead{font-size:15px;line-height:1.7;margin:0;color:#5d6d63}.detail-link{display:inline-block;border-bottom:1px solid var(--ink);padding:8px 0;margin-top:16px;font-size:14px}.photo-panel:nth-child(even) .catalogue-gallery{order:2}@media(max-width:900px){.photo-panel:nth-child(even) .catalogue-gallery{order:0}}@media(max-width:640px){.catalogue-intro{padding:24px 0}.page h1{font-size:28px}}
 </style>
