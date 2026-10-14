@@ -37,3 +37,8 @@ npm run dev
 - Sample company contacts, photos and prices are demonstrative. Replace them with confirmed company/product information before any real publication. This project is a local demo, not a production deployment.
 - Independent product checks: `python backend/test_products.py`. Main workflow checks: `python backend/test_api.py`.
 - Optional acceptance walkthrough: with the backend running, `python backend/seed_review_quote.py` adds an idempotent unaccepted demonstration quote without creating an order.
+
+
+## Shared PostgreSQL and cloud deployment
+
+Server loads backend/.env, then root .env (environment variables take precedence). With DATABASE_URL/POSTGRES_URL configured, it uses the isolated vera PostgreSQL schema; without configuration it retains the local SQLite demo. Cloud product images use the private Cloudflare R2 bucket. See DEPLOYMENT.md and backend/.env.example. PostgreSQL migration preserves existing users but not old sessions; sign in again after switching. Cloud deployment needs Services root ./ and the server variables described in DEPLOYMENT.md.

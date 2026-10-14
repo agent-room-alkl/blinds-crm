@@ -5,8 +5,13 @@ import json
 from datetime import date, timedelta
 
 with tempfile.TemporaryDirectory() as folder:
-    os.environ['VERA_DB']=os.path.join(folder,'test.db')
-    from service import app
+    os.environ['VERA_DB_BACKEND']='postgres' if os.getenv('VERA_TEST_SCHEMA') else 'sqlite'; os.environ['VERA_STORAGE_BACKEND']='local'; os.environ['VERA_DB']=os.path.join(folder,'test.db')
+    from service import app,init_db
+    if os.getenv('VERA_TEST_SCHEMA'):
+        import re
+        assert re.fullmatch(r'vera_test_[a-f0-9]{12}',os.environ['VERA_TEST_SCHEMA'])
+        assert os.environ.get('VERA_DB_SCHEMA')==os.environ['VERA_TEST_SCHEMA']
+        init_db()
     from fastapi.testclient import TestClient
     c=TestClient(app)
     assert c.get('/api/health').json()['status']=='ok'
@@ -29,6 +34,7 @@ with tempfile.TemporaryDirectory() as folder:
     assert r.json()['version']==2
     assert c.get(f'/api/quotes/{qid}').json()['versions'][0]==v1
     assert c.post(f'/api/quotes/{qid}/versions/1/accept',json={'note':'old'}).status_code==409
+    assert c.post(f'/api/quotes/{qid}/versions/2/accept',json={'note':'   '}).status_code==422
     r=c.post(f'/api/quotes/{qid}/versions/2/accept',json={'note':'Buyer confirmed in demo'});assert r.status_code==200,r.text
     order=r.json();oid=order['id'];snap=order['snapshot'];assert snap['total']=='290.00'
     assert c.post(f'/api/quotes/{qid}/versions/2/accept',json={'note':'retry'}).json()['id']==oid

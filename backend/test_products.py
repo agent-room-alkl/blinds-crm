@@ -1,8 +1,13 @@
 import os,tempfile,json,base64
 from datetime import date,timedelta
 with tempfile.TemporaryDirectory() as folder:
-    os.environ['VERA_DB']=folder+'/test.db';os.environ['VERA_MEDIA_DIR']=folder+'/media'
-    from service import app
+    os.environ['VERA_DB_BACKEND']='postgres' if os.getenv('VERA_TEST_SCHEMA') else 'sqlite'; os.environ['VERA_STORAGE_BACKEND']='local'; os.environ['VERA_DB']=folder+'/test.db';os.environ['VERA_MEDIA_DIR']=folder+'/media'
+    from service import app,init_db
+    if os.getenv('VERA_TEST_SCHEMA'):
+        import re
+        assert re.fullmatch(r'vera_test_[a-f0-9]{12}',os.environ['VERA_TEST_SCHEMA'])
+        assert os.environ.get('VERA_DB_SCHEMA')==os.environ['VERA_TEST_SCHEMA']
+        init_db()
     from fastapi.testclient import TestClient
     c=TestClient(app)
     assert c.get('/api/admin/products').status_code==401
@@ -37,6 +42,13 @@ with tempfile.TemporaryDirectory() as folder:
     upload=c.post('/api/admin/product-images',json={'data':base64.b64encode(raw).decode(),'content_type':'image/png'})
     assert upload.status_code==200,upload.text
     assert c.get(upload.json()['image_url']).content==raw
+    assert TestClient(app).get(upload.json()['image_url']).status_code==404
+    published={**edited,'image_urls':[upload.json()['image_url']]}
+    assert c.post('/api/admin/products/1',json=published).status_code==200
+    assert TestClient(app).get(upload.json()['image_url']).content==raw
+    assert c.post('/api/admin/products/1',json={**published,'published':False}).status_code==200
+    assert TestClient(app).get(upload.json()['image_url']).status_code==404
+    assert c.post('/api/admin/products/1',json=edited).status_code==200
     assert c.post('/api/admin/product-images',json={'data':base64.b64encode(b'not an image').decode(),'content_type':'image/png'}).status_code==422
     assert c.post('/api/admin/product-images',json={'data':base64.b64encode(raw).decode(),'content_type':'image/jpeg'}).status_code==422
     c.post('/api/users',json={'username':'viewer','name':'Demo Viewer','password':'test-viewer','role':'staff'})
@@ -44,4 +56,4 @@ with tempfile.TemporaryDirectory() as folder:
     assert staff.get('/api/admin/products').status_code==200
     assert staff.post('/api/admin/products/1',json=edited).status_code==403
     assert staff.post('/api/admin/product-images',json={'data':base64.b64encode(raw).decode(),'content_type':'image/png'}).status_code==403
-    print('PASS: catalogue CRUD, public visibility, auth/staff403, local image upload, MIME validation, dimension validation, ordered galleries, cover/limit validation, immutable quote and order snapshots')
+    print('PASS: catalogue CRUD, public visibility, auth/staff403, local image upload, MIME validation, unpublished image privacy, dimension validation, ordered galleries, cover/limit validation, immutable quote and order snapshots')

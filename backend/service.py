@@ -8,10 +8,11 @@ import hmac
 import time
 from pathlib import Path
 from datetime import datetime, timezone, date, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 from typing import Literal
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,24 +20,21 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, model_validator
 
+from database import connect, BACKEND, SCHEMA
+
 DB_PATH = os.environ.get('VERA_DB', str(Path(__file__).with_name('vera.db')))
 app = FastAPI(title='VERA Demo API')
 app.add_middleware(CORSMiddleware, allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'], allow_methods=['*'], allow_headers=['*'])
 security = HTTPBearer(auto_error=False)
 
+BUSINESS_TZ=ZoneInfo(os.getenv('VERA_TIMEZONE','Pacific/Auckland'))
+def business_now():return datetime.now(BUSINESS_TZ)
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
-@contextmanager
 def db():
-    con = sqlite3.connect(DB_PATH, timeout=20)
-    con.row_factory = sqlite3.Row
-    con.execute('PRAGMA foreign_keys=ON')
-    try:
-        with con:
-            yield con
-    finally:
-        con.close()
+    return connect(DB_PATH)
 
 def dump(value):
     return json.dumps(value, ensure_ascii=False)
@@ -51,9 +49,12 @@ def password_ok(password: str, stored: str) -> bool:
     check = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 120_000).hex()
     return hmac.compare_digest(check, digest)
 
-def init_db():
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with db() as c:
+def init_db(connection=None,seed_admin=True):
+    if BACKEND=='sqlite':Path(DB_PATH).parent.mkdir(parents=True,exist_ok=True)
+    with (nullcontext(connection) if connection else db()) as c:
+        if BACKEND=='postgres':
+            c.ensure_schema()
+            c.execute('BEGIN IMMEDIATE')
         c.executescript('''
         CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY, company TEXT NOT NULL, locale TEXT NOT NULL);
@@ -72,7 +73,8 @@ def init_db():
             c.execute("ALTER TABLE customers ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         if 'username' not in {row['name'] for row in c.execute('PRAGMA table_info(sessions)')}:
             c.execute("ALTER TABLE sessions ADD COLUMN username TEXT NOT NULL DEFAULT 'dylan'")
-        if not c.execute('SELECT 1 FROM users WHERE username=?',('dylan',)).fetchone():
+        if seed_admin and not c.execute('SELECT 1 FROM users WHERE username=?',('dylan',)).fetchone():
+            if BACKEND=='postgres' and len(os.getenv('VERA_DEMO_PASSWORD',''))<8:raise RuntimeError('Set VERA_DEMO_PASSWORD before initializing a PostgreSQL administrator')
             c.execute('INSERT INTO users(username,name,password_hash,role,active) VALUES(?,?,?,?,1)',('dylan','Dylan',password_hash(os.environ.get('VERA_DEMO_PASSWORD','vera-demo')),'admin'))
         for p in [
             {'id':1,'name_zh':'铝百叶（示例）','name_en':'Aluminium Blinds (Sample)','material_zh':'铝合金','material_en':'Aluminium','description_zh':'轻盈的叶片与灵活的光线控制。产品及规格待客户确认。','description_en':'Lightweight slats and versatile light control. Product and specifications await confirmation.','category':'aluminium','sample':True},
@@ -81,7 +83,7 @@ def init_db():
         ]:
             c.execute('INSERT OR IGNORE INTO products VALUES(?,?)',(p['id'],dump(p)))
 
-init_db()
+if BACKEND=='sqlite' or os.getenv('VERA_AUTO_INIT')=='1':init_db()
 
 def auth(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
     if not credentials or credentials.scheme.lower() != 'bearer':
@@ -103,7 +105,7 @@ class Login(BaseModel):
 
 @app.get('/api/health')
 def health():
-    return {'ok':True, 'status':'ok', 'demo':True}
+    return {'ok':True,'status':'ok','demo':True,'database':BACKEND}
 
 @app.post('/api/auth/login')
 def login(body: Login):
@@ -172,6 +174,7 @@ def list_users(_admin: str = Depends(require_admin)):
 @app.post('/api/users')
 def create_user(body: NewUser, _admin: str = Depends(require_admin)):
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
         if c.execute('SELECT 1 FROM users WHERE username=?',(body.username,)).fetchone():
             raise HTTPException(409, 'That username already exists')
         c.execute('INSERT INTO users(username,name,password_hash,role,active) VALUES(?,?,?,?,1)',(body.username, body.name.strip(), password_hash(body.password), body.role))
@@ -180,6 +183,7 @@ def create_user(body: NewUser, _admin: str = Depends(require_admin)):
 @app.post('/api/users/{username}/role')
 def set_role(username: str, body: RoleChange, actor: str = Depends(require_admin)):
     with db() as c:
+        c.execute('BEGIN IMMEDIATE')
         target = c.execute('SELECT role FROM users WHERE username=? AND active=1',(username,)).fetchone()
         if not target:
             raise HTTPException(404, 'User not found')
@@ -278,9 +282,9 @@ def inquiry(iid:int):
 
 def _suggest_at(agreed):
     for extra in range(2,9):
-        stamp=(datetime.now()+timedelta(days=extra)).replace(hour=10,minute=0,second=0,microsecond=0).strftime('%Y-%m-%dT%H:%M')
+        stamp=(business_now()+timedelta(days=extra)).replace(hour=10,minute=0,second=0,microsecond=0).strftime('%Y-%m-%dT%H:%M')
         if not any(str(a).startswith(stamp) for a in agreed): return stamp
-    return (datetime.now()+timedelta(days=9)).strftime('%Y-%m-%dT%H:%M')
+    return (business_now()+timedelta(days=9)).strftime('%Y-%m-%dT%H:%M')
 
 @app.post('/api/inquiries/{iid}/assistant')
 def inquiry_assistant(iid:int,_actor=Depends(auth)):
@@ -368,6 +372,7 @@ def update_customer(cid:int,body:CustomerEdit,_actor=Depends(auth)):
         return customer_dict(c,c.execute('SELECT * FROM customers WHERE id=?',(cid,)).fetchone())
 
 class FollowUp(BaseModel):
+    model_config={'str_strip_whitespace':True}
     inquiry_id:int
     note:str=Field(min_length=1,max_length=4000)
     next_at:str=''
@@ -385,6 +390,7 @@ def followup(body:FollowUp,actor=Depends(auth)):
         return dict(c.execute('SELECT * FROM followups WHERE id=?',(fid,)).fetchone())
 
 class Line(BaseModel):
+    model_config={'str_strip_whitespace':True}
     product_id:int
     width:Decimal=Field(gt=0)
     height:Decimal=Field(gt=0)
@@ -409,7 +415,7 @@ class QuoteBody(BaseModel):
 def money(v): return str(Decimal(v).quantize(Decimal('.01'),rounding=ROUND_HALF_UP))
 
 def quote_data(c,b:QuoteBody):
-    if b.valid_until < date.today(): raise HTTPException(422,'Quote expiry must not be in the past')
+    if b.valid_until < business_now().date(): raise HTTPException(422,'Quote expiry must not be in the past')
     lines=[]
     for line in b.lines:
         p=c.execute('SELECT data FROM products WHERE id=?',(line.product_id,)).fetchone()
@@ -470,6 +476,7 @@ def get_version(c,qid,n):
     return r
 
 class Accept(BaseModel):
+    model_config={'str_strip_whitespace':True}
     note:str=Field(min_length=1,max_length=2000)
 
 @app.post('/api/quotes/{qid}/versions/{n}/accept')
@@ -483,7 +490,7 @@ def accept(qid:int,n:int,body:Accept,actor=Depends(auth)):
         if n!=latest: raise HTTPException(409,'Superseded quote cannot be accepted')
         if c.execute('SELECT id FROM orders WHERE version_id IN (SELECT id FROM quote_versions WHERE quote_id=?)',(qid,)).fetchone(): raise HTTPException(409,'Quote already has an order')
         d=version_dict(c,r)
-        if date.fromisoformat(d['valid_until'])<date.today(): raise HTTPException(409,'Quote expired')
+        if date.fromisoformat(d['valid_until'])<business_now().date(): raise HTTPException(409,'Quote expired')
         iq=c.execute('SELECT * FROM inquiries WHERE id=?',(d['inquiry_id'],)).fetchone()
         d['customer']=json.loads(iq['data']);d['confirmation_note']=body.note;d['confirmed_by']=actor
         oid=c.execute('INSERT INTO orders(version_id,snapshot,status,created_at) VALUES(?,?,?,?)',(r['id'],dump(d),'confirmed',now())).lastrowid
@@ -563,10 +570,24 @@ def assist_inquiry(iid:int, body:AssistRequest):
 import base64
 import binascii
 import re
-from fastapi.staticfiles import StaticFiles
-MEDIA_DIR=Path(os.environ.get('VERA_MEDIA_DIR',str(Path(__file__).with_name('media'))))
-MEDIA_DIR.mkdir(parents=True,exist_ok=True)
-app.mount('/api/media',StaticFiles(directory=str(MEDIA_DIR)),name='product-media')
+from fastapi.responses import Response
+from image_storage import put_image,get_image,MAX_BYTES,MODE as STORAGE_MODE,MEDIA_DIR,StorageError
+
+@app.get('/api/admin/image-upload-config',dependencies=[Depends(auth)])
+def image_upload_config():return {'max_bytes':MAX_BYTES,'max_images':12,'storage':STORAGE_MODE}
+
+@app.get('/api/media/{filename}')
+def product_image(filename:str,credentials=Depends(security)):
+    if credentials:auth(credentials)
+    else:
+        url='/api/media/'+filename
+        with db() as c:
+            visible=any(d.get('published',True) and url in (d.get('image_urls') or [d.get('image_url')]) for d in (json.loads(r['data']) for r in c.execute('SELECT data FROM products')))
+        if not visible:raise HTTPException(404,'Image not found')
+    try:raw=get_image(filename)
+    except (FileNotFoundError,StorageError):raise HTTPException(404,'Image not found')
+    mime='image/png' if filename.endswith('.png') else 'image/webp' if filename.endswith('.webp') else 'image/jpeg'
+    return Response(raw,media_type=mime,headers={'Cache-Control':'private, max-age=3600' if credentials else 'public, max-age=86400','Vary':'Authorization'})
 
 def catalog_product(d):
     defaults={1:['/images/vera-aluminium-room-v2.png','/images/vera-aluminium-detail-v2.png'],2:['/images/vera-timber-room-v2.png','/images/vera-timber-detail.png'],3:['/images/vera-composite-room-v2.png','/images/vera-composite-detail-v2.png']}.get(d['id'],[])
@@ -637,11 +658,12 @@ class ImageUpload(BaseModel):
 def upload_product_image(body:ImageUpload):
     try:raw=base64.b64decode(body.data,validate=True)
     except (ValueError,binascii.Error):raise HTTPException(422,'Invalid image encoding')
-    if len(raw)>5*1024*1024:raise HTTPException(413,'Image must be 5 MB or smaller')
+    if len(raw)>MAX_BYTES:raise HTTPException(413,f'Image must be {MAX_BYTES//1024//1024} MB or smaller')
     mime=body.content_type
     valid=(mime=='image/png' and raw.startswith(b'\x89PNG\r\n\x1a\n') and b'IEND' in raw[-16:]) or (mime=='image/jpeg' and raw.startswith(b'\xff\xd8\xff') and raw.endswith(b'\xff\xd9')) or (mime=='image/webp' and raw[:4]==b'RIFF' and raw[8:12]==b'WEBP')
     if not valid:raise HTTPException(422,'Image content does not match PNG, JPEG or WebP')
     ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[mime]
     name=secrets.token_hex(16)+'.'+ext
-    (MEDIA_DIR/name).write_bytes(raw)
+    try:put_image(name,raw,mime)
+    except (StorageError,RuntimeError):raise HTTPException(503,'Product image storage is unavailable')
     return {'image_url':'/api/media/'+name}

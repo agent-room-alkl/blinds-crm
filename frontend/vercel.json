@@ -1,0 +1,1 @@
+{"rewrites":[{"source":"/crm/:path*","destination":"/index.html"},{"source":"/products/:path*","destination":"/index.html"},{"source":"/about","destination":"/index.html"},{"source":"/inquiry","destination":"/index.html"},{"source":"/contact","destination":"/index.html"}]}

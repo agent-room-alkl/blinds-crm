@@ -25,7 +25,7 @@ onMounted(async () => {
       >
         <img :src="materialPhoto(product)" :alt="lang === 'en' ? product.name_en : product.name_zh" />
         <div class="photo-copy">
-          <p class="badge">{{ t("sample") }}</p>
+          <p v-if="product.sample" class="badge">{{ t("sample") }}</p>
           <h2>{{ lang === "en" ? product.name_en : product.name_zh }}</h2>
           <p>{{ lang === "en" ? product.description_en : product.description_zh }}</p>
         </div>
