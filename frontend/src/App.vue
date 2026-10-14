@@ -51,6 +51,7 @@ function toggleLocale() {
 
 <style scoped>
 .rail-home{position:fixed;left:0;right:0;top:0;z-index:50;background:transparent;border-bottom-color:rgba(255,255,255,.2);color:white;transition:background .2s,color .2s}
+.rail:not(.rail-home) .oval{background:transparent;color:var(--ink);border-radius:0}
 .rail-home .oval{background:white;color:var(--frame)}.rail-home button.secondary{color:white;border-color:rgba(255,255,255,.5)}
 .rail-home:hover,.rail-home:has(:focus-visible),.rail-home.rail-solid{background:rgba(250,249,246,.98);color:var(--ink);border-bottom-color:var(--line)}
 .rail-home:hover .oval,.rail-home:has(:focus-visible) .oval,.rail-home.rail-solid .oval{background:var(--frame);color:white}

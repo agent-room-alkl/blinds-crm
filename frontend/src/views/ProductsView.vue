@@ -14,7 +14,7 @@ onMounted(async () => {
 
 <template>
   <main class="page">
-    <h1>{{ t("products.title") }}</h1>
+    <h1 :class="{ 'title-zh': lang === 'zh' }">{{ t("products.title") }}</h1>
     <p class="lead">{{ t("products.lead") }}</p>
     <div class="gallery">
       <router-link
@@ -33,3 +33,14 @@ onMounted(async () => {
     </div>
   </main>
 </template>
+
+<style scoped>
+.page h1 {
+  font-weight: 600;
+  font-size: clamp(34px, 3.2vw, 46px);
+  line-height: 1.25;
+  letter-spacing: 0;
+  margin: 20px 0 10px;
+}
+.page h1.title-zh { letter-spacing: 0.08em; }
+</style>
