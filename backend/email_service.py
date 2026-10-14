@@ -17,13 +17,15 @@ def configuration():
     except ValueError:ready=False
     return {'configured':ready,'sender':sender if ready else ''},(host,port,mode,sender)
 
-def send_email(recipient,subject,body):
+def send_email(recipient,subject,body,attachments=()):
     state,(host,port,mode,sender)=configuration()
     if not state['configured']:raise RuntimeError('Email delivery is not configured')
     address(recipient)
     if '\r' in subject or '\n' in subject:raise ValueError('Invalid email subject')
     message=EmailMessage();message['From']=sender;message['To']=recipient;message['Subject']=subject
     message['Date']=formatdate(localtime=False);message['Message-ID']=make_msgid();message.set_content(body)
+    for name,data,maintype,subtype in attachments:
+        message.add_attachment(data,maintype=maintype,subtype=subtype,filename=name)
     context=ssl.create_default_context()
     transport=smtplib.SMTP_SSL(host,port,timeout=20,context=context) if mode=='ssl' else smtplib.SMTP(host,port,timeout=20)
     with transport as client:

@@ -69,6 +69,8 @@ def init_db(connection=None,seed_admin=True):
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, name TEXT NOT NULL, password_hash TEXT NOT NULL, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1);
         ''')
+        from workflow_schema import migrate
+        migrate(c)
         if 'notes' not in {row['name'] for row in c.execute('PRAGMA table_info(customers)')}:
             c.execute("ALTER TABLE customers ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         if 'username' not in {row['name'] for row in c.execute('PRAGMA table_info(sessions)')}:
@@ -286,50 +288,6 @@ def _suggest_at(agreed):
         if not any(str(a).startswith(stamp) for a in agreed): return stamp
     return (business_now()+timedelta(days=9)).strftime('%Y-%m-%dT%H:%M')
 
-@app.post('/api/inquiries/{iid}/assistant')
-def inquiry_assistant(iid:int,_actor=Depends(auth)):
-    with db() as c:
-        r=c.execute('SELECT * FROM inquiries WHERE id=?',(iid,)).fetchone()
-        if not r: raise HTTPException(404,'Inquiry not found')
-        def marks():
-            return (c.execute('SELECT COUNT(*) n FROM inquiries').fetchone()['n'],c.execute('SELECT COUNT(*) n FROM followups').fetchone()['n'],c.execute('SELECT COUNT(*) n FROM quotes').fetchone()['n'],c.execute('SELECT COUNT(*) n FROM orders').fetchone()['n'],[x['snapshot'] for x in c.execute('SELECT snapshot FROM orders ORDER BY id')],c.execute('SELECT status FROM inquiries WHERE id=?',(iid,)).fetchone()['status'])
-        before=marks()
-        item=inquiry_dict(c,r)
-        cust=c.execute('SELECT * FROM customers WHERE id=?',(r['customer_id'],)).fetchone()
-        locale=(cust['locale'] if cust and cust['locale'] in ('zh','en') else item.get('locale')) or 'en'
-        zh=locale=='zh'
-        facts=[]
-        if cust and (cust['notes'] or '').strip(): facts.append({'source':'customer.notes','text':cust['notes'].strip()})
-        if (item.get('notes') or '').strip(): facts.append({'source':'inquiry.notes','text':item['notes'].strip()})
-        agreed=[]
-        for fup in item['followups']:
-            facts.append({'source':f"followup:{fup['id']}",'text':fup['note']})
-            if fup.get('next_at'): agreed.append(fup['next_at'])
-        quote=c.execute('SELECT q.id quote_id,v.version,v.data,v.id version_id FROM quotes q JOIN quote_versions v ON v.quote_id=q.id WHERE q.inquiry_id=? ORDER BY q.id DESC,v.version DESC LIMIT 1',(iid,)).fetchone()
-        if quote:
-            data=json.loads(quote['data'])
-            facts.append({'source':f"quote:{quote['quote_id']}/v{quote['version']}",'text':f"{data.get('currency')} {data.get('total')}"})
-        order=c.execute('SELECT o.id,o.status FROM orders o JOIN quote_versions v ON v.id=o.version_id JOIN quotes q ON q.id=v.quote_id WHERE q.inquiry_id=? ORDER BY o.id DESC LIMIT 1',(iid,)).fetchone()
-        if order: facts.append({'source':f"order:{order['id']}",'text':order['status']})
-        gaps=[]
-        if not item.get('width') or not item.get('height'): gaps.append('尺寸' if zh else 'size')
-        if not item.get('expected_date'): gaps.append('交期' if zh else 'timing')
-        if not item.get('product_id'): gaps.append('产品' if zh else 'product')
-        suggested=_suggest_at(agreed)
-        recorded='\n'.join(f"{n}. {fact['text']} [{fact['source']}]" for n,fact in enumerate(facts,1)) or ('无' if zh else 'None')
-        missing='、'.join(gaps) if zh else ', '.join(gaps)
-        nxt=(f'先补齐：{missing}。补齐前不写价格。' if gaps else '规格已齐，可以整理报价草稿。单价仍由人工填写。') if zh else (f'First confirm: {missing}. Do not write a price before that.' if gaps else 'The specification is complete enough to draft a quote. A person still enters the unit price.')
-        name=item.get('contact_name') or ''
-        if zh:
-            summary=f"沟通摘要（尚未保存）\n询价 #{iid}\n已记录：\n{recorded}\n建议下一步：{nxt}\n建议跟进时间：{suggested}（建议，不是已约定时间）"
-            ask=f"为准备报价，还请补充：{missing}。" if gaps else '目前记下的规格已经够我们开始整理报价。'
-            reply=f"{name}，您好。\n\n我们已收到您的询价 #{iid}。{ask}\n价格会在规格确认后单独说明，这封回复不含报价。"
-        else:
-            summary=f"Conversation summary (not saved)\nInquiry #{iid}\nRecorded:\n{recorded}\nSuggested next step: {nxt}\nSuggested follow-up: {suggested} (a suggestion, not an agreed time)"
-            ask=f"To prepare a quote, please confirm: {missing}." if gaps else 'The specifications we have are enough to start preparing a quote.'
-            reply=f"Hello {name},\n\nWe have received inquiry #{iid}. {ask}\nPricing will be set out separately once the specification is confirmed. This reply does not include a price."
-        if marks()!=before: raise HTTPException(500,'Assistant changed stored records')
-        return {'mode':'rules','connected':False,'locale':'zh' if zh else 'en','summary':summary,'reply':reply,'facts':facts,'gaps':gaps,'suggested_next_at':suggested,'agreed':False}
 
 def customer_dict(c,r):
     d=dict(r)
@@ -623,20 +581,50 @@ def export(qid:int,n:int,lang:Literal['zh','en']='en'):
     return f'''<!doctype html><html lang="{lang}"><meta charset="utf-8"><title>VERA {title}</title><style>body{{font:16px Arial,sans-serif;max-width:1000px;margin:40px auto;padding:24px;color:#222}}table{{width:100%;border-collapse:collapse}}td,th{{text-align:left;padding:12px;border-bottom:1px solid #ddd}}tr{{break-inside:avoid}}h1{{font-family:Georgia,serif}}.totals{{text-align:right}}@media print{{button{{display:none}}body{{margin:0}}}}</style><h1>VERA · {title}</h1><p>{'演示报价，非实际承诺' if zh else 'Demonstration quote — not an actual commercial offer'}</p><p>Q-{qid:05d} / v{n} · {escape(customer['company'])} · {escape(customer['contact_name'])}</p><p>{'有效期' if zh else 'Valid until'}: {d['valid_until']} · {d['currency']}</p><table><thead><tr>{''.join('<th>'+v+'</th>' for v in labels)}</tr></thead><tbody>{rows}</tbody></table><div class="totals">{''.join('<p>'+k+': '+d['currency']+' '+v+'</p>' for k,v in pairs)}</div><p>{escape(d['terms'])}</p><button onclick="window.print()">{'打印 / 保存 PDF' if zh else 'Print / Save PDF'}</button></html>'''
 
 
-class AssistRequest(BaseModel):
-    tone: Literal['brief','formal'] = 'brief'
-
-@app.post('/api/inquiries/{iid}/assistant', dependencies=[Depends(auth)])
-def assist_inquiry(iid:int, body:AssistRequest):
-    from assistant import build_assistance
+@app.post('/api/inquiries/{iid}/assistant')
+def inquiry_assistant(iid:int,_actor=Depends(auth)):
     with db() as c:
-        row=c.execute('SELECT * FROM inquiries WHERE id=?',(iid,)).fetchone()
-        if not row: raise HTTPException(404,'Inquiry not found')
-        i=inquiry_dict(c,row)
-        cu=customer_dict(c,c.execute('SELECT * FROM customers WHERE id=?',(row['customer_id'],)).fetchone())
-        qs=[quote_dict(c,q) for q in c.execute('SELECT * FROM quotes WHERE inquiry_id=? ORDER BY id',(iid,))]
-        os_=[order_dict(c,o) for o in c.execute('SELECT o.* FROM orders o JOIN quote_versions v ON v.id=o.version_id JOIN quotes q ON q.id=v.quote_id WHERE q.inquiry_id=? ORDER BY o.id',(iid,))]
-        return build_assistance(i,cu,qs,os_,body.tone)
+        r=c.execute('SELECT * FROM inquiries WHERE id=?',(iid,)).fetchone()
+        if not r: raise HTTPException(404,'Inquiry not found')
+        def marks():
+            return (c.execute('SELECT COUNT(*) n FROM inquiries').fetchone()['n'],c.execute('SELECT COUNT(*) n FROM followups').fetchone()['n'],c.execute('SELECT COUNT(*) n FROM quotes').fetchone()['n'],c.execute('SELECT COUNT(*) n FROM orders').fetchone()['n'],[x['snapshot'] for x in c.execute('SELECT snapshot FROM orders ORDER BY id')],c.execute('SELECT status FROM inquiries WHERE id=?',(iid,)).fetchone()['status'])
+        before=marks()
+        item=inquiry_dict(c,r)
+        cust=c.execute('SELECT * FROM customers WHERE id=?',(r['customer_id'],)).fetchone()
+        locale=(cust['locale'] if cust and cust['locale'] in ('zh','en') else item.get('locale')) or 'en'
+        zh=locale=='zh'
+        facts=[]
+        if cust and (cust['notes'] or '').strip(): facts.append({'source':'customer.notes','text':cust['notes'].strip()})
+        if (item.get('notes') or '').strip(): facts.append({'source':'inquiry.notes','text':item['notes'].strip()})
+        agreed=[]
+        for fup in item['followups']:
+            facts.append({'source':f"followup:{fup['id']}",'text':fup['note']})
+            if fup.get('next_at'): agreed.append(fup['next_at'])
+        quote=c.execute('SELECT q.id quote_id,v.version,v.data,v.id version_id FROM quotes q JOIN quote_versions v ON v.quote_id=q.id WHERE q.inquiry_id=? ORDER BY q.id DESC,v.version DESC LIMIT 1',(iid,)).fetchone()
+        if quote:
+            data=json.loads(quote['data'])
+            facts.append({'source':f"quote:{quote['quote_id']}/v{quote['version']}",'text':f"{data.get('currency')} {data.get('total')}"})
+        order=c.execute('SELECT o.id,o.status FROM orders o JOIN quote_versions v ON v.id=o.version_id JOIN quotes q ON q.id=v.quote_id WHERE q.inquiry_id=? ORDER BY o.id DESC LIMIT 1',(iid,)).fetchone()
+        if order: facts.append({'source':f"order:{order['id']}",'text':order['status']})
+        gaps=[]
+        if not item.get('width') or not item.get('height'): gaps.append('尺寸' if zh else 'size')
+        if not item.get('expected_date'): gaps.append('交期' if zh else 'timing')
+        if not item.get('product_id'): gaps.append('产品' if zh else 'product')
+        suggested=_suggest_at(agreed)
+        recorded='\n'.join(f"{n}. {fact['text']} [{fact['source']}]" for n,fact in enumerate(facts,1)) or ('无' if zh else 'None')
+        missing='、'.join(gaps) if zh else ', '.join(gaps)
+        nxt=(f'先补齐：{missing}。补齐前不写价格。' if gaps else '规格已齐，可以整理报价草稿。单价仍由人工填写。') if zh else (f'First confirm: {missing}. Do not write a price before that.' if gaps else 'The specification is complete enough to draft a quote. A person still enters the unit price.')
+        name=item.get('contact_name') or ''
+        if zh:
+            summary=f"沟通摘要（尚未保存）\n询价 #{iid}\n已记录：\n{recorded}\n建议下一步：{nxt}\n建议跟进时间：{suggested}（建议，不是已约定时间）"
+            ask=f"为准备报价，还请补充：{missing}。" if gaps else '目前记下的规格已经够我们开始整理报价。'
+            reply=f"{name}，您好。\n\n我们已收到您的询价 #{iid}。{ask}\n价格会在规格确认后单独说明，这封回复不含报价。"
+        else:
+            summary=f"Conversation summary (not saved)\nInquiry #{iid}\nRecorded:\n{recorded}\nSuggested next step: {nxt}\nSuggested follow-up: {suggested} (a suggestion, not an agreed time)"
+            ask=f"To prepare a quote, please confirm: {missing}." if gaps else 'The specifications we have are enough to start preparing a quote.'
+            reply=f"Hello {name},\n\nWe have received inquiry #{iid}. {ask}\nPricing will be set out separately once the specification is confirmed. This reply does not include a price."
+        if marks()!=before: raise HTTPException(500,'Assistant changed stored records')
+        return {'mode':'rules','connected':False,'locale':'zh' if zh else 'en','summary':summary,'reply':reply,'facts':facts,'gaps':gaps,'suggested_next_at':suggested,'agreed':False}
 
 
 # Product maintenance shares the public catalogue. Historical quotes contain their own snapshots.
@@ -740,3 +728,8 @@ def upload_product_image(body:ImageUpload):
     try:put_image(name,raw,mime)
     except (StorageError,RuntimeError):raise HTTPException(503,'Product image storage is unavailable')
     return {'image_url':'/api/media/'+name}
+
+# Workflow routes are registered after the existing domain helpers.
+import sys
+from workflow import register as register_workflow
+register_workflow(app,sys.modules[__name__])
