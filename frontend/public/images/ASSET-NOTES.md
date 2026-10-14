@@ -8,3 +8,11 @@ Two original AI generated illustrative assets, created with the built-in ImageGe
 Direction: spacious architectural photography and minimal black/white VERA branding, with material accents. Content rhythm: expansive scene → short positioning → product/material exploration → inquiry. No fictional customers, discounts, years in business, warranties, stock counts or free on-site measuring promises. Reference https://www.kresta.co.nz/ only for scale and composition, not its brand identity or commercial claims.
 
 Use short customer-oriented copy such as “让光线，恰到好处 / Light, considered.” and “百叶窗批发解决方案 / Wholesale shading solutions.” Put the demo disclosure near image/product captions, not in the main sales headline. Keep primary CTA 获取报价 / Get a quote.
+
+
+## Product galleries — T-46 — 2026-10-14
+Five additional originals were generated with the built-in ImageGen tool, copied into this directory and visually inspected. No competitor assets were used. These are AI catalogue illustrations, not verified actual product photos or dimensional evidence.
+- vera-aluminium-room-v2.png / vera-aluminium-detail-v2.png: silver-white curved aluminium slats, thin ladder cords, matching headrail; office installation and macro detail.
+- vera-timber-room-v2.png: natural oak horizontal timber slats and cream ladder tapes; paired with the existing vera-timber-detail.png.
+- vera-composite-room-v2.png / vera-composite-detail-v2.png: smooth matte white broad faux-wood composite slats, white ladder tapes; dining-room installation and macro detail.
+Each catalogue gallery uses its coherent room/detail pair; old differently coloured or controlled variants are not mixed into the default galleries. Exact commercial specifications require actual samples and client-approved imagery. The source generation prompts specified photorealistic professional catalogue quality, restrained neutral interiors, natural light, physically aligned slats, no text/logo/person/collage, material-specific surfaces and no exact dimension claim.

@@ -26,3 +26,5 @@ SQLite database defaults backend/vera.db; set VERA_DB to use another file. Demo 
 - Public `/api/products` and `/api/products/{id}` return published catalogue entries; hidden details return404. The website uses image_url and the same product IDs.
 - Product changes do not modify immutable quote versions or order snapshots. Admin authorization is enforced by the server; staff write attempts return403.
 - `python test_products.py` runs in temporary database/media directories.
+
+- Product `image_urls[]` is an ordered gallery of up to12 local images. The first entry is the cover and is mirrored to image_url. Admin can reorder/remove images by updating the array. Public catalogue and website share the order. Published products require a cover. Legacy products without a saved gallery get coherent original room/detail demo pairs.

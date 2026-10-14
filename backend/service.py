@@ -569,8 +569,12 @@ MEDIA_DIR.mkdir(parents=True,exist_ok=True)
 app.mount('/api/media',StaticFiles(directory=str(MEDIA_DIR)),name='product-media')
 
 def catalog_product(d):
-    image={1:'/images/aluminium.jpg',2:'/images/vera-timber-detail.png',3:'/images/composite.jpg'}.get(d['id'],'')
-    return {'image_url':image,'published':True,'unit':'mm','width_min':None,'width_max':None,'height_min':None,'height_max':None,'colors':[],'controls':[],**d}
+    defaults={1:['/images/vera-aluminium-room-v2.png','/images/vera-aluminium-detail-v2.png'],2:['/images/vera-timber-room-v2.png','/images/vera-timber-detail.png'],3:['/images/vera-composite-room-v2.png','/images/vera-composite-detail-v2.png']}.get(d['id'],[])
+    images=d.get('image_urls') if 'image_urls' in d else ([d['image_url']] if d.get('image_url') else defaults)
+    images=images or []
+    result={'published':True,'unit':'mm','width_min':None,'width_max':None,'height_min':None,'height_max':None,'colors':[],'controls':[],**d}
+    result.update(image_urls=images,image_url=images[0] if images else '')
+    return result
 
 class ProductEdit(BaseModel):
     name_zh:str=Field(min_length=1,max_length=160)
@@ -583,6 +587,7 @@ class ProductEdit(BaseModel):
     sample:bool=True
     published:bool=False
     image_url:str=Field(default='',max_length=300)
+    image_urls:list[str]=Field(default_factory=list,max_length=12)
     unit:Literal['mm','inch']='mm'
     width_min:float|None=Field(default=None,gt=0)
     width_max:float|None=Field(default=None,gt=0)
@@ -595,7 +600,10 @@ class ProductEdit(BaseModel):
         for key in ['name_zh','name_en','material_zh','material_en','category']:
             setattr(self,key,getattr(self,key).strip())
             if not getattr(self,key):raise ValueError('Product names, material and category are required')
-        if self.image_url and not re.fullmatch(r'/(?:images|api/media)/[a-zA-Z0-9_.-]+\.(?:png|jpg|jpeg|webp)',self.image_url):raise ValueError('Choose a local PNG, JPEG or WebP product image')
+        images=self.image_urls or ([self.image_url] if self.image_url else [])
+        if any(not re.fullmatch(r'/(?:images|api/media)/[a-zA-Z0-9_.-]+\.(?:png|jpg|jpeg|webp)',x) for x in images+([self.image_url] if self.image_url else [])):raise ValueError('Choose local PNG, JPEG or WebP product images')
+        self.image_urls=list(dict.fromkeys(images));self.image_url=self.image_urls[0] if self.image_urls else ''
+        if self.published and not self.image_url:raise ValueError('Choose a cover image before showing the product on the website')
         for low,high in [(self.width_min,self.width_max),(self.height_min,self.height_max)]:
             if low is not None and high is not None and low>high:raise ValueError('Minimum dimensions cannot exceed maximum')
         self.colors=[x.strip() for x in self.colors if x.strip()]

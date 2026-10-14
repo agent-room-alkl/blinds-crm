@@ -1,5 +1,6 @@
 export type ApiProduct = {
   image_url?: string;
+  image_urls?: string[];
   published?: boolean;
   unit?: string;
   width_min?: number | null;
@@ -65,7 +66,7 @@ const materialPhotos = {
 } as const;
 
 export function materialPhoto(product: ApiProduct) {
-  return product.image_url || materialPhotos[materialTone(product)];
+  return product.image_urls?.[0] || product.image_url || materialPhotos[materialTone(product)];
 }
 
 export function materialTone(product: ApiProduct): "aluminium" | "timber" | "composite" {
