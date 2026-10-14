@@ -19,7 +19,7 @@ onMounted(() => {
   motion.addEventListener('change', motionChanged);
   timer = setInterval(() => {
     if (images.value.length > 1 && !paused.value && !hovered.value && !focused.value && !document.hidden) selected.value = (selected.value + 1) % images.value.length;
-  }, 5000);
+  }, 8000);
 });
 onBeforeUnmount(() => { clearInterval(timer); motion?.removeEventListener('change', motionChanged); });
 const name = computed(() => props.lang === 'zh' ? props.product.name_zh : props.product.name_en);
@@ -29,7 +29,7 @@ watch(images, () => { selected.value = 0; });
 <template>
   <figure class="catalogue-gallery" @mouseenter="hovered = true" @mouseleave="hovered = false" @focusin="focused = true" @focusout="leaveFocus">
     <router-link class="image-link" :to="`/products/${product.id}`" :aria-label="lang === 'zh' ? `查看${name}详情` : `View ${name} details`">
-      <img class="main-image" :src="images[selected] || images[0]" :alt="`${name} — ${selected + 1}`" loading="lazy" />
+      <Transition name="photo"><img :key="images[selected] || images[0]" class="main-image" :src="images[selected] || images[0]" :alt="`${name} — ${selected + 1}`" loading="lazy" /></Transition>
     </router-link>
     <div v-if="images.length > 1" class="thumbnails" :aria-label="lang === 'zh' ? '产品图片' : 'Product images'">
       <button v-for="(url, index) in images" :key="url" type="button" :aria-pressed="selected === index" :aria-label="lang === 'zh' ? `查看${name}第${index + 1}张图片` : `View ${name} image ${index + 1}`" @click="selected = index">
@@ -41,5 +41,6 @@ watch(images, () => { selected.value = 0; });
 </template>
 
 <style scoped>
-.catalogue-gallery{margin:0;min-width:0;background:#fff}.image-link{display:block}.main-image{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover}.thumbnails{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 20px 18px}.thumbnails button{background:transparent;padding:0 0 7px;border:0;border-bottom:2px solid transparent;min-height:0;width:76px;height:64px;opacity:.7;transition:opacity .15s}.thumbnails button:hover,.thumbnails button[aria-pressed=true]{opacity:1}.thumbnails button[aria-pressed=true]{border-bottom-color:var(--ink)}.thumbnails img{min-height:0;display:block;width:100%;height:100%;object-fit:cover}.playback{margin-left:auto;display:flex;gap:12px;align-items:center}.thumbnails .playback-button{width:auto;height:auto;min-height:44px;padding:0 4px;border:0;opacity:1;font-size:11px;font-weight:400;color:#59655f}.image-count{font-size:11px;color:#7b837e;font-variant-numeric:tabular-nums}@media(max-width:640px){.thumbnails{gap:10px;padding:14px 16px}.thumbnails button{width:64px;height:56px}}
+.catalogue-gallery{margin:0;min-width:0;background:#fff}.image-link{display:block;position:relative;aspect-ratio:4/3;overflow:hidden}.main-image{position:absolute;inset:0;display:block;width:100%;height:100%;min-height:0;object-fit:cover}.photo-enter-active,.photo-leave-active{transition:opacity 1.1s cubic-bezier(.4,0,.2,1)}.photo-enter-from,.photo-leave-to{opacity:0}.photo-enter-to,.photo-leave-from{opacity:1}.thumbnails{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 20px 18px}.thumbnails button{background:transparent;padding:0 0 7px;border:0;border-bottom:2px solid transparent;min-height:0;width:76px;height:64px;opacity:.7;transition:opacity .15s}.thumbnails button:hover,.thumbnails button[aria-pressed=true]{opacity:1}.thumbnails button[aria-pressed=true]{border-bottom-color:var(--ink)}.thumbnails img{min-height:0;display:block;width:100%;height:100%;object-fit:cover}.playback{margin-left:auto;display:flex;gap:12px;align-items:center}.thumbnails .playback-button{width:auto;height:auto;min-height:44px;padding:0 4px;border:0;opacity:1;font-size:11px;font-weight:400;color:#59655f}.image-count{font-size:11px;color:#7b837e;font-variant-numeric:tabular-nums}@media(max-width:640px){.thumbnails{gap:10px;padding:14px 16px}.thumbnails button{width:64px;height:56px}}
+@media(prefers-reduced-motion:reduce){.photo-enter-active,.photo-leave-active{transition:none}}
 </style>
