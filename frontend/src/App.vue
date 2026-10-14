@@ -50,6 +50,9 @@ function toggleLocale() {
 </template>
 
 <style scoped>
+.rail{min-height:76px}
+.rail:not(.rail-home){background:#faf9f6}
+@media(max-width:700px){.rail{min-height:72px;padding-top:12px;padding-bottom:12px}}
 .rail-home{position:fixed;left:0;right:0;top:0;z-index:50;background:transparent;border-bottom-color:rgba(255,255,255,.2);color:white;transition:background .2s,color .2s}
 .rail:not(.rail-home) .oval{background:transparent;color:var(--ink);border-radius:0}
 .rail-home .oval{background:white;color:var(--frame)}.rail-home button.secondary{color:white;border-color:rgba(255,255,255,.5)}
