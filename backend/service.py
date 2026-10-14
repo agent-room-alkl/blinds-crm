@@ -337,6 +337,9 @@ def customer_dict(c,r):
     d['contacts']=[dict(x) for x in c.execute('SELECT * FROM contacts WHERE customer_id=?',(r['id'],))]
     d['inquiries']=[{'id':x['id'],'status':x['status'],'created_at':x['created_at'],'contact_name':json.loads(x['data']).get('contact_name','')} for x in c.execute('SELECT * FROM inquiries WHERE customer_id=? ORDER BY id DESC',(r['id'],))]
     d['orders']=[{'id':o['id'],'status':o['status'],'created_at':o['created_at']} for o in c.execute('SELECT o.id,o.status,o.created_at FROM orders o JOIN quote_versions v ON v.id=o.version_id JOIN quotes q ON q.id=v.quote_id JOIN inquiries i ON i.id=q.inquiry_id WHERE i.customer_id=? ORDER BY o.id DESC',(r['id'],))]
+    for o in c.execute('SELECT id,status,created_at,snapshot FROM orders WHERE version_id IS NULL'):
+        if json.loads(o['snapshot']).get('customer_id')==r['id']:d['orders'].append({'id':o['id'],'status':o['status'],'created_at':o['created_at']})
+    d['orders'].sort(key=lambda o:o['id'],reverse=True)
     return d
 
 @app.get('/api/customers',dependencies=[Depends(auth)])
@@ -377,6 +380,34 @@ class FollowUp(BaseModel):
     note:str=Field(min_length=1,max_length=4000)
     next_at:str=''
 
+class InquiryEmail(BaseModel):
+    model_config={'str_strip_whitespace':True}
+    recipient:str=Field(min_length=3,max_length=254)
+    subject:str=Field(min_length=1,max_length=200)
+    body:str=Field(min_length=1,max_length=10000)
+
+@app.get('/api/email/config',dependencies=[Depends(auth)])
+def email_config():
+    from email_service import configuration
+    return configuration()[0]
+
+@app.post('/api/inquiries/{iid}/email')
+def send_inquiry_email(iid:int,body:InquiryEmail,actor=Depends(auth)):
+    from email_service import address,send_email,configuration
+    try:address(body.recipient)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    if '\r' in body.subject or '\n' in body.subject:raise HTTPException(422,'Invalid email subject')
+    if not configuration()[0]['configured']:raise HTTPException(503,'Configure SMTP before sending email')
+    with db() as c:
+        if not c.execute('SELECT id FROM inquiries WHERE id=?',(iid,)).fetchone():raise HTTPException(404,'Inquiry not found')
+    try:message_id=send_email(body.recipient,body.subject,body.body)
+    except Exception:raise HTTPException(502,'Delivery could not be confirmed. Check the sending mailbox before retrying.') from None
+    with db() as c:
+        note=f"Email sent to {body.recipient}\nSubject: {body.subject}\nMessage-ID: {message_id}\n\n{body.body}"
+        c.execute('INSERT INTO followups(inquiry_id,note,next_at,created_at,actor) VALUES(?,?,?,?,?)',(iid,note,'',now(),actor))
+        c.execute("UPDATE inquiries SET status='contacted' WHERE id=? AND status='new'",(iid,))
+    return {'sent':True,'message_id':message_id}
+
 @app.post('/api/followups')
 def followup(body:FollowUp,actor=Depends(auth)):
     if body.next_at:
@@ -414,8 +445,8 @@ class QuoteBody(BaseModel):
 
 def money(v): return str(Decimal(v).quantize(Decimal('.01'),rounding=ROUND_HALF_UP))
 
-def quote_data(c,b:QuoteBody):
-    if b.valid_until < business_now().date(): raise HTTPException(422,'Quote expiry must not be in the past')
+def quote_data(c,b:QuoteBody,check_expiry=True):
+    if check_expiry and b.valid_until < business_now().date(): raise HTTPException(422,'Quote expiry must not be in the past')
     lines=[]
     for line in b.lines:
         p=c.execute('SELECT data FROM products WHERE id=?',(line.product_id,)).fetchone()
@@ -425,6 +456,48 @@ def quote_data(c,b:QuoteBody):
     if b.discount>subtotal: raise HTTPException(422,'Discount exceeds subtotal')
     d=b.model_dump(mode='json'); d.update(lines=lines,subtotal=money(subtotal),discount=money(b.discount),shipping=money(b.shipping),tax=money(b.tax),total=money(subtotal-b.discount+b.shipping+b.tax),demo=True)
     return d
+
+class ManualOrderBody(QuoteBody):
+    model_config={'str_strip_whitespace':True}
+    inquiry_id:int=0
+    valid_until:date=Field(default_factory=lambda:business_now().date())
+    terms:str=Field(default='',max_length=4000)
+    customer_id:int|None=None
+    company:str=Field(default='',max_length=200)
+    contact_name:str=Field(default='',max_length=100)
+    channel:str=Field(default='',max_length=300)
+    source:Literal['phone','email','wechat','other']='phone'
+    reference:str=Field(default='',max_length=200)
+    confirmation_note:str=Field(min_length=1,max_length=2000)
+    submission_key:str=Field(min_length=16,max_length=100)
+
+@app.post('/api/orders/manual')
+def manual_order(body:ManualOrderBody,actor=Depends(auth)):
+    request_hash=hashlib.sha256(json.dumps(body.model_dump(mode='json',exclude={'valid_until','inquiry_id'}),sort_keys=True).encode()).hexdigest()
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        for row in c.execute('SELECT * FROM orders WHERE version_id IS NULL'):
+            saved=json.loads(row['snapshot'])
+            if saved.get('submission_key')==body.submission_key and saved.get('confirmed_by')==actor:
+                if saved.get('request_hash')!=request_hash:raise HTTPException(409,'This submission was already used for a different order')
+                return order_dict(c,row)
+        data=quote_data(c,body,check_expiry=False)
+        if body.customer_id:
+            customer=c.execute('SELECT * FROM customers WHERE id=?',(body.customer_id,)).fetchone()
+            if not customer:raise HTTPException(404,'Customer not found')
+            contact=c.execute('SELECT * FROM contacts WHERE customer_id=? ORDER BY id LIMIT 1',(body.customer_id,)).fetchone()
+            if not contact:raise HTTPException(422,'Customer requires a contact')
+            cid=body.customer_id;company=customer['company'];person=contact['name'];channel=contact['channel']
+        else:
+            if not body.company or not body.contact_name or not body.channel:raise HTTPException(422,'Enter company, contact name and contact method')
+            company=body.company;person=body.contact_name;channel=body.channel
+            cid=c.execute('INSERT INTO customers(company,locale,notes) VALUES(?,?,?)',(company,body.locale,'')).lastrowid
+            c.execute('INSERT INTO contacts(customer_id,name,channel) VALUES(?,?,?)',(cid,person,channel))
+        data.update(quote_id=None,version=None,inquiry_id=None,order_source='manual',customer_id=cid,customer={'company':company,'contact_name':person,'channel':channel,'locale':body.locale},confirmed_by=actor,request_hash=request_hash)
+        data.pop('valid_until',None)
+        oid=c.execute('INSERT INTO orders(version_id,snapshot,status,created_at) VALUES(?,?,?,?)',(None,dump(data),'confirmed',now())).lastrowid
+        history(c,oid,'','confirmed',body.confirmation_note,actor)
+        return order_dict(c,c.execute('SELECT * FROM orders WHERE id=?',(oid,)).fetchone())
 
 def store_version(c,qid,n,d):
     vid=c.execute('INSERT INTO quote_versions(quote_id,version,data,created_at) VALUES(?,?,?,?)',(qid,n,dump(d),now())).lastrowid

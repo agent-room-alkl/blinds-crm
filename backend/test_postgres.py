@@ -6,7 +6,7 @@ from pathlib import Path
 from database import connect,BACKEND
 from psycopg import sql
 if BACKEND!='postgres':raise SystemExit('PostgreSQL configuration required')
-allowed=['test_api.py','test_products.py','test_concurrent_postgres.py','test_storage_api_live.py']
+allowed=['test_api.py','test_products.py','test_concurrent_postgres.py','test_storage_api_live.py','test_manual_email.py']
 suites=sys.argv[1:] or allowed
 assert all(s in allowed for s in suites)
 for suite in suites:

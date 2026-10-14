@@ -29,3 +29,7 @@ The migration script refuses any existing target schema, backs up the local SQLi
 A Vercel cloud deployment has not been performed by the agent merely by preparing this configuration. After deploying, check /api/health (database:postgres), sign in, products/thumbnail switching, one test inquiry, quote revision/acceptance and image upload. Monitor actual logs; do not paste secrets into them or the room.
 
 References: https://vercel.com/kb/guide/vercel-services ; https://vercel.com/docs/frameworks/backend/fastapi ; https://developers.cloudflare.com/r2/api/s3/api/ ; https://www.psycopg.org/psycopg3/docs/advanced/pool.html
+
+## Optional SMTP replies
+Set SMTP_HOST, SMTP_PORT (587), SMTP_SECURITY=starttls, SMTP_FROM, SMTP_USERNAME and SMTP_PASSWORD in the backend runtime environment. For implicit TLS use SMTP_SECURITY=ssl and port465. Use the provider's application password where required. TLS certificate verification stays enabled. Local server reads the same keys from the gitignored .env; restart after configuration changes. Keep passwords out of VITE_ variables, repository files and room transcripts.
+The inquiry email composer stays disabled until a host and valid sending address are configured. Delivery tests mock the provider; live delivery has not been verified without a real mailbox configuration. No automatic messages are sent when an inquiry is submitted.
