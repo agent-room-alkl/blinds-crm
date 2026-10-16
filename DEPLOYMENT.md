@@ -1,49 +1,29 @@
-# Vercel deployment of the VERA demo
+# Deployment
 
-The repository contains a Vue/Vite frontend and FastAPI backend. Select **Services**, root directory `./`, not a single backend-only project. The root vercel.json routes `/api/*` to backend and all other requests to frontend; the service receives the original `/api/*` path. Backend entry is backend/index.py. Frontend builds with npm run build to dist; frontend/vercel.json supports direct SPA navigation.
+The root `vercel.json` routes `/api/*` to FastAPI and frontend pages, including `/portal`, to Vue. Use the Services preset with repository root `./`. Configure server variables from `backend/.env.example`; do not commit credentials.
 
-## Persistent data and server-only variables
+## Persistence
 
-Set these in Vercel runtime environment variables, using the existing provider values without exposing them in a room or source:
-- DATABASE_URL or POSTGRES_URL (provider pooler allowed; server strips ORM-only flags and disables prepared statements).
-- VERA_DB_SCHEMA=vera; VERA_DB_BACKEND=postgres; VERA_AUTO_INIT=0.
-- R2_ENDPOINT, R2_BUCKET, R2_ACCESS_ID and R2_ACCESS_KEY for the private product-image bucket.
-- VERA_STORAGE_BACKEND=r2.
-Do not prefix a database credential or storage key with VITE_. No backend secret is bundled into frontend.
+Cloud runs require PostgreSQL with a dedicated `VERA_DB_SCHEMA` (default `vera`). System/public schemas are rejected. Keep `VERA_AUTO_INIT=0` on production cold starts. Configure the private R2 bucket for product images and retain database/media backups.
 
-The shared PostgreSQL business schema is isolated by SET LOCAL search_path and all transactions target vera. Migration created it only if absent. There is no automatic schema creation on cloud cold starts. New installation: explicitly run backend/init_database.py with VERA_DEMO_PASSWORD set; migration of an existing local demo preserves users/password hashes and skips old sessions. Change the demonstration password through CRM before publishing access.
+New database: `python backend/init_database.py`. Existing database: `python backend/migrate_operations.py` adds the current tables without deleting records. `migrate_sqlite_to_postgres.py` copies current domains to a NEW target schema, refuses existing targets, preserves operation JSON and excludes retired tables and sessions.
 
-Product uploads use the private R2 bucket named by the host. Objects stay private: an unsigned storage URL is rejected, and the app serves published images through /api/media. Signed-in staff can preview hidden uploads. Cloud server uploads are limited to 3MB per image; local uploads allow 5MB. Static original sample illustrations stay bundled with the frontend. Set VERA_STORAGE_BACKEND=local to keep a machine on local files.
+## Retired data cleanup
 
-## Migration already performed locally
+The app no longer creates or exposes contacts/inquiries/follow-ups/quotes/old orders/communications/workbench/AI tables or endpoints. Existing physical tables remain until an explicit migration is run.
 
-The migration script refuses any existing target schema, backs up the local SQLite source, inserts into the new schema in one transaction, resets ID sequences, and compares quote/version/order snapshot text byte-for-byte. Old sessions are deliberately excluded. Never rerun it to overwrite a schema. Keep local `.env`, SQLite files/backups, runtime uploaded media and dependencies out of Git.
+Take a provider/database snapshot for full rollback. Run `python backend/cleanup_legacy.py` to review the fixed table names and counts. For the authorized deployment cleanup, run `python backend/cleanup_legacy.py --apply --backup <private-new-archive.json>`.
 
-## Checks
+The apply command writes retired rows to a NEW private archive, drops only a fixed allowlist without CASCADE, removes customers unlinked to current portal/operations, and verifies current users/products/customers/sessions/projects unchanged in the same transaction. The JSON archive is supplementary row recovery, not a full PostgreSQL schema backup. Do not commit it. Cleanup is not invoked by startup. Preparing or reviewing this code does not imply live data has been removed.
 
-- `python backend/test_api.py` / `python backend/test_products.py`: forced isolated local SQLite suites, even if .env has live PostgreSQL settings.
-- `python backend/test_postgres.py`: actual PostgreSQL suites in unique disposable vera_test_* schemas, then removes those test schemas only. Covers main workflow, products/gallery/hidden-image privacy and concurrent retries/versions/order acceptance.
-- `python backend/test_storage_r2.py`: private R2 upload/read smoke, unsigned read rejected, then removes only its own unique tiny test object.
-- `npm --prefix frontend run build`.
+## Private rules and email
 
-A Vercel cloud deployment has not been performed by the agent merely by preparing this configuration. After deploying, check /api/health (database:postgres), sign in, products/thumbnail switching, one test inquiry, quote revision/acceptance and image upload. Monitor actual logs; do not paste secrets into them or the room.
+An administrator uploads the current xlsm in Project orders. Only dictionaries and pricing go into the private database; source customer rows and VBA are not imported/executed. Check warnings and verify reference prices before operational use.
 
-References: https://vercel.com/kb/guide/vercel-services ; https://vercel.com/docs/frameworks/backend/fastapi ; https://developers.cloudflare.com/r2/api/s3/api/ ; https://www.psycopg.org/psycopg3/docs/advanced/pool.html
+Configure SMTP_HOST, SMTP_PORT, SMTP_SECURITY, SMTP_FROM and optional SMTP username/password. Arrival events attempt email after their batch is saved; invoice sending is explicit. Unconfigured/ambiguous delivery remains visible. The retired IMAP sync, AI drafting, inbox collection, webhook and cron settings are gone.
 
-## Optional SMTP replies
-Set SMTP_HOST, SMTP_PORT (587), SMTP_SECURITY=starttls, SMTP_FROM, SMTP_USERNAME and SMTP_PASSWORD in the backend runtime environment. For implicit TLS use SMTP_SECURITY=ssl and port465. Use the provider's application password where required. TLS certificate verification stays enabled. Local server reads the same keys from the gitignored .env; restart after configuration changes. Keep passwords out of VITE_ variables, repository files and room transcripts.
-The inquiry email composer stays disabled until a host and valid sending address are configured. Delivery tests mock the provider; live delivery has not been verified without a real mailbox configuration. No automatic messages are sent when an inquiry is submitted.
+## Validation
 
+Run the local suites in README and the frontend build. Optional `python backend/test_postgres.py` runs current auth/catalogue/R2 API checks in unique `vera_test_*` schemas and deletes only those test schemas; it requires configured test access. Never run application suites directly against production.
 
-## Persistent drafts and automatic mail analysis
-Before deploying this revision against an existing database, run `python backend/migrate_workflow.py` with the same server environment. It adds draft, communication, task and checkpoint tables and verifies existing business row counts. New installations include these tables through init_database.py. Do not enable automatic initialization on production cold starts.
-
-Set `OPENAI_API_KEY` and `OPENAI_MODEL=gpt-5` for strict JSON analysis and editable email drafts. Set `IMAP_HOST`, `IMAP_PORT=993`, `IMAP_USERNAME`, `IMAP_PASSWORD`, `IMAP_FOLDER=INBOX` for receiving. The actual local root `.env` contains blank reservations; restarting the backend is necessary after changing its values. The browser never receives those secrets. Generated summaries/tasks do not change prices, quote acceptance or delivery status.
-
-On a continuously running local server, a background collector checks every 60 seconds when AI/IMAP is configured. On serverless hosting, configure an external scheduler to call `GET /api/jobs/mail-sync` with `Authorization: Bearer <CRON_SECRET>`. Reserve a random secret of at least 24 characters; do not put it in the URL. Choose a function duration supporting mail collection plus up to two 35-second AI requests, subject to your hosting plan. No scheduler is provisioned automatically by this commit. Administrators can also run collection from Settings.
-
-Alternatively, a mail provider can POST normalized messages to `/api/integrations/mail/inbound` using the same bearer secret. Fields: `external_id` (stable Message-ID), `sender`, `recipient`, `subject`, `body`, `references` (original Message-ID values). Duplicate messages are ignored. Replies match the original sent email first; otherwise only a unique project email match is automatic. Ambiguous/unmatched messages wait in Workspace → Email association. Initial IMAP connection imports only the latest ten messages; subsequent passes import up to ten new messages. Read-only selection and BODY.PEEK preserve mailbox read flags. Attachments are not parsed.
-
-Sending archives the raw message before contacting SMTP. The send key prevents double clicks or network retries from sending twice. A transport exception retains an uncertain status for review rather than resending automatically. Mail-server acceptance does not prove inbox delivery. Quote emails attach the immutable current version as an HTML document (not a PDF). Old manual follow-up records remain available under Earlier records.
-
-Validation uses mocked AI, SMTP and IMAP; live provider integration requires the reserved credentials. References: [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs), [GPT-5](https://developers.openai.com/api/docs/models/gpt-5), [IMAP API](https://docs.python.org/3/library/imaplib.html).
+After an authorized deployment, check health, staff/customer separation, product prices, review/60% deposit, batch/notification status, balance/receipt records and XLSX output. Formal factory layout, partial-arrival invoicing and automatic rebate tiers remain dependencies.

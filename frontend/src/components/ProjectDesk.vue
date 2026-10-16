@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { request } from "../crm-api";
+import { request, session } from "../crm-api";
 
 interface Line {
   id: string;
@@ -13,6 +13,10 @@ interface Line {
   quantity: number;
   arrived: number;
   delivered: number;
+  amount?: string | null;
+  discount?: string | number;
+  product_surcharge?: string | number;
+  installation_surcharge?: string | number;
 }
 interface Invoice {
   id: string;
@@ -21,6 +25,7 @@ interface Invoice {
   amount: string;
   currency: string;
   status: string;
+  payment_status?: string;
   order_ids?: string[];
 }
 interface Notice {
@@ -28,6 +33,16 @@ interface Notice {
   status: string;
   recipient: string;
   subject: string;
+}
+interface Rebate {
+  id: string;
+  customer_id: number;
+  month: string;
+  amount: string;
+  currency: string;
+  used?: string;
+  remaining?: string;
+  evidence?: string;
 }
 interface ProjectOrder {
   id: string;
@@ -46,12 +61,19 @@ interface ProjectOrder {
   invoices?: Invoice[];
 }
 
-defineProps<{ admin: boolean }>();
+const props = defineProps<{ admin: boolean }>();
+const templateStatus = ref("");
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const orders = ref<ProjectOrder[]>([]);
 const invoices = ref<Invoice[]>([]);
 const notices = ref<Notice[]>([]);
+const rebates = ref<Rebate[]>([]);
+const rebateStatus = ref("");
+const settlementEvidence = ref("");
+const rebateForm = reactive({ month: "", amount: "", evidence: "" });
+const receiptNote = reactive<Record<string, string>>({});
+const adjustNote = reactive<Record<string, string>>({});
 const busy = ref(false);
 const error = ref("");
 const notice = ref("");
@@ -88,15 +110,26 @@ function stableKey(signature: string) {
 }
 
 async function load() {
-  const [listed, billed, mailed] = await Promise.all([
+  const [listed, billed, mailed, credits] = await Promise.all([
     request<ProjectOrder[]>("operations/orders"),
     request<Invoice[]>("operations/invoices"),
     request<Notice[]>("operations/notifications"),
+    request<{ calculation_status: string; credits: Rebate[] }>("operations/rebates"),
   ]);
   orders.value = listed;
   invoices.value = billed;
   notices.value = mailed;
-  for (const order of orders.value) supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
+  rebates.value = credits.credits;
+  await refreshTemplate();
+  rebateStatus.value = credits.calculation_status;
+  for (const order of orders.value) {
+    supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
+    for (const line of order.lines) {
+      batch[`${order.id}:${line.id}:discount`] = Number(line.discount ?? 0);
+      batch[`${order.id}:${line.id}:product_surcharge`] = Number(line.product_surcharge ?? 0);
+      batch[`${order.id}:${line.id}:installation_surcharge`] = Number(line.installation_surcharge ?? 0);
+    }
+  }
 }
 
 function mailStatus(status: string) {
@@ -291,6 +324,180 @@ function sendSelectedInvoices() {
   });
 }
 
+function selectedOrders() {
+  return orders.value.filter((order) => picked.value.includes(order.id));
+}
+
+function oneCompany(rows: ProjectOrder[]) {
+  const ids = [...new Set(rows.map((order) => order.customer_id))];
+  if (!rows.length) {
+    error.value = tx("先勾选同一公司的项目。", "Select projects from one company.");
+    return null;
+  }
+  if (ids.length !== 1) {
+    error.value = tx("不能把不同公司放进同一张尾款或同一笔返利。", "Projects from different companies cannot share one balance invoice or one rebate.");
+    return null;
+  }
+  return ids[0];
+}
+
+function settleSelected() {
+  const rows = selectedOrders();
+  const customerId = oneCompany(rows);
+  if (customerId == null) return;
+  if (settlementEvidence.value.trim().length < 5) {
+    error.value = tx("尾款需要至少 5 个字的已确认规则说明。没有说明不会生成发票。", "A balance invoice needs at least 5 characters of confirmed-rule evidence. Nothing is created without it.");
+    return;
+  }
+  const orderIds = rows.map((order) => order.id).sort();
+  const body = {
+    order_ids: orderIds,
+    operation_key: stableKey(JSON.stringify({ settle: orderIds, evidence: settlementEvidence.value.trim() })),
+    rules_evidence: settlementEvidence.value.trim(),
+    billing_basis: "fully_delivered_remaining_total" as const,
+  };
+  return act(async () => {
+    const invoice = await request<Invoice>("operations/settlements", body);
+    operationKeys.delete(JSON.stringify({ settle: orderIds, evidence: settlementEvidence.value.trim() }));
+    notice.value = tx(
+      `已生成尾款草稿 ${invoice.id}，金额 ${invoice.currency} ${invoice.amount}。部分到货或未收定金会被拒绝。发送仍是另一步。`,
+      `Balance draft ${invoice.id} created for ${invoice.currency} ${invoice.amount}. Partial arrival or an unpaid deposit is refused. Sending stays a separate step.`,
+    );
+  });
+}
+
+function recordRebate() {
+  const rows = selectedOrders();
+  const customerId = oneCompany(rows);
+  if (customerId == null) return;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(rebateForm.month) || Number(rebateForm.amount) <= 0 || rebateForm.evidence.trim().length < 5) {
+    error.value = tx("返利要写年月（2026-10）、金额和至少 5 个字的确认依据。页面不计算阶梯。", "A rebate needs a month such as 2026-10, an amount, and at least 5 characters of evidence. This page does not calculate a tier.");
+    return;
+  }
+  return act(async () => {
+    await request("operations/rebates", {
+      customer_id: customerId,
+      source_order_ids: rows.map((order) => order.id),
+      month: rebateForm.month,
+      amount: rebateForm.amount,
+      evidence: rebateForm.evidence.trim(),
+      currency: "NZD",
+    });
+    rebateForm.amount = "";
+    rebateForm.evidence = "";
+    notice.value = tx("已记入一笔已确认返利。这不是自动月度计算。", "Recorded one confirmed rebate. This is not an automatic monthly calculation.");
+  });
+}
+
+function markBalanceReceived(invoice: Invoice) {
+  if (invoice.kind !== "balance") {
+    error.value = tx("定金到账仍用「定金已收」。这里只确认尾款。", "Deposit receipt still uses Deposit received. This confirms a balance invoice only.");
+    return;
+  }
+  return act(async () => {
+    await request(`operations/invoices/${invoice.id}/received`, { note: receiptNote[invoice.id] || tx("尾款已收", "Balance received") });
+    notice.value = tx("已记录尾款已收。", "Balance receipt recorded.");
+  });
+}
+
+function adjust(order: ProjectOrder) {
+  if (order.status !== "pending_review") {
+    error.value = tx("只有待审核项目可以改折扣和附加费。客户页面不能填这些数。", "Only a project awaiting review can change a discount or surcharge. The customer page cannot enter these figures.");
+    return;
+  }
+  const note = (adjustNote[order.id] || "").trim();
+  if (note.length < 5) {
+    error.value = tx("调整说明至少要 5 个字。页面不会代填一句过短的默认说明。", "The adjustment note needs at least 5 characters. This page does not send a short default.");
+    return;
+  }
+  const lines = order.lines.map((line) => ({
+    line_id: line.id,
+    discount: Number(batch[`${order.id}:${line.id}:discount`] ?? line.discount ?? 0),
+    product_surcharge: String(batch[`${order.id}:${line.id}:product_surcharge`] ?? line.product_surcharge ?? 0),
+    installation_surcharge: String(batch[`${order.id}:${line.id}:installation_surcharge`] ?? line.installation_surcharge ?? 0),
+  }));
+  if (lines.some((line) => line.discount < 0 || line.discount > 1)) {
+    error.value = tx("折扣是 0 到 1 的比例。0.1 表示减 10%，不是填 10。", "Discount is a ratio from 0 to 1. 0.1 means ten percent off, not the integer 10.");
+    return;
+  }
+  return act(async () => {
+    await request(`operations/orders/${order.id}/adjust`, { note, lines });
+    notice.value = tx("已按员工调整重算，并保留履历。", "Recalculated from the staff adjustment and kept the history.");
+  });
+}
+
+async function refreshTemplate() {
+  if (!props.admin) return;
+  try {
+    const status = await request<{ version?: string; products_count?: number; warnings?: string[] }>("operations/template-status");
+    templateStatus.value = tx(
+      `模板版本 ${status.version || "—"}，产品 ${status.products_count ?? "—"}。${(status.warnings || []).join(" ")}`,
+      `Template version ${status.version || "—"}, products ${status.products_count ?? "—"}. ${(status.warnings || []).join(" ")}`,
+    );
+  } catch (cause) {
+    templateStatus.value = cause instanceof Error ? cause.message : String(cause);
+  }
+}
+
+async function importTemplate(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  busy.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    const chunk = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+    }
+    const result = await request<{ version?: string; products_count?: number; warnings?: string[] }>("operations/template-import", {
+      filename: file.name,
+      content_base64: btoa(binary),
+    });
+    notice.value = tx(
+      `已导入私有模板。版本 ${result.version || "—"}，产品 ${result.products_count ?? "—"}。原文件不会进公开仓库。`,
+      `Imported the private template. Version ${result.version || "—"}, products ${result.products_count ?? "—"}. The original file is not added to the public repository.`,
+    );
+    templateStatus.value = (result.warnings || []).join(" ");
+    await load();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    input.value = "";
+    busy.value = false;
+  }
+}
+
+async function downloadSheet(id: string, kind: "production-sheet" | "job-sheet") {
+  busy.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const response = await fetch(`/api/operations/orders/${id}/${kind}`, {
+      headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { detail?: string };
+      throw new Error(typeof data.detail === "string" ? data.detail : response.statusText);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${kind}-draft-${id}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notice.value = tx("已下载生产资料草稿。这还不是已验收的工厂收单格式。", "Downloaded a production draft. This is not a confirmed factory order format.");
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    busy.value = false;
+  }
+}
+
 function retryNotice(id: string) {
   return act(async () => {
     const sent = await request<Notice>(`operations/notifications/${id}/retry`, {});
@@ -309,6 +516,13 @@ function retryNotice(id: string) {
       <p v-if="error" class="alert" role="alert">{{ error }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
     </div>
+
+    <section v-if="admin" class="card">
+      <h2>{{ tx("导入计价模板", "Import the pricing template") }}</h2>
+      <p class="hint">{{ tx("只把选项和价格放进私有库。页面不展示整张批发价矩阵，也不把客户原文件提交到公开仓库。", "Options and prices go into the private store. This page does not show the wholesale price matrix, and the customer's original file is not committed to the public repository.") }}</p>
+      <input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" />
+      <p v-if="templateStatus">{{ templateStatus }}</p>
+    </section>
 
     <form v-if="admin" class="card" @submit.prevent="openAccount">
       <h2>{{ tx("开通客户账号", "Open a customer account") }}</h2>
@@ -348,15 +562,18 @@ function retryNotice(id: string) {
       <p>{{ order.status }} · {{ tx("收款", "Payment") }} {{ order.payment_status }}<template v-if="order.arrival_status"> · {{ order.arrival_status }}</template><template v-if="order.delivery_status"> · {{ order.delivery_status }}</template></p>
       <p>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("合计待配置，不能审核开票", "Total is not configured, so review and invoicing stay closed") }}</p>
       <table>
-        <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "This arrival") }}</th><th>{{ tx("本批交付", "This delivery") }}</th></tr></thead>
+        <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "This arrival") }}</th><th>{{ tx("本批交付", "This delivery") }}</th><th>{{ tx("折扣比例", "Discount ratio") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Installation surcharge") }}</th></tr></thead>
         <tbody>
           <tr v-for="line in order.lines" :key="line.id">
-            <td>{{ line.window_name }}<small>{{ tx("系列", "Series") }} {{ line.product_id || "—" }} · {{ line.width_mm || "—" }}×{{ line.height_mm || "—" }} mm<span v-if="optionText(line)"> · {{ optionText(line) }}</span></small></td>
+            <td>{{ line.window_name }}<small>{{ tx("系列", "Series") }} {{ line.product_id || "—" }} · {{ line.width_mm || "—" }}×{{ line.height_mm || "—" }} mm<span v-if="optionText(line)"> · {{ optionText(line) }}</span><span v-if="line.amount"> · {{ order.currency || "" }} {{ line.amount }}</span><span v-else> · {{ tx("行价待配置", "Line price not configured") }}</span></small></td>
             <td>{{ line.quantity }}</td>
             <td>{{ line.arrived }}</td>
             <td>{{ line.delivered }}</td>
             <td><input v-model.number="batch[`${order.id}:${line.id}:arrival`]" type="number" min="0" step="1" /></td>
             <td><input v-model.number="batch[`${order.id}:${line.id}:delivery`]" type="number" min="0" step="1" /></td>
+            <td><input v-model.number="batch[`${order.id}:${line.id}:discount`]" type="number" min="0" max="1" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
+            <td><input v-model.number="batch[`${order.id}:${line.id}:product_surcharge`]" type="number" min="0" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
+            <td><input v-model.number="batch[`${order.id}:${line.id}:installation_surcharge`]" type="number" min="0" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
           </tr>
         </tbody>
       </table>
@@ -365,14 +582,44 @@ function retryNotice(id: string) {
         <button type="button" class="secondary" :disabled="busy" @click="deposit(order.id)">{{ tx("定金已收", "Deposit received") }}</button>
         <label>{{ tx("供应商参考号", "Supplier reference") }}<input v-model="supplierRef[order.id]" /></label>
         <button type="button" class="secondary" :disabled="busy || !supplierRef[order.id]" @click="supplier(order)">{{ tx("记录下单", "Record supplier order") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="exportBlocked(order.id)">{{ tx("导出 Excel", "Export Excel") }}</button>
+        <button type="button" class="secondary" :disabled="busy" @click="exportBlocked(order.id)">{{ tx("正式工厂格式", "Factory format") }}</button>
+        <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(order.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button>
+        <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(order.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job-sheet draft") }}</button>
+        <label v-if="order.status === 'pending_review'">{{ tx("调整说明", "Adjustment note") }}<input v-model="adjustNote[order.id]" /></label>
+        <button v-if="order.status === 'pending_review'" type="button" class="secondary" :disabled="busy" @click="adjust(order)">{{ tx("保存员工调整", "Save staff adjustment") }}</button>
         <button type="button" class="secondary" :disabled="busy" @click="fulfil(order, 'arrival')">{{ tx("记录本批到货", "Record this arrival") }}</button>
         <button type="button" class="secondary" :disabled="busy" @click="fulfil(order, 'delivery')">{{ tx("记录本批交付", "Record this delivery") }}</button>
       </div>
       <div v-for="invoice in order.invoices || []" :key="invoice.id" class="invoice">
-        <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }}</label>
+        <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ mailStatus(invoice.status) }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</label>
+        <template v-if="invoice.kind === 'balance'">
+          <input v-model="receiptNote[invoice.id]" :placeholder="tx('尾款备注', 'Balance note')" />
+          <button type="button" class="secondary" :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx("尾款已收", "Balance received") }}</button>
+        </template>
       </div>
     </article>
+
+    <section class="card">
+      <h2>{{ tx("同公司尾款", "Balance for one company") }}</h2>
+      <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的项目生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed projects of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
+      <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="2" /></label>
+      <button type="button" :disabled="busy" @click="settleSelected">{{ tx("生成尾款草稿", "Create balance draft") }}</button>
+    </section>
+
+    <section class="card">
+      <h2>{{ tx("已确认返利", "Confirmed rebates") }}</h2>
+      <p class="hint">{{ tx("只记录已经确认的月度金额。没有阶梯公式，页面不算返点。同一订单不能重复计入。", "Record only a confirmed monthly amount. There is no tier formula, and this page does not calculate a rebate. An order cannot be counted twice.") }}</p>
+      <p v-if="rebateStatus">{{ rebateStatus }}</p>
+      <div class="grid">
+        <label>{{ tx("年月", "Month") }}<input v-model="rebateForm.month" placeholder="2026-10" /></label>
+        <label>{{ tx("金额", "Amount") }}<input v-model="rebateForm.amount" inputmode="decimal" /></label>
+        <label>{{ tx("确认依据", "Evidence") }}<input v-model="rebateForm.evidence" /></label>
+      </div>
+      <button type="button" :disabled="busy" @click="recordRebate">{{ tx("记入勾选项目的返利", "Record a rebate for the selected projects") }}</button>
+      <article v-for="credit in rebates" :key="credit.id" class="invoice">
+        <span>#{{ credit.customer_id }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span>
+      </article>
+    </section>
 
     <section class="card">
       <h2>{{ tx("同公司发票", "Invoices for one company") }}</h2>

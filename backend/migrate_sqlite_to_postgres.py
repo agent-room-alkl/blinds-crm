@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from service import init_db,DB_PATH,BACKEND
 from database import connect,SCHEMA,AUTO_IDS
-TABLES=['products','customers','contacts','inquiries','followups','quotes','quote_versions','quote_lines','orders','status_history','users']
+TABLES=['products','customers','users','portal_profiles','operations_records']
 
 def migrate():
     if BACKEND!='postgres':raise RuntimeError('Configure PostgreSQL before migration')
@@ -22,9 +22,10 @@ def migrate():
         with connect(DB_PATH) as target:
             present=target.execute('SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name=?) AS present',(SCHEMA,)).fetchone()['present']
             if present:raise RuntimeError('Target schema already exists; migration refuses to overwrite it')
-            init_db(connection=target,seed_admin=False)
+            init_db(connection=target,seed_admin=False,seed_catalog=False)
             for table in TABLES:
-                rows=source.execute(f'SELECT * FROM {table}').fetchall()
+                present=source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone()
+                rows=source.execute(f'SELECT * FROM {table}').fetchall() if present else []
                 for row in rows:
                     keys=list(row.keys());values=[row[k] for k in keys]
                     query=f"INSERT INTO {table} ({','.join(keys)}) VALUES({','.join('?' for _ in keys)})"
@@ -36,14 +37,15 @@ def migrate():
                 if table in AUTO_IDS or table=='products':
                     maximum=target.execute(f'SELECT MAX(id) AS maximum FROM {table}').fetchone()['maximum']
                     target.execute("SELECT setval(pg_get_serial_sequence(?, 'id'), ?, ?)",(SCHEMA+'.'+table,maximum or 1,bool(maximum)))
-            for table,column in [('quote_versions','data'),('orders','snapshot')]:
-                originals={r['id']:r[column] for r in source.execute(f'SELECT id,{column} FROM {table}')}
+            for table,column in [('operations_records','data')]:
+                present=source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone()
+                originals={r['id']:r[column] for r in source.execute(f'SELECT id,{column} FROM {table}')} if present else {}
                 copied={r['id']:r[column] for r in target.execute(f'SELECT id,{column} FROM {table}')}
                 if originals!=copied:raise RuntimeError(f'Frozen data mismatch: {table}')
             if target.execute('SELECT COUNT(*) AS n FROM sessions').fetchone()['n']!=0:raise RuntimeError('Sessions must not be migrated')
         print('Migrated into new schema:',SCHEMA)
         print('Row counts:',counts)
-        print('Quote/version/order snapshots identical; no old sessions copied.')
+        print('Current operation snapshots identical; no legacy tables or old sessions copied.')
         print('Local backup:',backup_path.name)
     finally:source.close()
 

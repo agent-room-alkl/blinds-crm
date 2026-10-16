@@ -6,7 +6,7 @@ from pathlib import Path
 from database import connect,BACKEND
 from psycopg import sql
 if BACKEND!='postgres':raise SystemExit('PostgreSQL configuration required')
-allowed=['test_api.py','test_products.py','test_concurrent_postgres.py','test_storage_api_live.py','test_manual_email.py','test_workflow.py']
+allowed=['test_core_api.py','test_products.py','test_storage_api_live.py']
 suites=sys.argv[1:] or allowed
 assert all(s in allowed for s in suites)
 for suite in suites:
@@ -26,4 +26,4 @@ for suite in suites:
         with connect('unused.db') as c:
             c.connection.execute(sql.SQL('DROP SCHEMA IF EXISTS {} CASCADE').format(sql.Identifier(schema)))
         print('Disposable test schema removed:',schema)
-print('PASS: real PostgreSQL workflow + catalogue/image/gallery suites; application/public schemas unchanged by tests')
+print('PASS: real PostgreSQL current auth/catalogue/image suites; application/public schemas unchanged by tests')
