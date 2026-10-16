@@ -96,6 +96,8 @@ const account = reactive({
 });
 
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
+const selectedId = ref("");
+const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
 
 onMounted(() => {
   void load();
@@ -188,7 +190,7 @@ function deposit(id: string) {
 function supplier(order: ProjectOrder) {
   return act(async () => {
     await request(`operations/orders/${order.id}/supplier-order`, { reference: supplierRef[order.id] });
-    notice.value = tx("已记录供应商参考号。正式 Excel 仍需确认模板，导出保持关闭。", "Supplier reference recorded. Formal Excel stays closed until the template is confirmed.");
+    notice.value = tx("已记录供应商参考号。正式工厂格式仍会拒绝，直到模板确认。生产资料草稿可以下载。", "Supplier reference recorded. The formal factory file is still refused until its template is confirmed. Production drafts can be downloaded.");
   });
 }
 
@@ -508,23 +510,24 @@ function retryNotice(id: string) {
 
 <template>
   <section class="desk">
-    <div class="card">
-      <p class="section-label">{{ tx("主流程", "PRIMARY FLOW") }}</p>
+    <div class="card intro">
       <h2>{{ tx("项目订单", "Project orders") }}</h2>
-      <p>{{ tx("客户在门户提交。这里做审核、定金、供应商记录和分批到货。询价与旧报价留在历史入口。跨公司不合并成一张发票。", "Customers submit in the portal. Review, deposit, supplier reference and partial arrival happen here. Inquiries and old quotations stay in the history entries. Invoices are not combined across companies.") }}</p>
-      <p class="hint">{{ tx("部分到货的开票金额、返利阶梯和供应商 Excel 模板都还没有确认规则，对应操作会拒绝，而不是套用估计值。", "Partial-arrival billing, rebate tiers and the supplier Excel template have no confirmed rules. Those actions are refused instead of using an estimate.") }}</p>
+      <p>{{ tx("客户在门户提交。这里审核、定金、供应商记录和分批到货。正式工厂格式仍会拒绝；生产资料草稿和安装工作单草稿可以下载，不是已验收的工厂文件。", "Customers submit in the portal. Review, deposit, supplier reference and partial arrival happen here. Factory format is still refused. Production and job-sheet drafts can be downloaded and are not an accepted factory file.") }}</p>
       <p v-if="error" class="alert" role="alert">{{ error }}</p>
       <p v-if="notice" role="status">{{ notice }}</p>
     </div>
 
-    <section v-if="admin" class="card">
+    <details v-if="admin" class="card fold">
+      <summary>{{ tx("导入计价模板", "Import the pricing template") }}</summary>
       <h2>{{ tx("导入计价模板", "Import the pricing template") }}</h2>
       <p class="hint">{{ tx("只把选项和价格放进私有库。页面不展示整张批发价矩阵，也不把客户原文件提交到公开仓库。", "Options and prices go into the private store. This page does not show the wholesale price matrix, and the customer's original file is not committed to the public repository.") }}</p>
       <input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" />
       <p v-if="templateStatus">{{ templateStatus }}</p>
-    </section>
+    </details>
 
-    <form v-if="admin" class="card" @submit.prevent="openAccount">
+    <details v-if="admin" class="card fold">
+      <summary>{{ tx("开通客户账号", "Open a customer account") }}</summary>
+    <form @submit.prevent="openAccount">
       <h2>{{ tx("开通客户账号", "Open a customer account") }}</h2>
       <p class="hint">{{ tx("一个客户只能有一个登录和一个联系人。", "A customer can have only one login and one contact.") }}</p>
       <div class="grid">
@@ -538,6 +541,7 @@ function retryNotice(id: string) {
       </div>
       <button :disabled="busy">{{ tx("开通", "Open account") }}</button>
     </form>
+    </details>
 
     <section class="card batch-bar">
       <label>{{ tx("按状态筛选", "Filter by status") }}
@@ -553,7 +557,20 @@ function retryNotice(id: string) {
     </section>
 
     <p v-if="!visibleOrders.length" class="card">{{ tx("没有符合筛选的门户项目。", "No portal projects match this filter.") }}</p>
-    <article v-for="order in visibleOrders" :key="order.id" class="card order">
+    <div v-else class="split">
+      <aside class="card order-list">
+        <div v-for="order in visibleOrders" :key="order.id" class="order-row">
+          <label class="pick-mark">
+            <input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
+            <span>{{ picked.includes(order.id) ? tx("已勾选", "Selected") : tx("未勾选", "Not selected") }}</span>
+          </label>
+          <button type="button" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
+            <strong>{{ order.project_name }}</strong>
+            <span>{{ order.company }} · {{ order.status }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</span>
+          </button>
+        </div>
+      </aside>
+    <article v-for="order in selectedOrder ? [selectedOrder] : []" :key="order.id" class="card order">
       <header>
         <label><input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /> {{ order.project_name }}</label>
         <span>{{ order.company }}</span>
@@ -561,7 +578,7 @@ function retryNotice(id: string) {
       <p>{{ tx("施工地址", "Site address") }}：{{ order.site_address }}</p>
       <p>{{ order.status }} · {{ tx("收款", "Payment") }} {{ order.payment_status }}<template v-if="order.arrival_status"> · {{ order.arrival_status }}</template><template v-if="order.delivery_status"> · {{ order.delivery_status }}</template></p>
       <p>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("合计待配置，不能审核开票", "Total is not configured, so review and invoicing stay closed") }}</p>
-      <table>
+      <div class="table-scroll"><table>
         <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "This arrival") }}</th><th>{{ tx("本批交付", "This delivery") }}</th><th>{{ tx("折扣比例", "Discount ratio") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Installation surcharge") }}</th></tr></thead>
         <tbody>
           <tr v-for="line in order.lines" :key="line.id">
@@ -576,7 +593,7 @@ function retryNotice(id: string) {
             <td><input v-model.number="batch[`${order.id}:${line.id}:installation_surcharge`]" type="number" min="0" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
       <div class="actions">
         <button type="button" :disabled="busy" @click="review(order.id)">{{ tx("确认接收", "Accept review") }}</button>
         <button type="button" class="secondary" :disabled="busy" @click="deposit(order.id)">{{ tx("定金已收", "Deposit received") }}</button>
@@ -598,15 +615,18 @@ function retryNotice(id: string) {
         </template>
       </div>
     </article>
+    </div>
 
-    <section class="card">
+    <details class="card fold">
+      <summary>{{ tx("同公司尾款", "Balance for one company") }}</summary>
       <h2>{{ tx("同公司尾款", "Balance for one company") }}</h2>
       <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的项目生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed projects of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
       <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="2" /></label>
       <button type="button" :disabled="busy" @click="settleSelected">{{ tx("生成尾款草稿", "Create balance draft") }}</button>
-    </section>
+    </details>
 
-    <section class="card">
+    <details class="card fold">
+      <summary>{{ tx("已确认返利", "Confirmed rebates") }}</summary>
       <h2>{{ tx("已确认返利", "Confirmed rebates") }}</h2>
       <p class="hint">{{ tx("只记录已经确认的月度金额。没有阶梯公式，页面不算返点。同一订单不能重复计入。", "Record only a confirmed monthly amount. There is no tier formula, and this page does not calculate a rebate. An order cannot be counted twice.") }}</p>
       <p v-if="rebateStatus">{{ rebateStatus }}</p>
@@ -619,36 +639,65 @@ function retryNotice(id: string) {
       <article v-for="credit in rebates" :key="credit.id" class="invoice">
         <span>#{{ credit.customer_id }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span>
       </article>
-    </section>
+    </details>
 
-    <section class="card">
+    <details class="card fold">
+      <summary>{{ tx("同公司发票", "Invoices for one company") }}</summary>
       <h2>{{ tx("同公司发票", "Invoices for one company") }}</h2>
       <p class="hint">{{ tx("勾选同一公司的发票后一起发送。跨公司会被拦住。重复发送不会再发一封。", "Select invoices from one company, then send them together. A mix of companies is blocked. Sending again does not send another copy.") }}</p>
       <button type="button" :disabled="busy" @click="sendSelectedInvoices">{{ tx("发送勾选的发票", "Send selected invoices") }}</button>
-    </section>
+    </details>
 
-    <section class="card">
+    <details class="card fold">
+      <summary>{{ tx("通知状态", "Notification status") }}</summary>
       <h2>{{ tx("通知状态", "Notification status") }}</h2>
       <p v-if="!notices.length">{{ tx("还没有到货或发票通知。", "No arrival or invoice notifications yet.") }}</p>
       <article v-for="item in notices" :key="item.id" class="invoice">
         <span>{{ item.subject }} · {{ item.recipient }} · {{ mailStatus(item.status) }}</span>
         <button v-if="item.status === 'not_configured'" type="button" class="secondary" :disabled="busy" @click="retryNotice(item.id)">{{ tx("配置好后重试", "Retry after mail is configured") }}</button>
       </article>
-    </section>
+    </details>
   </section>
 </template>
 
 <style scoped>
-.desk { display: grid; gap: 16px; }
-.section-label { font-size: 11px; letter-spacing: 0.14em; color: #52635a; }
+.desk { display: grid; gap: 12px; font-size: 15px; line-height: 1.55; min-width: 0; max-width: 100%; overflow-x: hidden; }
+.desk .card { padding: 12px 16px; }
+.intro h2, .intro p { margin: 0; }
+.intro p { margin-top: 8px; }
+.split { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
+.order-list { display: grid; gap: 8px; max-height: 640px; overflow: auto; padding: 8px; }
+.order-row { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
+.pick-mark { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 72px; font-size: 13px; color: #1b2421; }
+.order-pick { display: grid; gap: 2px; width: 100%; text-align: left; justify-content: flex-start; padding: 8px 10px; border: 1px solid #c5d0c8; background: #fff; color: #1b2421; border-radius: 6px; cursor: pointer; min-height: 44px; }
+.order-pick.current { border-color: #3d6b4f; background: #f4f8f2; color: #1b2421; }
+.order-pick strong { font-size: 15px; color: #1b2421; font-weight: 650; }
+.order-pick span { font-size: 13px; color: #3d4a44; line-height: 1.4; }
+.fold > summary { font-size: 16px; font-weight: 600; cursor: pointer; min-height: 36px; display: flex; align-items: center; }
+.fold > h2, .fold form > h2 { margin-top: 16px; }
+.table-scroll { overflow-x: auto; max-width: 100%; }
+.table-scroll table { width: max-content; min-width: 100%; margin: 8px 0; }
+.table-scroll th, .table-scroll td { white-space: nowrap; }
+.table-scroll td small { display: block; max-width: 280px; white-space: normal; }
+.batch-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.desk h2 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
+.desk h3 { font-size: 18px; font-weight: 600; margin: 16px 0 8px; }
+.section-label { font-size: 13px; letter-spacing: 0.08em; color: #52635a; }
+.hint, .desk p, .desk li { font-size: 15px; }
 .hint { color: #54645c; line-height: 1.6; }
-.grid, .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
-.grid label, .actions label { min-width: 180px; }
-.order header { display: flex; justify-content: space-between; gap: 12px; }
-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-th, td { text-align: left; border-bottom: 1px solid var(--line, #dedbd5); padding: 8px 6px; font-size: 14px; }
-td input { width: 88px; }
-td small { display: block; color: #54645c; font-size: 12px; margin-top: 4px; }
-.invoice { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 8px; }
+.grid, .actions { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; }
+.grid label, .actions label { min-width: 180px; font-size: 14px; }
+.desk input, .desk select, .desk button { min-height: 40px; font-size: 14px; }
+.order header { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.order { padding: 8px 0 16px; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+th, td { text-align: left; border-bottom: 1px solid var(--line, #dedbd5); padding: 12px 10px; font-size: 14px; }
+td input { width: 96px; }
+td small { display: block; color: #54645c; font-size: 13px; margin-top: 4px; line-height: 1.45; }
+.invoice { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: center; margin-top: 12px; font-size: 14px; }
+@media (max-width: 900px) {
+  .split { grid-template-columns: 1fr; }
+  .order-list { max-height: 280px; }
+}
 .alert { color: #8a3b2c; }
 </style>

@@ -1,124 +1,262 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
-import { useI18n } from 'vue-i18n';
-import { request, session } from '../crm-api';
-import ProductManager from '../components/ProductManager.vue';
-import QuotationEditor, { type QuoteDraft } from '../components/QuotationEditor.vue';
-import WorkbenchPanel from '../components/WorkbenchPanel.vue';
-import MailInbox from '../components/MailInbox.vue';
-import IntegrationStatus from '../components/IntegrationStatus.vue';
-import ManualOrderForm from '../components/ManualOrderForm.vue';
-import ProjectActivity from '../components/ProjectActivity.vue';
-import ProjectDesk from '../components/ProjectDesk.vue';
-import SampleDashboard from '../components/SampleDashboard.vue';
-import PortalCustomers from '../components/PortalCustomers.vue';
-import type { ApiProduct } from '../api';
-interface Line {product_id:number|'';width:number|string;height:number|string;unit:string;material:string;color:string;control:string;quantity:number;unit_price:number|string;amount?:string;product?:{name_zh:string;name_en:string}}
-interface Version {quote_id:number;version:number;inquiry_id:number;locale:string;currency:string;valid_until:string;discount:number|string;shipping:number|string;tax:number|string;terms:string;lines:Line[];total:string;subtotal:string;accepted_order_id:number|null}
-interface Inquiry {id:number;customer_id?:number;company:string;contact_name:string;channel:string;locale:string;status:string;notes:string;product_id?:number|null;quantity?:number|null;width?:number|null;height?:number|null;unit?:string|null;expected_date?:string;followups:{id:number;note:string;next_at:string;created_at:string}[]}
-interface Quote {id:number;inquiry_id:number;versions:Version[]}
-interface Order {id:number;status:string;snapshot:Version&{order_source?:string;source?:string;reference?:string;customer:{company:string;contact_name:string};confirmation_note:string};history:{old_status:string;new_status:string;created_at:string;note:string}[]}
-interface Customer {id:number;company:string;locale:string;notes:string;contacts:{id:number;name:string;channel:string}[];inquiries:{id:number;status:string;contact_name:string;created_at:string}[];orders:{id:number;status:string;created_at:string}[]}
-const {locale}=useI18n();const tx=(z:string,e:string)=>locale.value==='zh'?z:e;
-const signed=ref(!!session.token),busy=ref(false),error=ref(''),message=ref(''),tab=ref('projects');
-const credentials=reactive({username:'',password:''});const inquiries=ref<Inquiry[]>([]),quotes=ref<Quote[]>([]),orders=ref<Order[]>([]),customers=ref<Customer[]>([]),products=ref<ApiProduct[]>([]);
-const selected=ref<Inquiry|null>(null),quote=ref<Quote|null>(null),version=ref<Version|null>(null),order=ref<Order|null>(null),customer=ref<Customer|null>(null),catalog=ref<number|null>(null);
-const confirmationOpen=ref(false),manualOpen=ref(false);
-const activeDraft=ref<QuoteDraft|null>(null),workingDrafts=ref<QuoteDraft[]>([]);
-const pageTitle=computed(()=>({projects:tx('项目订单','Project orders'),dashboard:tx('分析看板','Dashboard'),workbench:tx('历史工作台','Legacy desk'),customers:tx('客户资料','Customers'),inquiries:tx('历史询价','Past inquiries'),quotes:tx('历史报价','Past quotes'),orders:tx('历史交付','Past delivery'),products:tx('产品目录','Product catalogue'),users:tx('系统设置','Settings'),inbox:tx('邮件关联','Email association'),legacy:tx('旧客户资料','Old customer records')} as Record<string,string>)[tab.value]);
-async function manualSaved(id:number){await load();order.value=orders.value.find(o=>o.id===id)||null;manualOpen.value=false;message.value=tx('手工订单已保存，已进入订单跟进。','Order recorded. You can now track its delivery.')}
-function sourceLabel(source?:string){return ({phone:tx('电话','Phone'),email:tx('邮件','Email'),wechat:tx('微信','WeChat'),other:tx('其他渠道','Other channel')} as Record<string,string>)[source||'']||tx('手工录入','Manual entry')}
-const confirmation=ref(''),editing=ref(false),customerQuery=ref('');
-const profile=reactive({company:'',contact_id:0,contact_name:'',channel:'',locale:'en',notes:''});
-const me=ref({username:'dylan',name:'Dylan',role:'admin'});
-const passwordOpen=ref(false);
-const passwordForm=reactive({current:'',next:'',confirm:''});
-const users=ref<{username:string;name:string;role:string;active:number}[]>([]);
-const newUser=reactive({username:'',name:'',password:'',role:'staff'});
-const visibleCustomers=computed(()=>{const q=customerQuery.value.trim().toLowerCase();if(!q)return customers.value;return customers.value.filter(c=>[c.company,c.notes,...c.contacts.flatMap(p=>[p.name,p.channel])].filter(Boolean).join('\n').toLowerCase().includes(q))});
-const pageSize=5;const listPage=reactive({customers:1,inquiries:1,quotes:1,orders:1});
-function pageCount(n:number){return Math.max(1,Math.ceil(n/pageSize))}
-function rows<T>(items:T[],key:'customers'|'inquiries'|'quotes'|'orders'){const page=Math.min(listPage[key],pageCount(items.length));return items.slice((page-1)*pageSize,page*pageSize)}
-const labels:Record<string,[string,string]>={new:['新询价','New'],contacted:['已联系','Contacted'],quoted:['已报价','Quoted'],won:['赢单','Won'],confirmed:['已确认','Confirmed'],production:['生产中','In production'],ready:['待发货','Ready to ship'],delivered:['已交付','Delivered']};const status=(s:string)=>labels[s]?tx(...labels[s]):s;
-async function act(fn:()=>Promise<void>){busy.value=true;error.value='';message.value='';try{await fn()}catch(e){error.value=e instanceof Error?e.message:String(e);if(!session.token)signed.value=false}finally{busy.value=false}}
-async function load(){const [i,p,q,o,cu,who,ds]=await Promise.all([request<Inquiry[]>('inquiries'),request<typeof products.value>('admin/products'),request<Quote[]>('quotes'),request<Order[]>('orders'),request<Customer[]>('customers'),request<{username:string;name:string;role:string}>('auth/me'),request<QuoteDraft[]>('quote-drafts')]);workingDrafts.value=ds;inquiries.value=i;products.value=p;quotes.value=q;orders.value=o;customers.value=cu;me.value=who;if(who.role==='admin')users.value=await request('users');if(selected.value)selected.value=i.find(x=>x.id===selected.value?.id)||null;if(quote.value)quote.value=q.find(x=>x.id===quote.value?.id)||null;if(order.value)order.value=o.find(x=>x.id===order.value?.id)||null;if(customer.value)customer.value=cu.find(x=>x.id===customer.value?.id)||null;ensureSelection()}
-function toggleLocale(){const next=locale.value==='zh'?'en':'zh';locale.value=next;localStorage.setItem('vera-locale',next);document.documentElement.lang=next==='zh'?'zh':'en'}
-async function changePassword(){if(passwordForm.next!==passwordForm.confirm){error.value=tx('两次新密码不一致','The new passwords do not match');return}await act(async()=>{await request('auth/password',{current:passwordForm.current,new:passwordForm.next});session.token='';signed.value=false;selected.value=null;passwordForm.current='';passwordForm.next='';passwordForm.confirm='';passwordOpen.value=false;message.value=tx('密码已更新，请用新密码重新登录','Password updated. Sign in again with the new password')})}
-async function addUser(){await act(async()=>{await request('users',{...newUser});newUser.username='';newUser.name='';newUser.password='';await load();message.value=tx('用户已添加','User added')})}
-async function setRole(username:string,role:string){await act(async()=>{await request(`users/${username}/role`,{role});await load();message.value=tx('权限已更新','Access updated')})}
-function onRole(username:string,event:Event){void setRole(username,(event.target as HTMLSelectElement).value)}
-async function login(){await act(async()=>{const r=await request<{token:string}>('auth/login',credentials);session.token=r.token;signed.value=true;credentials.password='';await load()})}
-async function logout(){await act(async()=>{await request('auth/logout',{});session.token='';signed.value=false;selected.value=null;quote.value=null;version.value=null;order.value=null;customer.value=null})}
-function openCustomer(c:Customer){customer.value=c;profile.company=c.company;profile.contact_id=c.contacts[0]?.id||0;profile.contact_name=c.contacts[0]?.name||'';profile.channel=c.contacts[0]?.channel||'';profile.locale=c.locale==='zh'?'zh':'en';profile.notes=c.notes||''}
-async function saveCustomer(){await act(async()=>{const id=customer.value!.id;await request(`customers/${id}`,profile);await load();message.value=tx('客户资料已保存','Customer details updated')})}
-const stages=['confirmed','production','ready','delivered'];
-function stageTime(step:string){return order.value?.history.filter(h=>h.new_status===step).at(-1)?.created_at||''}
-const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-function when(value?:string){if(!value)return '';const d=new Date(value);if(Number.isNaN(d.getTime()))return value;const clock=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');return locale.value==='zh'?`${d.getMonth()+1}月${d.getDate()}日 ${clock}`:`${d.getDate()} ${months[d.getMonth()]}, ${clock}`}
-function reached(step:string){return stages.indexOf(order.value?.status||'')>=stages.indexOf(step)}
-async function prepareQuote(i:Inquiry){await act(async()=>{activeDraft.value=await request<QuoteDraft>(`inquiries/${i.id}/quote-draft`,{});editing.value=true;tab.value='quotes';window.scrollTo({top:0});await load()})}
-async function openDraft(record:QuoteDraft){await act(async()=>{activeDraft.value=await request<QuoteDraft>(`quote-drafts/${record.id}`);editing.value=true;tab.value='quotes';window.scrollTo({top:0})})}
-function draftSaved(record:QuoteDraft){activeDraft.value=record;const i=workingDrafts.value.findIndex(d=>d.id===record.id);if(i>=0)workingDrafts.value[i]=record;else workingDrafts.value.unshift(record)}
-async function draftPublished(v:{quote_id:number;version:number}){await act(async()=>{await load();quote.value=quotes.value.find(q=>q.id===v.quote_id)!;version.value=quote.value.versions.find(x=>x.version===v.version)!;editing.value=false;activeDraft.value=null;message.value=tx('正式报价已生成，可发送此版本给客户。','Quotation finalized. Send this version to your customer.')})}
-async function closeDraft(){editing.value=false;activeDraft.value=null;await load()}
+import { computed, onMounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { request, session } from "../crm-api";
+import ProductManager from "../components/ProductManager.vue";
+import IntegrationStatus from "../components/IntegrationStatus.vue";
+import ProjectDesk from "../components/ProjectDesk.vue";
+import SampleDashboard from "../components/SampleDashboard.vue";
+import PortalCustomers from "../components/PortalCustomers.vue";
+import type { ApiProduct } from "../api";
 
-async function revise(v:Version){await act(async()=>{activeDraft.value=await request<QuoteDraft>(`inquiries/${v.inquiry_id}/quote-draft`,{quote_id:v.quote_id});editing.value=true;tab.value='quotes';window.scrollTo({top:0});await load()})}
-async function exportVersion(lang:string){const win=window.open('about:blank','_blank');await act(async()=>{const v=version.value!;const html=await request<string>(`quotes/${v.quote_id}/versions/${v.version}/export?lang=${lang}`,undefined,true);if(!win)throw new Error(tx('请允许弹出窗口','Allow pop-up windows'));win.document.open();win.document.write(html);win.document.close()})}
-async function accept(){await act(async()=>{const v=version.value!;const r=await request<Order>(`quotes/${v.quote_id}/versions/${v.version}/accept`,{note:confirmation.value});await load();order.value=orders.value.find(o=>o.id===r.id)!;confirmation.value='';confirmationOpen.value=false;tab.value='orders';message.value=tx('订单已生成，已保存客户确认的规格与金额。','Order created using the accepted quotation.')})}
-const next=computed(()=>({confirmed:'production',production:'ready',ready:'delivered'} as Record<string,string>)[order.value?.status||'']);
-async function advance(){await act(async()=>{await request(`orders/${order.value!.id}/status`,{status:next.value,note:tx('交付阶段更新','Delivery stage updated')});await load()})}
-const quoteOrder=computed(()=>quote.value?.versions.map(v=>v.accepted_order_id).find(Boolean)||null);
-const currentQuote=computed(()=>!!version.value&&version.value.version===quote.value?.versions.at(-1)?.version);
-function relatedQuotes(id:number){return quotes.value.filter(q=>q.inquiry_id===id)}
-function relatedOrders(id:number){return orders.value.filter(o=>o.snapshot.inquiry_id===id)}
-function customerQuotes(id:number){const ids=new Set(inquiries.value.filter(i=>i.customer_id===id).map(i=>i.id));return quotes.value.filter(q=>ids.has(q.inquiry_id))}
-function openQuote(q:Quote){quote.value=q;version.value=q.versions.at(-1)!;editing.value=false;confirmationOpen.value=false;confirmation.value='';tab.value='quotes';window.scrollTo({top:0})}
-function openOrder(id:number){const found=orders.value.find(o=>o.id===id);if(found){order.value=found;editing.value=false;tab.value='orders';window.scrollTo({top:0})}}
-function openInquiry(id:number){const found=inquiries.value.find(i=>i.id===id);if(found){selected.value=found;editing.value=false;tab.value='inquiries';window.scrollTo({top:0})}}
-function ensureSelection(){if(tab.value==='customers'&&!customer.value&&visibleCustomers.value[0])openCustomer(visibleCustomers.value[0]);if(tab.value==='inquiries'&&!selected.value&&inquiries.value[0])selected.value=inquiries.value[0];if(tab.value==='quotes'&&!editing.value&&!quote.value&&quotes.value[0]){quote.value=quotes.value[0];version.value=quotes.value[0].versions.at(-1)||null}if(tab.value==='orders'&&!order.value&&orders.value[0])order.value=orders.value[0];if(tab.value==='products'&&!products.value.some(p=>p.id===catalog.value)&&products.value[0])catalog.value=products.value[0].id}
-function openTab(key:string){tab.value=key;editing.value=false;ensureSelection();window.scrollTo({top:0})}
-onMounted(()=>{if(signed.value)act(async()=>{await load();ensureSelection()})});
+const { locale } = useI18n();
+const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
+const signed = ref(!!session.token);
+const busy = ref(false);
+const error = ref("");
+const message = ref("");
+const tab = ref("projects");
+const credentials = reactive({ username: "", password: "" });
+const products = ref<ApiProduct[]>([]);
+const me = ref({ username: "", name: "", role: "staff" });
+const passwordOpen = ref(false);
+const passwordForm = reactive({ current: "", next: "", confirm: "" });
+const users = ref<{ username: string; name: string; role: string; active: number }[]>([]);
+const newUser = reactive({ username: "", name: "", password: "", role: "staff" });
+const nav = computed(() => [
+  { key: "projects", label: tx("项目订单", "Project orders") },
+  { key: "customers", label: tx("客户资料", "Customers") },
+  { key: "dashboard", label: tx("分析看板", "Dashboard") },
+  { key: "products", label: tx("产品目录", "Product catalogue") },
+]);
+const pageTitle = computed(() => nav.value.find((item) => item.key === tab.value)?.label || tx("系统设置", "Settings"));
+
+async function act(fn: () => Promise<void>) {
+  busy.value = true;
+  error.value = "";
+  message.value = "";
+  try {
+    await fn();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+    if (!session.token) signed.value = false;
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function load() {
+  const [catalogue, who] = await Promise.all([
+    request<ApiProduct[]>("admin/products"),
+    request<{ username: string; name: string; role: string }>("auth/me"),
+  ]);
+  products.value = catalogue;
+  me.value = who;
+  if (who.role === "admin") users.value = await request("users");
+}
+
+function toggleLocale() {
+  const next = locale.value === "zh" ? "en" : "zh";
+  locale.value = next;
+  localStorage.setItem("vera-locale", next);
+  document.documentElement.lang = next === "zh" ? "zh" : "en";
+}
+
+async function changePassword() {
+  if (passwordForm.next !== passwordForm.confirm) {
+    error.value = tx("两次新密码不一致", "The new passwords do not match");
+    return;
+  }
+  await act(async () => {
+    await request("auth/password", { current: passwordForm.current, new: passwordForm.next });
+    session.token = "";
+    signed.value = false;
+    passwordForm.current = "";
+    passwordForm.next = "";
+    passwordForm.confirm = "";
+    passwordOpen.value = false;
+    message.value = tx("密码已更新，请用新密码重新登录", "Password updated. Sign in again with the new password");
+  });
+}
+
+async function addUser() {
+  await act(async () => {
+    await request("users", { ...newUser });
+    newUser.username = "";
+    newUser.name = "";
+    newUser.password = "";
+    await load();
+    message.value = tx("用户已添加", "User added");
+  });
+}
+
+async function setRole(username: string, role: string) {
+  await act(async () => {
+    await request(`users/${username}/role`, { role });
+    await load();
+    message.value = tx("权限已更新", "Access updated");
+  });
+}
+
+function onRole(username: string, event: Event) {
+  void setRole(username, (event.target as HTMLSelectElement).value);
+}
+
+async function login() {
+  await act(async () => {
+    const result = await request<{ token: string }>("auth/login", credentials);
+    session.token = result.token;
+    signed.value = true;
+    credentials.password = "";
+    await load();
+  });
+}
+
+async function logout() {
+  await act(async () => {
+    await request("auth/logout", {});
+    session.token = "";
+    signed.value = false;
+  });
+}
+
+function openTab(key: string) {
+  tab.value = key;
+  window.scrollTo({ top: 0 });
+}
+
+onMounted(() => {
+  if (signed.value) void act(load);
+});
 </script>
+
 <template>
-<main class="page crm" :class="{'is-signed':signed}"><aside v-if="signed" class="desk-rail"><div class="rail-brand">VERA</div><button v-for="(label,key) in {projects:tx('项目订单','Project orders'),customers:tx('客户资料','Customers'),dashboard:tx('分析看板','Dashboard')}" :key="key" :class="{current:tab===key}" @click="openTab(key)"><span class="rail-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><template v-if="String(key)==='workbench'"><rect x="2.5" y="2.5" width="4.2" height="4.2" rx=".5"/><rect x="9.3" y="2.5" width="4.2" height="4.2" rx=".5"/><rect x="2.5" y="9.3" width="4.2" height="4.2" rx=".5"/><rect x="9.3" y="9.3" width="4.2" height="4.2" rx=".5"/></template><template v-else-if="key==='customers'"><circle cx="8" cy="5" r="2.1"/><path d="M3.2 13.2v-.5a3.3 3.3 0 0 1 3.3-3.3h2.9a3.3 3.3 0 0 1 3.3 3.3v.5"/></template><template v-else-if="String(key)==='inquiries'"><path d="M2.8 3.2h10.4v7.2H6.4L2.8 13z"/></template><template v-else-if="String(key)==='quotes'"><path d="M4.2 2.4h5.1L12 5.1v8.5H4.2z"/><path d="M9.3 2.4v2.7H12M6.2 8h3.8M6.2 10.4h3.8"/></template><template v-else><path d="M2.6 5.4 8 2.6l5.4 2.8v5.2L8 13.4 2.6 10.6z"/><path d="M2.6 5.4 8 8.2l5.4-2.8M8 8.2v5.2"/></template></svg></span>{{label}}<span v-if="String(key)!=='workbench'" class="rail-count">{{key==='customers'?customers.length:String(key)==='inquiries'?inquiries.length:String(key)==='quotes'?quotes.length:orders.length}}</span></button><details class="rail-archive"><summary>{{tx('辅助历史','History')}}</summary><button type="button" v-for="(label,key) in {orders:tx('历史交付','Past delivery'),workbench:tx('历史工作台','Legacy desk'),inquiries:tx('历史询价','Past inquiries'),quotes:tx('历史报价','Past quotes'),inbox:tx('邮件关联','Email'),legacy:tx('旧客户资料','Old records')}" :key="'hist-'+key" :class="{current:tab===key}" @click="openTab(key)">{{label}}</button></details><button :class="{current:tab==='products'}" @click="openTab('products')"><span class="rail-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6.5h11M6.5 6.5V13.5"/></svg></span>{{tx('产品目录','Product catalogue')}}<span class="rail-count">{{products.length}}</span></button><button v-if="me.role==='admin'" :class="{current:tab==='users'}" @click="openTab('users')"><span class="rail-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="6" cy="5.2" r="1.9"/><path d="M2.3 12.8v-.3a2.7 2.7 0 0 1 2.7-2.7H7a2.7 2.7 0 0 1 2.7 2.7v.3"/><circle cx="11.3" cy="5.6" r="1.4"/><path d="M11 9.4h1a2.2 2.2 0 0 1 2.2 2.2v.5"/></svg></span>{{tx('系统设置','Settings')}}</button><div class="rail-bottom"><span class="user-avatar">{{(me.name||'V').slice(0,1)}}</span><div class="user-meta"><strong>{{me.name}}</strong><small>{{me.role==='admin'?tx('管理员','Admin'):tx('销售','Sales')}}</small></div></div></aside><header v-if="!signed" class="heading"><div><p class="eyebrow">VERA</p><h1>{{tx('内部登录','Internal sign in')}}</h1><p>{{tx('客户资料仅对已登录用户开放','Customer information requires sign in')}}</p></div></header>
-<p v-if="error" class="alert" role="alert">{{error}}</p><p v-if="message" class="success" role="status">{{message}}</p>
-<form v-if="!signed" class="card login" @submit.prevent="login"><h2>{{tx('内部登录','Internal sign in')}}</h2><p>{{tx('客户资料仅对已登录用户开放','Customer information requires sign in')}}</p><label>{{tx('用户名','Username')}}<input v-model="credentials.username" autocomplete="username" required /></label><label>{{tx('密码','Password')}}<input v-model="credentials.password" type="password" autocomplete="current-password" required /></label><button :disabled="busy">{{tx('登录','Sign in')}}</button></form>
-<template v-else><header class="crm-bar"><div class="page-context"><span class="context-brand">VERA / CRM</span><h1>{{pageTitle}}</h1></div><button type="button" class="secondary" @click="toggleLocale">{{locale==='zh'?'English':'中文'}}</button><button type="button" class="secondary" @click="passwordOpen=!passwordOpen">{{tx('修改密码','Change password')}}</button><button type="button" class="secondary" @click="logout">{{tx('退出','Sign out')}}</button></header><form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword"><label>{{tx('当前密码','Current password')}}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label><label>{{tx('新密码','New password')}}<input v-model="passwordForm.next" type="password" autocomplete="new-password" minlength="8" required /></label><label>{{tx('再输入一次','Repeat the new password')}}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label><button :disabled="busy">{{tx('保存密码','Save password')}}</button></form>
-<ProjectDesk v-if="tab==='projects'" :admin="me.role==='admin'" /><SampleDashboard v-if="tab==='dashboard'" /><WorkbenchPanel v-if="tab==='workbench'" :inquiries="inquiries" :locale="locale" @inquiry="openInquiry" @draft="openDraft" @inbox="openTab('inbox')" /><MailInbox v-if="tab==='inbox'" :inquiries="inquiries" :locale="locale" />
-<PortalCustomers v-if="tab==='customers'" /><div v-if="tab==='legacy'" class="workspace"><aside class="card"><h2>{{tx('客户','Customers')}}</h2><label>{{tx('搜索客户','Search customers')}}<input v-model="customerQuery" type="search" @input="listPage.customers=1" /></label><p v-if="!customers.length">{{tx('后台开通客户账号后，资料会出现在这里','Customer records appear after staff open an account')}}</p><p v-else-if="!visibleCustomers.length">{{tx('没有匹配的客户','No matching customers')}}</p><button v-for="c in rows(visibleCustomers, 'customers')" :key="c.id" class="item" :class="{current:customer?.id===c.id}" @click="openCustomer(c)"><strong>{{c.company}}</strong><span>#{{c.id}} · {{c.contacts[0]?.name || tx('未设联系人','No contact')}}{{c.contacts.length>1?tx(' · 历史多条仅保留',' · extra historical rows kept'):''}}</span></button><nav class="pager" v-if="pageCount(visibleCustomers.length)>1"><button type="button" class="secondary" :disabled="listPage.customers<=1" @click="listPage.customers--">{{tx('上一页','Previous')}}</button><span>{{Math.min(listPage.customers,pageCount(visibleCustomers.length))}} / {{pageCount(visibleCustomers.length)}}</span><button type="button" class="secondary" :disabled="listPage.customers>=pageCount(visibleCustomers.length)" @click="listPage.customers++">{{tx('下一页','Next')}}</button></nav></aside><section class="card" v-if="customer"><h2>{{customer.company}}</h2><p>{{tx('每个客户只使用一个联系人。发票和通知发这一位。不在这里添加第二联系人；邮箱和电话仍暂时存在同一个联系渠道字段，门户档案接通后分开。施工地址写在项目订单上，不写进公司地址。','Each customer uses one contact. Invoices and notices go to that person. Do not add a second contact here. Email and phone still share one channel field until the portal profile is connected. The site address belongs on the project order, not the company address.')}}</p><form @submit.prevent="saveCustomer"><div class="grid"><label>{{tx('公司','Company')}}<input v-model="profile.company" required /></label><label>{{tx('联系人','Contact')}}<input v-model="profile.contact_name" required /></label><label>{{tx('联系方式','Contact method')}}<input v-model="profile.channel" required /></label><label>{{tx('偏好语言','Preferred language')}}<select v-model="profile.locale"><option value="zh">中文</option><option value="en">English</option></select></label></div><label>{{tx('备注','Notes')}}<textarea v-model="profile.notes" /></label><button :disabled="busy">{{tx('保存修改','Save changes')}}</button></form><details class="fold"><summary>{{tx('唯一联系人','Single contact')}}{{customer.contacts.length>1?tx(' · 历史多条仅保留',' · extra historical rows kept'):''}}</summary><article v-for="person in customer.contacts" :key="person.id" class="activity"><strong>{{person.name}}</strong><p>{{person.channel}}</p></article></details><details class="fold"><summary>{{tx('相关询价','Related inquiries')}} · {{customer.inquiries.length}}</summary><p v-if="!customer.inquiries.length">{{tx('还没有询价','No inquiries yet')}}</p><article v-for="item in customer.inquiries" :key="item.id" class="activity"><button type="button" class="record-link secondary" @click="openInquiry(item.id)">#{{item.id}} · {{item.contact_name}} ↗</button><small>{{status(item.status)}} · {{when(item.created_at)}}</small></article></details><details class="fold"><summary>{{tx('相关报价','Related quotes')}} · {{customerQuotes(customer.id).length}}</summary><button v-for="q in customerQuotes(customer.id)" :key="q.id" type="button" class="record-link secondary" @click="openQuote(q)">Q-{{q.id}} · {{q.versions.at(-1)?.currency}} {{q.versions.at(-1)?.total}} ↗</button></details><details class="fold"><summary>{{tx('相关订单','Related orders')}} · {{customer.orders.length}}</summary><p v-if="!customer.orders.length">{{tx('还没有订单','No orders yet')}}</p><article v-for="item in customer.orders" :key="item.id" class="activity"><button type="button" class="record-link secondary" @click="openOrder(item.id)">#{{item.id}} ↗</button><small>{{status(item.status)}} · {{when(item.created_at)}}</small></article></details></section><section class="card" v-else>{{tx('选择客户查看资料','Select a customer to view their details')}}</section></div>
-<div v-if="tab==='inquiries'" class="workspace"><aside class="card"><h2>{{tx('客户询价','Trade inquiries')}}</h2><p v-if="!inquiries.length">{{tx('请先从官网提交询价','Submit an inquiry on the website to begin')}}</p><button v-for="i in rows(inquiries, 'inquiries')" :key="i.id" class="item" :class="{current:selected?.id===i.id}" @click="selected=i"><strong>{{i.company}}</strong><span>#{{i.id}} · {{i.contact_name}} · {{status(i.status)}}</span></button><nav class="pager" v-if="pageCount(inquiries.length)>1"><button type="button" class="secondary" :disabled="listPage.inquiries<=1" @click="listPage.inquiries--">{{tx('上一页','Previous')}}</button><span>{{Math.min(listPage.inquiries,pageCount(inquiries.length))}} / {{pageCount(inquiries.length)}}</span><button type="button" class="secondary" :disabled="listPage.inquiries>=pageCount(inquiries.length)" @click="listPage.inquiries++">{{tx('下一页','Next')}}</button></nav></aside><section class="card project-detail" v-if="selected"><header class="project-heading"><div><span class="section-label">PROJECT / #{{selected.id}}</span><h2>{{selected.company}}</h2><p>{{selected.contact_name}} · {{selected.channel}}</p></div><span class="project-status">{{status(selected.status)}}</span></header><div class="project-primary"><button v-if="relatedOrders(selected.id).length" type="button" @click="openOrder(relatedOrders(selected.id)[0].id)">{{tx('查看订单','Open order')}} ↗</button><button v-else-if="relatedQuotes(selected.id).length" type="button" @click="openQuote(relatedQuotes(selected.id)[0])">{{tx('查看当前报价','Open current quotation')}} ↗</button><button v-else type="button" :disabled="busy" @click="prepareQuote(selected)">{{workingDrafts.some(d=>d.inquiry_id===selected!.id)?tx('继续报价草稿','Continue proposal'):tx('创建报价草稿','Prepare quotation')}} →</button><button v-for="q in relatedQuotes(selected.id).slice(relatedOrders(selected.id).length?0:1)" :key="q.id" class="secondary" type="button" @click="openQuote(q)">Q-{{q.id}} ↗</button></div><dl class="project-facts"><div><dt>{{tx('产品与尺寸','Product & dimensions')}}</dt><dd>{{products.find(p=>p.id===selected!.product_id)?.[locale==='zh'?'name_zh':'name_en']||tx('待确认产品','Product to confirm')}}<small>{{selected.width&&selected.height?selected.width+' × '+selected.height+' '+(selected.unit||'mm'):tx('尺寸待确认','Dimensions to confirm')}}</small></dd></div><div><dt>{{tx('数量','Quantity')}}</dt><dd>{{selected.quantity||tx('待确认','To confirm')}}</dd></div><div><dt>{{tx('客户交期意向','Requested timing')}}</dt><dd>{{selected.expected_date||tx('待确认','To confirm')}}</dd></div></dl><details v-if="selected.notes" class="original-request"><summary>{{tx('原始需求','Original enquiry')}}</summary><p>{{selected.notes}}</p></details><ProjectActivity :inquiry="selected" :locale="locale" @changed="load" /></section><section class="card" v-else>{{tx('选择询价查看客户资料','Select an inquiry to view customer details')}}</section></div>
-<div v-if="tab==='quotes'" class="workspace"><aside class="card"><h2>{{tx('报价管理','Quotations')}}</h2><div v-if="workingDrafts.length" class="draft-list"><span class="section-label">{{tx('进行中的草稿','WORK IN PROGRESS')}}</span><button v-for="d in workingDrafts" :key="d.id" class="item" :class="{current:editing&&activeDraft?.id===d.id}" @click="openDraft(d)"><strong>{{inquiries.find(i=>i.id===d.inquiry_id)?.company}}</strong><span>{{d.quote_id?'Q-'+d.quote_id+' · ':''}}{{tx('草稿','Draft')}} · {{when(d.updated_at)}}</span></button></div><p v-if="!quotes.length">{{tx('从询价详情创建第一份报价','Create a quote from an inquiry')}}</p><button v-for="q in rows(quotes, 'quotes')" :key="q.id" class="item" :class="{current:!editing&&quote?.id===q.id}" @click="openQuote(q)"><strong>Q-{{q.id}} · {{inquiries.find(i=>i.id===q.inquiry_id)?.company}}</strong><span>{{q.versions.length}} {{tx('个版本','versions')}} · {{q.versions.at(-1)?.currency}} {{q.versions.at(-1)?.total}}</span></button><nav class="pager" v-if="pageCount(quotes.length)>1"><button type="button" class="secondary" :disabled="listPage.quotes<=1" @click="listPage.quotes--">{{tx('上一页','Previous')}}</button><span>{{Math.min(listPage.quotes,pageCount(quotes.length))}} / {{pageCount(quotes.length)}}</span><button type="button" class="secondary" :disabled="listPage.quotes>=pageCount(quotes.length)" @click="listPage.quotes++">{{tx('下一页','Next')}}</button></nav></aside><section class="card">
-<QuotationEditor v-if="editing&&activeDraft" :key="activeDraft.id" :record="activeDraft" :products="products" :company="inquiries.find(i=>i.id===activeDraft!.inquiry_id)?.company||''" :locale="locale" @saved="draftSaved" @published="draftPublished" @close="closeDraft" /><template v-else-if="quote&&version"><div class="quote-next"><div><span class="section-label">{{tx('下一步','NEXT STEP')}}</span><h3>{{quoteOrder?tx('此报价已生成订单','Order created from this quote'):!currentQuote?tx('历史版本，仅供查看','Historical version for reference'):tx('等待客户确认报价','Awaiting customer acceptance')}}</h3><p>{{quoteOrder?tx('查看对应订单，继续安排生产和交付。','Open the linked order to manage production and delivery.'):!currentQuote?tx('请选最新版本确认，避免按旧规格生成订单。','Choose the latest version to avoid ordering outdated specifications.'):tx('客户要求调整时先修订报价；客户已接受时登记确认依据，再生成订单。','Revise the quote if the customer requests changes. When accepted, record the evidence and create the order.')}}</p></div><div class="related-actions"><button v-if="quoteOrder" type="button" @click="openOrder(quoteOrder)">{{tx('查看订单','View order')}} #{{quoteOrder}} ↗</button><template v-else-if="currentQuote"><button type="button" class="secondary" @click="revise(version)">{{tx('客户要求调整 · 修订报价','Changes requested · Revise quote')}}</button><button type="button" :aria-expanded="confirmationOpen" aria-controls="quote-acceptance" @click="confirmationOpen=!confirmationOpen">{{tx('客户已接受 · 生成订单','Customer accepted · Create order')}}</button></template></div><form v-if="confirmationOpen&&currentQuote&&!quoteOrder" id="quote-acceptance" class="acceptance-form" @submit.prevent="accept"><p><strong>Q-{{quote.id}} / v{{version.version}}</strong> · {{inquiries.find(i=>i.id===quote!.inquiry_id)?.company}} · <strong>{{version.currency}} {{version.total}}</strong></p><label>{{tx('客户确认依据','Customer acceptance evidence')}}<textarea v-model="confirmation" required maxlength="4000" :placeholder="tx('例如：客户邮件确认接受此版本，日期与联系人。','For example: customer email accepting this version, with date and contact.')" /></label><p class="hint">{{tx('确认后保存此版本的规格与金额为订单快照。后续修订不改变已生成的订单。','This version’s specifications and amount are frozen in the order. Later revisions do not change it.')}}</p><div class="related-actions"><button :disabled="busy||!confirmation.trim()">{{tx('登记确认并生成订单','Record acceptance and create order')}}</button><button type="button" class="secondary" @click="confirmationOpen=false">{{tx('暂不生成','Not yet')}}</button></div></form></div><h2>Q-{{quote.id}} / v{{version.version}}</h2><div class="tabs"><button v-for="v in quote.versions" :key="v.version" class="secondary" :class="{chosen:version.version===v.version}" @click="version=v">v{{v.version}}</button></div><p>{{tx('版本保存后不可覆盖','Saved versions cannot be overwritten')}} · {{tx('有效期','Valid until')}} {{version.valid_until}}</p><div class="table-wrap"><table><thead><tr><th>{{tx('产品与规格','Product & specifications')}}</th><th>{{tx('数量','Qty')}}</th><th>{{tx('单价','Price')}}</th><th>{{tx('金额','Amount')}}</th></tr></thead><tbody><tr v-for="(l,index) in version.lines" :key="index"><td>{{locale==='zh'?l.product?.name_zh:l.product?.name_en}}<small>{{l.width}} × {{l.height}} {{l.unit}}<br/>{{l.material}} / {{l.color}} / {{l.control}}</small></td><td>{{l.quantity}}</td><td>{{l.unit_price}}</td><td>{{l.amount}}</td></tr></tbody></table></div><p>{{tx('小计 / 折扣 / 运费 / 税额','Subtotal / discount / shipping / tax')}}: {{version.subtotal}} / {{version.discount}} / {{version.shipping}} / {{version.tax}}</p><p class="total">{{version.currency}} {{version.total}}</p><p>{{version.terms}}</p><div class="tabs"><button class="secondary" :disabled="busy" @click="exportVersion('zh')">{{tx('中文导出','Chinese export')}}</button><button class="secondary" :disabled="busy" @click="exportVersion('en')">{{tx('英文导出','English export')}}</button></div><ProjectActivity v-if="inquiries.find(i=>i.id===version!.inquiry_id)" :inquiry="inquiries.find(i=>i.id===version!.inquiry_id)!" :locale="locale" :quote="currentQuote&&!quoteOrder?version:undefined" @changed="load" /></template><p v-else>{{tx('选择报价或从询价创建草稿','Select a quotation or prepare a draft from an enquiry')}}</p>
-</section></div>
-<div v-if="tab==='orders'" class="workspace"><aside class="card"><h2>{{tx('订单','Orders')}}</h2><button type="button" @click="manualOpen=true">+ {{tx('手工录入','Record an order')}}</button><p>{{tx('这里是旧的四段交付记录，不是新的项目订单主流程。新订单从客户门户提交，经审核和定金后再履约。','This is the old four-stage delivery record, not the new project-order flow. New orders start in the customer portal, then pass review and the deposit before fulfilment.')}}</p><p v-if="!orders.length">{{tx('还没有订单。可手工录入，或从客户已接受的报价生成。','No orders yet. Record an external order or accept a quotation.')}}</p><button v-for="o in rows(orders, 'orders')" :key="o.id" class="item" :class="{current:order?.id===o.id}" @click="order=o;manualOpen=false"><strong>#{{o.id}} · {{o.snapshot.customer.company}}</strong><span>{{status(o.status)}} · {{o.snapshot.currency}} {{o.snapshot.total}}</span></button><nav class="pager" v-if="pageCount(orders.length)>1"><button type="button" class="secondary" :disabled="listPage.orders<=1" @click="listPage.orders--">{{tx('上一页','Previous')}}</button><span>{{Math.min(listPage.orders,pageCount(orders.length))}} / {{pageCount(orders.length)}}</span><button type="button" class="secondary" :disabled="listPage.orders>=pageCount(orders.length)" @click="listPage.orders++">{{tx('下一页','Next')}}</button></nav></aside><section v-if="manualOpen" class="card"><ManualOrderForm :customers="customers" :products="products" :locale="locale" @saved="manualSaved" @cancel="manualOpen=false" /></section><section v-else-if="order" class="card"><h2>{{tx('订单','Order')}} #{{order.id}}</h2><span class="badge">{{status(order.status)}}</span><ol class="progress"><li v-for="step in stages" :key="step" :class="{reached:reached(step),current:order.status===step}"><span>{{status(step)}}</span><small v-if="order.status===step">{{tx('当前进度','Current step')}}</small><small v-else>{{when(stageTime(step))||tx('未到','Not yet')}}</small></li></ol><p v-if="order.snapshot.order_source==='manual'">{{tx('手工录入','Manual entry')}} · {{sourceLabel(order.snapshot.source)}}<span v-if="order.snapshot.reference"> · {{order.snapshot.reference}}</span></p><p v-else>{{tx('订单来源报价','Accepted quotation')}} Q-{{order.snapshot.quote_id}} / v{{order.snapshot.version}}</p><p>{{order.snapshot.customer.company}} · {{order.snapshot.customer.contact_name}}</p><p>{{order.snapshot.confirmation_note}}</p><ul><li v-for="(l,index) in order.snapshot.lines" :key="index">{{locale==='zh'?l.product?.name_zh:l.product?.name_en}} · {{l.width}} × {{l.height}} {{l.unit}} · {{l.material}} / {{l.color}} / {{l.control}} · {{l.quantity}} × {{l.unit_price}}</li></ul><p class="total">{{order.snapshot.currency}} {{order.snapshot.total}}</p><button v-if="next" :disabled="busy" @click="advance">{{tx('推进到','Advance to')}} {{status(next)}}</button><p>{{tx('当前','Now')}}: {{status(order.status)}}</p><p v-if="order.history.length>1">{{tx('上一步','Previous step')}}: {{status(order.history.at(-2)!.new_status)}} · {{when(order.history.at(-2)!.created_at)}}</p><p v-else>{{tx('还没有上一步','No earlier step')}}</p><details class="fold"><summary>{{tx('状态履历','Status history')}} · {{order.history.length}}</summary><article v-for="(h,index) in order.history" :key="index" class="activity"><strong>{{h.old_status?status(h.old_status)+' → ':''}}{{status(h.new_status)}}</strong><small>{{when(h.created_at)}}</small><p>{{h.note}}</p></article></details><ProjectActivity v-if="inquiries.find(i=>i.id===order!.snapshot.inquiry_id)" :inquiry="inquiries.find(i=>i.id===order!.snapshot.inquiry_id)!" :locale="locale" @changed="load" /></section><section v-else class="card">{{tx('选择订单查看快照和交付阶段','Select an order to view its snapshot and delivery stages')}}</section></div>
-<ProductManager v-if="tab==='products'" :admin="me.role==='admin'" @updated="act(load)" />
-<div v-if="tab==='users'&&me.role==='admin'" class="settings-layout"><IntegrationStatus :locale="locale"/><div class="workspace users-board"><section class="card"><h2>{{tx('用户与权限','Users & access')}}</h2><form class="user-form" @submit.prevent="addUser"><label>{{tx('用户名','Username')}}<input v-model="newUser.username" required pattern="[a-z0-9._-]{2,40}" autocomplete="off" /></label><label>{{tx('姓名','Name')}}<input v-model="newUser.name" required autocomplete="off" /></label><label>{{tx('初始密码','Starting password')}}<input v-model="newUser.password" type="password" minlength="8" required autocomplete="new-password" /></label><label>{{tx('权限','Access')}}<select v-model="newUser.role"><option value="staff">{{tx('销售','Sales')}}</option><option value="admin">{{tx('管理员','Admin')}}</option></select></label><button :disabled="busy">{{tx('添加用户','Add user')}}</button></form><div class="table-wrap"><table><thead><tr><th>{{tx('用户名','Username')}}</th><th>{{tx('姓名','Name')}}</th><th>{{tx('权限','Access')}}</th></tr></thead><tbody><tr v-for="person in users" :key="person.username"><td>{{person.username}}</td><td>{{person.name}}</td><td><select :value="person.role" @change="onRole(person.username, $event)"><option value="admin">{{tx('管理员','Admin')}}</option><option value="staff">{{tx('销售','Sales')}}</option></select></td></tr></tbody></table></div></section></div></div></template></main>
+  <main class="page crm" :class="{ 'is-signed': signed }">
+    <aside v-if="signed" class="desk-rail">
+      <div class="rail-brand">VERA</div>
+      <button v-for="item in nav" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
+        {{ item.label }}
+      </button>
+      <button v-if="me.role === 'admin'" type="button" :class="{ current: tab === 'users' }" @click="openTab('users')">
+        {{ tx("系统设置", "Settings") }}
+      </button>
+      <div class="rail-bottom">
+        <span class="user-avatar">{{ (me.name || "V").slice(0, 1) }}</span>
+        <div class="user-meta">
+          <strong>{{ me.name }}</strong>
+          <small>{{ me.role === "admin" ? tx("管理员", "Admin") : tx("销售", "Sales") }}</small>
+        </div>
+      </div>
+    </aside>
+
+    <p v-if="error" class="alert" role="alert">{{ error }}</p>
+    <p v-if="message" class="success" role="status">{{ message }}</p>
+
+    <form v-if="!signed" class="card login" @submit.prevent="login">
+      <h1>{{ tx("内部登录", "Internal sign in") }}</h1>
+      <p>{{ tx("客户资料仅对已登录用户开放", "Customer information requires sign in") }}</p>
+      <label>{{ tx("用户名", "Username") }}<input v-model="credentials.username" autocomplete="username" required /></label>
+      <label>{{ tx("密码", "Password") }}<input v-model="credentials.password" type="password" autocomplete="current-password" required /></label>
+      <button :disabled="busy">{{ tx("登录", "Sign in") }}</button>
+    </form>
+
+    <template v-else>
+      <header class="crm-bar">
+        <div class="page-context">
+          <span>VERA / CRM</span>
+          <h1>{{ pageTitle }}</h1>
+        </div>
+        <button type="button" class="secondary" @click="toggleLocale">{{ locale === "zh" ? "English" : "中文" }}</button>
+        <button type="button" class="secondary" @click="passwordOpen = !passwordOpen">{{ tx("修改密码", "Change password") }}</button>
+        <button type="button" class="secondary" @click="logout">{{ tx("退出", "Sign out") }}</button>
+      </header>
+      <form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword">
+        <label>{{ tx("当前密码", "Current password") }}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label>
+        <label>{{ tx("新密码", "New password") }}<input v-model="passwordForm.next" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
+      </form>
+      <ProjectDesk v-if="tab === 'projects'" :admin="me.role === 'admin'" />
+      <PortalCustomers v-if="tab === 'customers'" />
+      <SampleDashboard v-if="tab === 'dashboard'" />
+      <ProductManager v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
+      <div v-if="tab === 'users' && me.role === 'admin'" class="settings-layout">
+        <IntegrationStatus :locale="locale" />
+        <section class="card">
+          <h2>{{ tx("用户与权限", "Users & access") }}</h2>
+          <form class="user-form" @submit.prevent="addUser">
+            <label>{{ tx("用户名", "Username") }}<input v-model="newUser.username" required pattern="[a-z0-9._-]{2,40}" autocomplete="off" /></label>
+            <label>{{ tx("姓名", "Name") }}<input v-model="newUser.name" required autocomplete="off" /></label>
+            <label>{{ tx("初始密码", "Starting password") }}<input v-model="newUser.password" type="password" minlength="8" required autocomplete="new-password" /></label>
+            <label>{{ tx("权限", "Access") }}
+              <select v-model="newUser.role">
+                <option value="staff">{{ tx("销售", "Sales") }}</option>
+                <option value="admin">{{ tx("管理员", "Admin") }}</option>
+              </select>
+            </label>
+            <button :disabled="busy">{{ tx("添加用户", "Add user") }}</button>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>{{ tx("用户名", "Username") }}</th><th>{{ tx("姓名", "Name") }}</th><th>{{ tx("权限", "Access") }}</th></tr></thead>
+              <tbody>
+                <tr v-for="person in users" :key="person.username">
+                  <td>{{ person.username }}</td>
+                  <td>{{ person.name }}</td>
+                  <td>
+                    <select :value="person.role" @change="onRole(person.username, $event)">
+                      <option value="admin">{{ tx("管理员", "Admin") }}</option>
+                      <option value="staff">{{ tx("销售", "Sales") }}</option>
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </template>
+  </main>
 </template>
+
 <style scoped>
-:global(.frame-work > .rail){display:none}
-:global(.shell:has(.crm)){max-width:none;padding:0;background:var(--paper,#F4F7F5)}
-:global(.shell:has(.crm) .topbar){padding:14px 28px;margin:0;border-bottom:1px solid var(--line,rgba(27,36,33,.14));background:white}
-:global(.shell:has(.crm) .footer){padding:20px 28px;margin:0;background:white}
-@media(min-width:1101px){:global(.frame.frame-work){height:100vh;min-height:0;margin:0;padding:0;display:flex;flex-direction:column;overflow:hidden}:global(.frame.frame-work>.footer){margin:0;padding:8px 28px;flex:none}}
-.crm{font-family:var(--font-body,"Figtree","Noto Sans SC",sans-serif);color:var(--ink,#1B2421);position:relative;max-width:none!important;margin:0!important;padding:40px 36px;min-height:calc(100vh - 150px);background:var(--paper,#F4F7F5)}
-.crm.is-signed{padding-left:268px}@media(min-width:1101px){.crm.is-signed{flex:1;height:auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;padding:10px 24px 8px 248px}.crm.is-signed .heading{min-height:0;padding-bottom:8px;margin-bottom:8px}.crm.is-signed .heading h1{font-size:26px;margin:2px 0}.crm.is-signed .heading p{margin:0}.crm.is-signed .metrics{margin:0 0 8px}.crm.is-signed .metrics article{padding:16px 18px;min-height:78px}.crm.is-signed .metrics strong{font-size:28px;margin-top:8px}.crm.is-signed .workspace-nav{margin:0 0 8px}.crm.is-signed .workspace{flex:1;min-height:0;max-height:none;align-items:stretch}.crm.is-signed .workspace>aside{max-height:none;overflow:hidden;display:flex;flex-direction:column;padding:12px 14px}.crm.is-signed .workspace>aside .pager{margin-top:auto;flex:none}.crm.is-signed .workspace>section{max-height:none;min-height:0;overflow:auto}.crm.is-signed .card h2{margin:0 0 8px;font-size:15px}.crm.is-signed .workspace>aside label{margin:0 0 6px}.crm.is-signed .item{min-height:0;padding:6px 10px;margin:3px 0}}.pager{display:flex;align-items:center;gap:8px;margin-top:12px;flex:none}.pager span{font-size:12px;letter-spacing:.04em}.desk-rail{position:absolute;inset:0 auto 0 0;width:224px;background:var(--frame,#1A2823);color:var(--glare,#E7EEE9);padding:30px 16px;display:flex;flex-direction:column}
-.rail-brand{font-family:var(--font-display,"Figtree", "Noto Sans SC", sans-serif);font-size:36px;letter-spacing:.13em;padding:0 14px}.rail-brand span{display:block;font-family:var(--font-body,"Figtree", "Noto Sans SC", sans-serif);font-size:9px;letter-spacing:.24em;margin-top:2px}.rail-label{font-size:10px;letter-spacing:.16em;opacity:.6;padding:24px 14px 8px}
-.desk-rail button{display:flex;align-items:center;gap:10px;border:0;background:transparent;color:var(--glare,#E7EEE9);padding:14px 12px;margin:3px 0;text-align:left;font-size:13px;border-radius:5px;white-space:nowrap}.rail-archive{margin:8px 0;border-top:1px solid rgba(231,238,233,.16);padding-top:8px}.rail-archive summary{cursor:pointer;color:var(--glare,#E7EEE9);font-size:12px;padding:8px 12px}.desk-rail button.current{background:var(--cord,#0F6E5C);color:white}.rail-icon{width:16px;height:16px;flex:none;display:grid;place-items:center}.rail-icon svg{width:16px;height:16px;display:block}.rail-count{margin-left:auto;font-size:11px;opacity:.8}.rail-bottom{margin-top:auto;display:flex;gap:10px;align-items:center;padding:14px 12px;border-top:1px solid rgba(231,238,233,.16);font-size:13px}.user-meta{min-width:0;line-height:1.25}.user-meta strong{display:block;font-weight:600}.rail-bottom small{display:block;font-size:11px;opacity:.72;margin-top:2px}.user-avatar{display:grid;place-items:center;width:16px;height:16px;flex:none;background:var(--aluminium,#8E9A94);color:var(--frame,#1A2823);border-radius:50%;font-size:10px}.workspace .item.current{background:#fff;border-color:var(--cord,#0F6E5C);box-shadow:inset 3px 0 0 var(--cord,#0F6E5C)}
-.crm .heading{padding:0 0 24px;border-bottom:1px solid var(--line,rgba(27,36,33,.14));margin-bottom:24px}.crm .heading h1{font-family:var(--font-display,"Figtree", "Noto Sans SC", sans-serif);font-size:clamp(28px,3vw,44px);line-height:1.1;letter-spacing:-.025em;max-width:none;margin:8px 0}.crm .heading p{font-size:13px;color:var(--ink,#1B2421);opacity:.65;margin:4px 0}.crm .eyebrow{font-size:10px!important;letter-spacing:.18em}.crm .workspace-nav{justify-content:flex-end;margin:0 0 18px}.workspace-nav>button:not(:last-child){display:none}.crm .metrics{gap:0;border:1px solid var(--line,rgba(27,36,33,.14));border-radius:6px;background:white;margin:0 0 24px}.crm .metrics article{background:transparent;border-radius:0;border-right:1px solid var(--line,rgba(27,36,33,.14));padding:18px 22px}.crm .metrics article:last-child{border-right:0}.crm .metrics span{font-size:11px;letter-spacing:.02em;color:#54645c}.crm .metrics strong{font-family:var(--font-display,"Figtree", "Noto Sans SC", sans-serif);font-size:38px;line-height:1;margin-top:12px}.crm .workspace{grid-template-columns:280px minmax(0,1fr);gap:18px}.crm .card{border-color:var(--line,rgba(27,36,33,.14));border-radius:6px;padding:24px;box-shadow:0 3px 15px rgba(27,36,33,.025)}.crm .card h2{font-family:var(--font-body,"Figtree", "Noto Sans SC", sans-serif);font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0 0 18px}.crm .card h3{font-size:14px;font-weight:600;margin:24px 0 12px}.crm .item{background:var(--paper,#F4F7F5);border:1px solid transparent;border-left:2px solid transparent;border-radius:2px;padding:14px 12px;transition:background 150ms}.crm .item:hover,.crm .item:focus-visible{background:var(--glare,#E7EEE9);border-left-color:var(--cord,#0F6E5C)}.crm .item strong{font-size:13px;font-weight:600}.crm .item span{font-size:11px;color:#54645c}.crm .badge{background:var(--glare,#E7EEE9);color:var(--cord,#0F6E5C);border-radius:3px;font-size:11px}.crm label{font-size:12px;font-weight:500}.crm input,.crm select,.crm textarea{background:#fff;border:1px solid var(--line,rgba(27,36,33,.14));border-radius:4px;padding:10px 12px;color:var(--ink,#1B2421);font-family:var(--font-body,"Figtree", "Noto Sans SC", sans-serif);font-size:13px}.crm input:focus,.crm textarea:focus,.crm select:focus{outline:2px solid var(--cord,#0F6E5C);outline-offset:2px}.crm button{background:var(--cord,#0F6E5C);border:1px solid var(--cord,#0F6E5C);color:white;border-radius:4px;font-size:12px;font-weight:500;padding:10px 16px}.crm button.secondary{background:transparent;color:var(--ink,#1B2421);border-color:var(--line,rgba(27,36,33,.14))}.crm .total{font-family:var(--font-display,"Figtree", "Noto Sans SC", sans-serif);font-size:32px}.crm td,.crm th{font-size:12px;padding:12px 8px;border-color:var(--line,rgba(27,36,33,.14))}.crm th{font-size:10px;text-transform:uppercase;letter-spacing:.05em;background:var(--paper,#F4F7F5)}.crm .activity{border-color:var(--aluminium,#8E9A94)}.crm .alert{color:var(--danger,#8C2F2F)}.crm .login{margin:42px auto;padding:36px;max-width:420px;box-shadow:0 20px 60px rgba(27,36,33,.07);border-top:3px solid var(--cord,#0F6E5C)}
-@media(max-width:1100px){.crm.is-signed{padding-left:220px;padding-right:24px}.desk-rail{width:196px}.crm .workspace{grid-template-columns:1fr}}
-@media(max-width:700px){.crm,.crm.is-signed{padding:24px 16px}.desk-rail{position:static;width:auto;margin:-24px -16px 24px;padding:14px 16px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}.rail-brand,.rail-label,.rail-bottom{display:none}.desk-rail button{padding:10px 6px;font-size:11px;gap:5px}.rail-count{display:none}.crm .metrics article{padding:14px}.crm .metrics strong{font-size:30px}.crm .metrics article:nth-child(2){border-right:0}.crm .heading{flex-direction:row;align-items:start}.crm .heading h1{font-size:30px}.crm .heading p{font-size:11px}.crm .card{padding:18px}.crm .grid{grid-template-columns:1fr}.crm .metrics{grid-template-columns:repeat(2,1fr)}:global(.shell:has(.crm) .topbar){padding:14px 16px}}
-
-.crm{max-width:1400px}.heading{display:flex;justify-content:space-between;align-items:center;gap:20px}.eyebrow{letter-spacing:.16em;font-size:12px}.card{background:white;border:1px solid #dedbd5;padding:24px;border-radius:12px;min-width:0}.login{max-width:440px;margin:40px auto}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin:24px 0}.metrics article{padding:20px;background:#eeece6;border-radius:10px}.metrics strong{display:block;font-size:32px;margin-top:10px}.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}.active{background:#756b57}.workspace{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px;align-items:start}.item{display:block;width:100%;text-align:left;background:#f5f4f0;color:#222;border:1px solid transparent;margin:10px 0;padding:15px}.item span,.item strong{display:block}.item span{font-size:13px;margin-top:6px}.chosen{border:2px solid #756b57!important}.badge{background:#ece9e0;padding:7px 12px;border-radius:20px;font-size:13px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.crm form{display:block}.crm label{display:block;margin:14px 0}.crm input,.crm select,.crm textarea{width:100%;box-sizing:border-box;margin-top:6px;min-height:44px}.crm textarea{min-height:80px}.crm fieldset{border:1px solid #ddd;margin:18px 0;padding:14px;min-width:0}.activity{border-left:2px solid #b0a58e;padding:8px 15px;margin-top:16px}.activity small,td small{display:block;font-size:12px;color:#666}.total{font-size:24px;text-align:right}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:12px;border-bottom:1px solid #ddd}.alert{padding:15px;background:#fae8e1;color:#842b16}.success{padding:15px;background:#e5efdd}.progress{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;list-style:none;padding:8px 0 0;margin:16px 0}.progress li{position:relative;border-top:4px solid #d7deda;padding-top:16px;min-width:0;color:#54645c}.progress li::before{content:'';position:absolute;top:-7px;left:0;width:10px;height:10px;border-radius:50%;background:#d7deda}.progress li.reached{border-top-color:var(--cord,#0F6E5C);color:var(--ink,#1B2421)}.progress li.reached::before{background:var(--cord,#0F6E5C)}.progress li.current{color:var(--cord,#0F6E5C);font-weight:700}.progress li.current::before{box-shadow:0 0 0 4px rgba(15,110,92,.2)}.progress small{display:block;font-size:11px;font-weight:600;overflow-wrap:anywhere}@media(max-width:480px){.progress{grid-template-columns:repeat(2,minmax(0,1fr))}}.crm p,.crm li{overflow-wrap:anywhere}.crm button{min-height:44px}.crm button:disabled{opacity:.5;cursor:wait}@media(max-width:900px){.workspace{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.card{padding:16px}.grid{grid-template-columns:1fr}.heading{align-items:start;flex-direction:column}.metrics{gap:8px}.metrics article{padding:12px}}
-.crm .desk-rail button{background:transparent;border:0;color:var(--glare,#E7EEE9);justify-content:flex-start;padding:14px 12px}.crm .desk-rail button.current{background:var(--cord,#0F6E5C)}.crm .desk-rail .rail-logout{margin-top:10px;width:100%;background:transparent;color:var(--glare,#E7EEE9);border:1px solid rgba(231,238,233,.35);min-height:36px}.crm button.item{background:var(--paper,#F4F7F5);color:var(--ink,#1B2421);border-color:transparent}.crm button.item:hover{background:var(--glare,#E7EEE9)}.crm button.item strong{color:var(--ink,#1B2421)}.crm .item span{font-size:11px}.crm .heading{min-height:110px}.crm :focus-visible{outline:2px solid var(--cord,#0F6E5C);outline-offset:3px}
-.flow{display:flex;align-items:center;gap:8px;margin:0 0 8px}.flow button{min-height:32px;padding:4px 10px;font-size:12px;background:white;color:var(--ink,#1B2421);border:1px solid var(--line,rgba(27,36,33,.18));justify-content:center}.flow button.current{background:var(--cord,#0F6E5C);color:white;border-color:var(--cord,#0F6E5C)}.flow p{margin:0 0 0 8px;font-size:12px;line-height:1.4;color:#54645c}.crm.is-signed .products-board{min-height:0;overflow:auto}.products-board{grid-template-columns:minmax(0,1fr)}.products-board article{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;padding:12px 0;border-top:1px solid var(--line,rgba(27,36,33,.14))}.products-board article p{grid-column:1/-1;margin:0;font-size:13px;color:#54645c}.crm-bar{display:flex;justify-content:flex-end;align-items:center;gap:8px;min-height:36px;margin:0 0 8px}.crm-bar span{margin-right:auto;font-size:13px;font-weight:600}.password-form,.user-form{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:8px;align-items:end;margin:0 0 8px}.password-form label,.user-form label{margin:0}.crm .users-board{grid-template-columns:minmax(0,1fr)}.action-row{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.action-row button,.quote-steps button,.follow-form button{min-height:34px;padding:6px 10px}.follow-form{display:grid;grid-template-columns:minmax(0,1fr) 180px auto;gap:8px;align-items:end}.follow-form label{margin:0}.follow-form textarea{min-height:46px}.fold{margin-top:8px}.fold summary{cursor:pointer;font-size:13px;font-weight:600}.quote-steps{display:flex;gap:6px;margin:0 0 8px}.inquiry-notes{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}@media(min-width:1101px){.crm.is-signed .workspace>section{padding:12px 14px}.crm.is-signed fieldset{margin:6px 0;padding:8px}.crm.is-signed .workspace>section label{margin:4px 0}}@media(max-width:700px){.follow-form,.password-form,.user-form{grid-template-columns:1fr}.crm-bar{flex-wrap:wrap}}
-.quote-next{border:1px solid #c8d8cf;background:#f4f8f5;padding:16px;margin-bottom:20px;border-radius:6px}.quote-next h3{margin:5px 0!important;font-size:18px!important}.quote-next p{font-size:13px;line-height:1.6;margin:6px 0 12px}.section-label{font-size:10px;letter-spacing:.12em;color:#52635a}.related-actions{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}.acceptance-form{border-top:1px solid #d6dfd9;margin-top:12px;padding-top:8px}.acceptance-form .hint{font-size:12px;color:#5a6a61}.project-path{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;padding:12px;background:#f1f5f2;margin:12px 0;color:#65716a}.project-path .path-done{font-weight:600;color:#0f6e5c}.crm .record-link{display:inline-flex;margin:6px 6px 0 0;min-height:36px;text-align:left}@media(max-width:640px){.quote-next{padding:12px}.quote-next .related-actions button{width:100%;height:auto;min-height:44px;text-align:left}.project-path{font-size:11px}}
-/* Natural document height: one page scroll, no nested detail/list scroll. */
-@media(min-width:1101px){:global(.frame.frame-work){height:auto;min-height:100vh;overflow:visible;display:block}.crm.is-signed{max-width:none;width:100%;margin:0;height:auto;min-height:100vh;overflow:visible;display:block;padding-top:16px;padding-bottom:32px}.crm.is-signed .desk-rail{position:fixed;height:100vh}.crm.is-signed .workspace{height:auto;max-height:none;align-items:start}.crm.is-signed .workspace>aside{position:sticky;top:18px;height:auto;max-height:none;overflow:visible}.crm.is-signed .workspace>section{height:auto;max-height:none;overflow:visible}.crm.is-signed .workspace>aside .pager{margin-top:16px}.crm.is-signed .product-manager{height:auto;max-height:none;overflow:visible}.crm .metrics{margin-bottom:16px}.crm .flow{margin-bottom:16px}}.crm .workspace>section{overflow:visible;max-height:none}
-.quote-editor{max-width:960px}.crm .quote-editor>h2{font-size:22px;margin:0 0 6px}.quote-editor-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:28px;padding-top:18px;border-top:1px solid #e0e7e2}.quote-editor-actions .cancel-edit{margin-right:auto}.crm .quote-editor fieldset{border-color:#e0e7e2;border-radius:5px;padding:16px;margin:0 0 18px}.crm .quote-editor legend{font-size:12px;color:#65736a;padding:0 6px}.crm .quote-editor input,.crm .quote-editor select{min-height:42px}.crm .quote-editor .grid{gap:0 16px}@media(max-width:600px){.quote-editor-actions button{font-size:11px;padding:9px 12px}.crm .quote-editor fieldset{padding:12px}}
-
-/* Quiet, spacious project workspace. */
-.crm.is-signed{background:#f5f6f2;color:#23332b}.crm-bar{min-height:76px;margin-bottom:24px;gap:10px;border-bottom:1px solid #e1e6df;padding-bottom:18px}.page-context{margin-right:auto}.page-context h1{font-size:27px;font-weight:600;letter-spacing:-.02em;line-height:1.3;margin:6px 0 0}.page-context>span{font-size:10px;letter-spacing:.15em;color:#8b988e}.crm-bar button{font-size:11px;min-height:34px;background:transparent;color:#586d5f;border:1px solid #dce3da;padding:7px 12px;border-radius:5px}.crm .workspace{grid-template-columns:260px minmax(0,1fr);gap:24px}.crm .workspace>.card{border:1px solid #e1e6df;border-radius:8px;background:#fff}.crm .workspace>aside{padding:22px 16px}.crm .workspace>section{padding:28px 32px}.crm .workspace>aside h2{font-size:13px;margin:0 6px 20px;font-weight:600;color:#687c6d}.crm .workspace .item{margin:6px 0;padding:15px 14px;min-height:64px;border-radius:5px;background:#f7f8f4}.crm .workspace .item strong{font-size:13px;font-weight:500;line-height:1.6}.crm .workspace .item span{font-size:11px;color:#7d8c81;line-height:1.6;margin-top:5px}.draft-list{padding-bottom:18px;margin-bottom:18px;border-bottom:1px solid #e5eae2}.draft-list>.section-label{display:block;padding:0 6px;margin-bottom:12px}.project-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.crm .project-heading h2{font-size:27px;line-height:1.4;margin:10px 0 6px}.project-heading p{margin:0;color:#7a8d7d;font-size:13px;line-height:1.7}.project-status{font-size:11px;background:#eef5ed;color:#50745f;padding:7px 10px;border-radius:4px;white-space:nowrap}.project-primary{display:flex;gap:10px;flex-wrap:wrap;margin:24px 0}.project-primary button{border-radius:5px;font-size:12px;padding:10px 16px}.project-facts{display:grid;grid-template-columns:2fr 1fr 1.3fr;gap:24px;padding:22px 0;border-top:1px solid #e2e8df;border-bottom:1px solid #e2e8df;margin:0 0 20px}.project-facts dt{font-size:11px;color:#8a988d;margin-bottom:10px}.project-facts dd{font-size:13px;color:#334c3c;margin:0;line-height:1.8}.project-facts small{display:block;color:#74877a;font-size:12px}.original-request{padding:0 0 20px;font-size:12px;color:#607365}.original-request summary{cursor:pointer}.original-request p{white-space:pre-wrap;line-height:1.8}.settings-layout{display:grid;gap:24px}.crm .users-board{grid-template-columns:1fr}.crm .table-wrap table{font-size:13px}.crm .table-wrap th{font-size:11px;color:#7f8d82;font-weight:500}.crm .quote-next{padding:20px;background:#f5f8f2;border:1px solid #dce7d9}.crm button:disabled{cursor:default}.crm .desk-rail{box-sizing:border-box}.crm .desk-rail button{min-height:44px}.crm .desk-rail .rail-brand{font-size:25px;letter-spacing:.18em;margin-bottom:30px}
-@media(min-width:1101px){.crm.is-signed{padding:24px 32px 40px 256px}.crm.is-signed .workspace>aside{top:24px}.crm.is-signed .workspace>section label{margin:12px 0}.crm.is-signed .workspace>section:has(.quotation-editor){padding:28px 32px}}
-@media(max-width:1100px){.crm .workspace{grid-template-columns:1fr}.crm .workspace>aside{position:static}.crm .workspace>aside .item{display:inline-block;width:calc(50% - 6px);vertical-align:top;margin-right:6px}.crm .workspace>section{padding:24px}.crm-bar{flex-wrap:wrap}.page-context{flex:1}}
-@media(max-width:700px){.crm .workspace:has(.quotation-editor)>aside{display:none}.crm .desk-rail{margin-top:-24px;width:calc(100% + 32px)}.crm .desk-rail button{padding:10px 7px;font-size:11px}.crm-bar{margin-bottom:18px}.page-context{flex-basis:100%;margin-bottom:8px}.page-context h1{font-size:24px}.crm .workspace>section{padding:20px 18px}.crm .workspace>aside{padding:18px 12px}.project-facts{grid-template-columns:1fr 1fr;gap:20px}.project-facts>div:first-child{grid-column:1/-1}.crm .project-heading h2{font-size:23px}.project-primary button{flex:1}.crm .workspace .item strong{font-size:12px}.crm .workspace .item{padding:12px 10px}}
+.crm { font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 32px 28px 48px; overflow-x: hidden; }
+.crm.is-signed { padding-left: 268px; }
+.desk-rail { position: fixed; inset: 0 auto 0 0; width: 236px; background: #1a2823; color: #e7eee9; padding: 28px 16px; display: flex; flex-direction: column; gap: 4px; }
+.rail-brand { font-size: 22px; letter-spacing: 0.16em; padding: 4px 12px 20px; }
+.desk-rail button { display: flex; align-items: center; min-height: 44px; border: 0; background: transparent; color: #e7eee9; padding: 10px 14px; text-align: left; font-size: 15px; border-radius: 6px; }
+.desk-rail button.current { background: #0f6e5c; color: white; }
+.rail-bottom { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 16px 12px; border-top: 1px solid rgba(231, 238, 233, 0.16); }
+.user-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #8e9a94; color: #1a2823; font-size: 14px; }
+.user-meta strong { display: block; font-size: 14px; }
+.user-meta small { display: block; font-size: 12px; opacity: 0.75; margin-top: 2px; }
+.crm-bar { display: flex; align-items: flex-end; gap: 12px; min-height: 72px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #e1e6df; }
+.page-context { margin-right: auto; }
+.page-context span { font-size: 12px; letter-spacing: 0.14em; color: #6d7c72; }
+.page-context h1 { font-size: 28px; line-height: 1.25; font-weight: 600; margin: 6px 0 0; }
+.crm-bar button, .login button, .password-form button, .user-form button { min-height: 40px; font-size: 14px; padding: 8px 14px; border-radius: 6px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; }
+.crm-bar button.secondary { background: white; color: #24342c; border-color: #d5ddd6; }
+.card, .login { background: white; border: 1px solid #e1e6df; border-radius: 8px; padding: 24px; }
+.login { max-width: 440px; margin: 48px auto; }
+.login h1 { font-size: 28px; margin: 0 0 8px; }
+.login p, .card p { font-size: 15px; line-height: 1.6; }
+.crm label { display: block; margin: 14px 0; font-size: 14px; }
+.crm input, .crm select { width: 100%; box-sizing: border-box; min-height: 40px; margin-top: 6px; padding: 8px 12px; font-size: 15px; border: 1px solid #d5ddd6; border-radius: 6px; }
+.password-form, .user-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; }
+.password-form label, .user-form label { margin: 0; }
+.settings-layout { display: grid; gap: 24px; }
+.card h2 { font-size: 20px; margin: 0 0 16px; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1px solid #e1e6df; }
+.alert { padding: 12px 16px; background: #fae8e1; color: #842b16; }
+.success { padding: 12px 16px; background: #e5efdd; }
+@media (max-width: 800px) {
+  .crm, .crm.is-signed { padding: 16px; }
+  .desk-rail { position: static; width: auto; margin: -16px -16px 20px; display: grid; grid-template-columns: 1fr 1fr; }
+  .rail-brand, .rail-bottom { display: none; }
+  .password-form, .user-form { grid-template-columns: 1fr; }
+  .crm-bar { flex-wrap: wrap; }
+  .page-context { flex-basis: 100%; }
+}
 </style>

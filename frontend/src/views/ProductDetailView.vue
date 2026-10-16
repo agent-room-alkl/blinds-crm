@@ -54,7 +54,7 @@ watch(() => route.params.id, load, { immediate: true });
             </div>
           <div v-if="product.colors?.length"><dt>{{lang==='zh'?'颜色选项':'Colour options'}}</dt><dd>{{product.colors.join(' / ')}}</dd></div><div v-if="product.controls?.length"><dt>{{lang==='zh'?'控制方式':'Controls'}}</dt><dd>{{product.controls.join(' / ')}}</dd></div></dl>
           <div class="actions">
-            <router-link class="button" :to="`/inquiry?product=${product.id}`">
+            <router-link class="button" to="/portal">
               {{ t("products.detail") }}
             </router-link>
           </div>
