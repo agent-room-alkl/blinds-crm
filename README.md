@@ -1,5 +1,15 @@
 # VERA Shading Solutions
 
+## Customer portal and project-order prototype (2026-10-16)
+
+`/portal` uses a separate customer login provisioned by a staff administrator in CRM → Project orders. The CRM now opens on project operations; the previous inquiry/quotation/mail workflow remains under History. Customers can submit named window configurations for review, and staff can record the **60%** deposit, supplier reference, transit, partial arrivals and deliveries. Actual arrival quantities drive email notifications with explicit delivery status and retry boundaries.
+
+This is a local workflow prototype. The supplied workbook requires both area and width/drop-matrix pricing, product-dependent options, installation minimums, GST and ROUNDUP rules. Those commercial rules and the supplier template have **not** been imported. Unconfigured prices stay empty and block invoice acceptance. The website's five shutter series are mapped in the review documents; the existing sample catalogue has not been silently replaced. Monthly rebate calculation, partial-arrival billing, confirmed invoice layout and profile editing remain follow-up work. Dashboard figures are labelled examples.
+
+Existing databases need the additive `python backend/migrate_workflow.py` migration during deployment; this change does not run it against a live database. See [API and limitations](backend/OPERATIONS.md), [implementation plan](docs/CRM-implementation-plan.zh-CN.md), [client email/workbook review](docs/CRM-source-review.zh-CN.md) and [catalogue mapping](docs/CRM-catalog-mapping.zh-CN.md).
+
+Validation: `python backend/test_operations.py`, `python backend/test_api.py`, `python backend/test_workflow.py`, `python backend/test_products.py`, and `npm run build` in `frontend`. Backend checks use isolated databases and mocked external services.
+
 中英双语批发官网与客户订单 CRM 的本地演示。演示账号（CRM 登录由 T-03 实现）：`dylan` / `vera-demo`。
 
 ## 后端
