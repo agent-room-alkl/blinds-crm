@@ -10,11 +10,23 @@ interface PortalProfile {
   phone: string;
   company_address: string;
 }
+interface ConfigField {
+  key: string;
+  label_zh: string;
+  label_en: string;
+  choices?: string[];
+  required?: boolean;
+  type?: string;
+}
 interface CatalogProduct {
   id: number;
   name_zh: string;
   name_en: string;
-  price_rule: { options?: Record<string, Record<string, unknown>> } | null;
+  source_code?: string;
+  orderable?: boolean;
+  scope?: string;
+  configuration_schema?: ConfigField[];
+  price_rule: { formula?: string; status?: string; version?: string; options?: Record<string, Record<string, unknown>> } | null;
 }
 interface WindowLine {
   window_name: string;
@@ -22,7 +34,15 @@ interface WindowLine {
   width_mm: string;
   height_mm: string;
   quantity: number;
+  panel_count: number;
   options: Record<string, string>;
+}
+interface PortalLine {
+  id?: string;
+  window_name: string;
+  unit_price?: string | null;
+  amount?: string | null;
+  pricing_status?: string;
 }
 interface PortalOrder {
   id: string;
@@ -33,6 +53,32 @@ interface PortalOrder {
   total: string | null;
   currency?: string;
   pricing_status?: string;
+  lines?: PortalLine[];
+  invoices?: { id: string; kind: string; amount: string; currency: string; status: string; payment_status?: string }[];
+}
+interface PricedQuote {
+  total: string | null;
+  currency: string;
+  pricing_status?: string;
+  subtotal?: string;
+  installation?: string;
+  tax?: string;
+  deposit?: string;
+  rule_version?: string;
+  lines: PortalLine[];
+}
+interface MoneySummary {
+  ordered?: string;
+  invoiced?: string;
+  received?: string;
+  outstanding_invoiced?: string;
+}
+interface Consumption {
+  invoices: { id: string; kind: string; amount: string; currency: string; status: string; payment_status?: string }[];
+  rebates: { id: string; month?: string; amount: string; currency: string; used?: string; remaining?: string }[];
+  statistics_status?: string;
+  summary?: Record<string, MoneySummary>;
+  unpriced_orders?: number;
 }
 
 const { locale } = useI18n();
@@ -46,6 +92,8 @@ const busy = ref(false);
 const error = ref("");
 const notice = ref("");
 const quote = ref("");
+const priced = ref<PricedQuote | null>(null);
+const consumption = ref<Consumption | null>(null);
 const pricing = ref(false);
 let priceTicket = 0;
 let priceTimer = 0;
@@ -53,28 +101,37 @@ const submissionKey = ref(crypto.randomUUID());
 const project = reactive({
   project_name: "",
   site_address: "",
+  installation_required: false,
   lines: [blankLine()] as WindowLine[],
 });
 
 function blankLine(): WindowLine {
-  return { window_name: "", product_id: "", width_mm: "", height_mm: "", quantity: 1, options: {} };
+  return { window_name: "", product_id: "", width_mm: "", height_mm: "", quantity: 1, panel_count: 1, options: {} };
 }
+function schemaOf(line: WindowLine) {
+  return productOf(line.product_id)?.configuration_schema || [];
+}
+const usesWorkbookFields = computed(() => catalog.value.some((item) => item.configuration_schema));
 function productOf(id: number | "") {
   return catalog.value.find((item) => item.id === id);
 }
 function optionNames(line: WindowLine) {
+  const schema = schemaOf(line);
+  if (schema.length) return schema.map((field) => field.key);
   return Object.keys(productOf(line.product_id)?.price_rule?.options || {});
 }
 const payload = computed(() => ({
   project_name: project.project_name.trim(),
   site_address: project.site_address.trim(),
   submission_key: submissionKey.value,
+  ...(usesWorkbookFields.value ? { installation_required: project.installation_required } : {}),
   lines: project.lines.map((line) => ({
     window_name: line.window_name.trim(),
     product_id: Number(line.product_id),
     width_mm: line.width_mm,
     height_mm: line.height_mm,
     quantity: line.quantity,
+    ...(usesWorkbookFields.value ? { panel_count: line.panel_count } : {}),
     options: Object.fromEntries(optionNames(line).map((name) => [name, line.options[name] || ""])),
   })),
 }));
@@ -89,6 +146,7 @@ async function refresh() {
   catalog.value = listed.products;
   pricingStatus.value = listed.pricing_status;
   orders.value = await portalRequest<PortalOrder[]>("orders");
+  consumption.value = await portalRequest<Consumption>("consumption");
 }
 
 async function login() {
@@ -116,6 +174,8 @@ async function logout() {
   portalSession.token = "";
   profile.value = null;
   orders.value = [];
+  consumption.value = null;
+  priced.value = null;
 }
 
 function addLine() {
@@ -129,12 +189,17 @@ function onSeries(line: WindowLine) {
 }
 
 function lineReady(line: { window_name: string; product_id: number; width_mm: string; height_mm: string; quantity: number; options: Record<string, string> }) {
-  const names = Object.keys(productOf(line.product_id)?.price_rule?.options || {});
-  return line.window_name && line.product_id && line.width_mm && line.height_mm && line.quantity > 0 && names.every((name) => line.options[name]);
+  const product = productOf(line.product_id);
+  if (product?.orderable === false) return false;
+  const names = product?.configuration_schema?.length
+    ? product.configuration_schema.filter((field) => field.required !== false).map((field) => field.key)
+    : Object.keys(product?.price_rule?.options || {});
+  return Boolean(line.window_name && line.product_id && line.width_mm && line.height_mm && line.quantity > 0 && names.every((name) => line.options[name]));
 }
 
 watch(payload, (body) => {
   quote.value = "";
+  priced.value = null;
   window.clearTimeout(priceTimer);
   const ticket = ++priceTicket;
   if (!profile.value || !body.project_name || !body.site_address || !body.lines.every(lineReady)) {
@@ -144,13 +209,15 @@ watch(payload, (body) => {
   pricing.value = true;
   priceTimer = window.setTimeout(async () => {
     try {
-      const priced = await portalRequest<{ total: string; currency: string }>("price", body);
+      const result = await portalRequest<PricedQuote>("price", body);
       if (ticket !== priceTicket) return;
-      quote.value = `${priced.currency} ${priced.total}`;
+      priced.value = result;
+      quote.value = result.total ? `${result.currency} ${result.total}` : "";
       if (error.value) error.value = "";
     } catch (cause) {
       if (ticket !== priceTicket) return;
       quote.value = "";
+      priced.value = null;
       error.value = messageOf(cause);
     } finally {
       if (ticket === priceTicket) pricing.value = false;
@@ -170,9 +237,12 @@ async function submitOrder() {
     submissionKey.value = crypto.randomUUID();
     project.project_name = "";
     project.site_address = "";
+    project.installation_required = false;
     project.lines = [blankLine()];
     quote.value = "";
+    priced.value = null;
     orders.value = await portalRequest<PortalOrder[]>("orders");
+    consumption.value = await portalRequest<Consumption>("consumption");
   } catch (cause) {
     error.value = messageOf(cause);
   } finally {
@@ -229,6 +299,7 @@ function messageOf(cause: unknown) {
           <label>{{ tx("项目名称", "Project name") }}<input v-model="project.project_name" required /></label>
           <label>{{ tx("施工或安装地址", "Site or installation address") }}<input v-model="project.site_address" required /></label>
         </div>
+        <label v-if="usesWorkbookFields" class="check"><input v-model="project.installation_required" type="checkbox" /> {{ tx("本项目需要安装。安装费由服务端计算，页面不填金额。", "This project needs installation. The server calculates the installation charge. This page does not type an amount.") }}</label>
         <article v-for="(line, index) in project.lines" :key="index" class="window-line">
           <header>
             <h3>{{ tx("窗户", "Window") }} {{ index + 1 }}</h3>
@@ -239,13 +310,23 @@ function messageOf(cause: unknown) {
             <label>{{ tx("产品系列", "Product series") }}
               <select v-model="line.product_id" required @change="onSeries(line)">
                 <option disabled value="">{{ tx("选择系列", "Choose a series") }}</option>
-                <option v-for="item in catalog" :key="item.id" :value="item.id">{{ locale === "en" ? item.name_en : item.name_zh }}</option>
+                <option v-for="item in catalog" :key="item.id" :value="item.id" :disabled="item.orderable === false">{{ locale === "en" ? item.name_en : item.name_zh }}{{ item.source_code ? ` · ${item.source_code}` : "" }}{{ item.orderable === false ? tx("（仅展示）", " (display only)") : "" }}</option>
               </select>
             </label>
             <label>{{ tx("宽（毫米）", "Width (mm)") }}<input v-model="line.width_mm" inputmode="decimal" required /></label>
             <label>{{ tx("高（毫米）", "Height (mm)") }}<input v-model="line.height_mm" inputmode="decimal" required /></label>
-            <label>{{ tx("数量", "Quantity") }}<input v-model.number="line.quantity" type="number" min="1" step="1" required /></label>
-            <label v-for="name in optionNames(line)" :key="name">{{ name }}
+            <label>{{ tx("同配置数量", "Quantity of this configuration") }}<input v-model.number="line.quantity" type="number" min="1" step="1" required /></label>
+            <label v-if="usesWorkbookFields">{{ tx("每窗面板数", "Panels per window") }}<input v-model.number="line.panel_count" type="number" min="1" step="1" required /></label>
+            <template v-if="schemaOf(line).length">
+              <label v-for="field in schemaOf(line)" :key="field.key">{{ locale === "en" ? field.label_en : field.label_zh }}
+                <select v-if="field.choices?.length" v-model="line.options[field.key]" :required="field.required !== false">
+                  <option disabled value="">{{ tx("选择", "Choose") }}</option>
+                  <option v-for="choice in field.choices" :key="choice" :value="choice">{{ choice }}</option>
+                </select>
+                <input v-else v-model="line.options[field.key]" :required="field.required !== false" />
+              </label>
+            </template>
+            <label v-for="name in schemaOf(line).length ? [] : optionNames(line)" :key="name">{{ name }}
               <select v-model="line.options[name]" required>
                 <option disabled value="">{{ tx("选择", "Choose") }}</option>
                 <option v-for="choice in Object.keys(productOf(line.product_id)?.price_rule?.options?.[name] || {})" :key="choice" :value="choice">{{ choice }}</option>
@@ -258,7 +339,15 @@ function messageOf(cause: unknown) {
         <aside class="price-block">
           <p class="section-label">{{ tx("价格", "PRICE") }}</p>
           <strong>{{ pricing ? tx("计算中", "Calculating") : (quote || tx("待配置", "Not configured")) }}</strong>
-          <p>{{ tx("尺寸或选项一变，旧金额立刻清掉，再向服务端重算。没有确认价格表时不显示可付款金额。", "Changing a size or option clears the previous amount at once, then the server recalculates. Without a confirmed price list, no payable amount is shown.") }}</p>
+          <ul v-if="priced">
+            <li v-if="priced.subtotal">{{ tx("商品合计", "Subtotal") }} {{ priced.currency }} {{ priced.subtotal }}</li>
+            <li v-if="priced.installation">{{ tx("安装", "Installation") }} {{ priced.currency }} {{ priced.installation }}</li>
+            <li v-if="priced.tax">GST {{ priced.currency }} {{ priced.tax }}</li>
+            <li v-if="priced.deposit">{{ tx("定金", "Deposit") }} {{ priced.currency }} {{ priced.deposit }}</li>
+            <li v-if="priced.rule_version">{{ tx("规则版本", "Rule version") }} {{ priced.rule_version }}</li>
+            <li v-for="(row, index) in priced.lines" :key="index">{{ row.window_name }} · {{ row.pricing_status || tx("待配置", "Not configured") }} · {{ row.amount ? `${priced.currency} ${row.amount}` : tx("行价待配置", "Line price not configured") }}</li>
+          </ul>
+          <p>{{ tx("行价和合计都来自服务端。尺寸或选项一变，旧金额立刻清掉。页面不自己乘面积，也不接受手填单价。", "Line prices and the total come from the server. Changing a size or option clears the previous amount at once. This page does not multiply an area or accept a typed unit price.") }}</p>
         </aside>
         <button :disabled="busy">{{ tx("提交待审核", "Submit for review") }}</button>
         <p class="hint">{{ tx("提交不生成发票。确认接收之后才有订单金额 60% 的定金发票；定金已收是后台另一步。发票金额以后端计算为准。", "Submission does not create an invoice. Acceptance creates a deposit invoice for 60% of the order. Recording the deposit received is a separate staff step. The invoice amount is calculated on the server.") }}</p>
@@ -274,6 +363,38 @@ function messageOf(cause: unknown) {
           <span>{{ order.site_address }}</span>
           <span>{{ order.status }} · {{ order.payment_status }}</span>
           <span>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("合计待配置", "Total not configured") }}</span>
+          <ul v-if="order.lines?.length">
+            <li v-for="line in order.lines" :key="line.id || line.window_name">{{ line.window_name }} · {{ line.amount ? `${order.currency || ""} ${line.amount}` : tx("行价待配置", "Line price not configured") }}</li>
+          </ul>
+          <ul v-if="order.invoices?.length">
+            <li v-for="invoice in order.invoices" :key="invoice.id">{{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ invoice.status }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="card">
+        <h2>{{ tx("购买、发票和返利", "Purchases, invoices and rebates") }}</h2>
+        <p class="hint">{{ tx("这里只列出服务端返回的项目、发票和已确认返利。消费统计口径未确认，页面不把它们加总成一笔已付金额。", "This lists the projects, invoices and confirmed rebates returned by the server. The consumption basis is not confirmed, so the page does not add them into one paid total.") }}</p>
+        <p v-if="consumption?.statistics_status">{{ consumption.statistics_status }}</p>
+        <p v-if="consumption?.unpriced_orders">{{ tx(`还有 ${consumption.unpriced_orders} 个项目没有确认价格，不计入下面的金额。`, `${consumption.unpriced_orders} projects have no confirmed price and are excluded from the amounts below.`) }}</p>
+        <article v-for="(money, currency) in consumption?.summary || {}" :key="currency" class="order-row">
+          <strong>{{ currency }}</strong>
+          <span>{{ tx("已下单", "Ordered") }} {{ money.ordered || "—" }}</span>
+          <span>{{ tx("已开票", "Invoiced") }} {{ money.invoiced || "—" }}</span>
+          <span>{{ tx("已收", "Received") }} {{ money.received || "—" }}</span>
+          <span>{{ tx("已开票未收", "Invoiced outstanding") }} {{ money.outstanding_invoiced || "—" }}</span>
+        </article>
+        <p v-if="!consumption?.invoices.length">{{ tx("还没有发票。", "No invoices yet.") }}</p>
+        <article v-for="invoice in consumption?.invoices || []" :key="invoice.id" class="order-row">
+          <strong>{{ invoice.kind }}</strong>
+          <span>{{ invoice.currency }} {{ invoice.amount }}</span>
+          <span>{{ tx("发送", "Send") }} {{ invoice.status }}</span>
+          <span>{{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</span>
+        </article>
+        <p v-if="!consumption?.rebates.length">{{ tx("还没有已确认的返利。", "No confirmed rebates yet.") }}</p>
+        <article v-for="credit in consumption?.rebates || []" :key="credit.id" class="order-row">
+          <strong>{{ credit.month || credit.id }}</strong>
+          <span>{{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span>
         </article>
       </section>
     </template>

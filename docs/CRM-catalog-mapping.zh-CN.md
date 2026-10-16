@@ -1,5 +1,7 @@
 # VERA 官网与现用模板目录映射
 
+实施补记：后续已支持管理员私有导入模板，保持原ID并创建五系列展示/模板订购范围，Ashwood仍仅展示。下文为迁移前的来源对照，最新实现见 [Excel自动化实施](CRM-excel-automation.zh-CN.md)。
+
 日期：2026-10-16。官网正文来自已保存的 https://verashading.com/products（`output/vera_products_source_20261016.html`）。模板代码来自 `output/VERA_template_inspection_20261016.json` 的 Product Listing A2:A24 及对应颜色、叶片行。这是名称级对照，不是可上线的产品种子，也不改 `service.py`。
 
 ## 已对齐的百叶窗系列

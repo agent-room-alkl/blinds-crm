@@ -207,7 +207,7 @@ def logout(credentials: HTTPAuthorizationCredentials = Depends(security), actor=
 @app.get('/api/products')
 def products():
     with db() as c:
-        return [catalog_product(json.loads(r['data'])) for r in c.execute('SELECT data FROM products ORDER BY id') if json.loads(r['data']).get('published',True)]
+        return [catalog_product(json.loads(r['data'])) for r in c.execute('SELECT data FROM products ORDER BY id') if json.loads(r['data']).get('published',True) and not json.loads(r['data']).get('portal_only',False)]
 
 @app.get('/api/products/{pid}')
 def product(pid:int):
@@ -215,7 +215,7 @@ def product(pid:int):
         r=c.execute('SELECT data FROM products WHERE id=?',(pid,)).fetchone()
         if not r: raise HTTPException(404,'Product not found')
         d=json.loads(r['data'])
-        if not d.get('published',True): raise HTTPException(404,'Product not found')
+        if not d.get('published',True) or d.get('portal_only'): raise HTTPException(404,'Product not found')
         return catalog_product(d)
 
 class Inquiry(BaseModel):
@@ -710,8 +710,9 @@ def create_product(body:ProductEdit):
 @app.post('/api/admin/products/{pid}',dependencies=[Depends(require_admin)])
 def edit_product(pid:int,body:ProductEdit):
     with db() as c:
-        if not c.execute('SELECT 1 FROM products WHERE id=?',(pid,)).fetchone():raise HTTPException(404,'Product not found')
-        d={'id':pid,**body.model_dump()};c.execute('UPDATE products SET data=? WHERE id=?',(dump(d),pid));return d
+        existing=c.execute('SELECT data FROM products WHERE id=?',(pid,)).fetchone()
+        if not existing:raise HTTPException(404,'Product not found')
+        d={**json.loads(existing['data']),'id':pid,**body.model_dump()};c.execute('UPDATE products SET data=? WHERE id=?',(dump(d),pid));return d
 
 class ImageUpload(BaseModel):
     data:str=Field(min_length=1,max_length=7_000_000)

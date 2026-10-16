@@ -69,6 +69,12 @@ with tempfile.TemporaryDirectory() as folder:
     from operations import deposit_amount
     assert deposit_amount('500.02') == '300.02'  # round up, not half-up (300.012).
     assert len(post(staff,f'operations/orders/{oid}/review')['invoices']) == 1
+    deposit_id=reviewed['invoices'][0]['id']
+    with patch('email_service.configuration',return_value=({'configured':False},None)):
+        assert post(staff,f'operations/invoices/{deposit_id}/send')['status']=='not_configured'
+    with patch('email_service.configuration',return_value=({'configured':True},None)), patch('email_service.send_email',return_value='<test-deposit>'):
+        post(staff,f'operations/notifications/invoice-mail:{deposit_id}/retry')
+    assert next(i for i in staff.get('/api/operations/invoices').json() if i['id']==deposit_id)['status']=='sent'
     post(staff,f'operations/orders/{oid}/supplier-order',{'reference':'supplier-1'},409)
     post(staff,f'operations/orders/{oid}/deposit-received')
     post(staff,f'operations/orders/{oid}/deposit-received')
