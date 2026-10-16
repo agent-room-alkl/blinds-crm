@@ -12,7 +12,7 @@ SCHEMA=os.getenv('VERA_DB_SCHEMA','vera')
 if SCHEMA in ('public','information_schema') or SCHEMA.startswith('pg_') or not re.fullmatch(r'[a-z][a-z0-9_]{0,62}',SCHEMA):raise RuntimeError('Invalid VERA_DB_SCHEMA')
 if BACKEND not in ('sqlite','postgres'):raise RuntimeError('VERA_DB_BACKEND must be sqlite or postgres')
 if os.getenv('VERCEL') and BACKEND!='postgres':raise RuntimeError('Vercel requires a persistent PostgreSQL connection')
-AUTO_IDS={'customers','contacts','inquiries','followups','quotes','quote_versions','quote_lines','orders','status_history'}
+AUTO_IDS={'customers'}
 LOCK_ID=int.from_bytes(hashlib.sha256(('vera:'+SCHEMA).encode()).digest()[:8],'big',signed=True)
 
 class Row(dict):

@@ -6,11 +6,11 @@ The supplied workbook now has a private import path: admin `POST /api/operations
 
 Run `python backend/test_operations.py` and `python backend/test_excel_rules.py` with the backend virtual environment. They create temporary SQLite databases and mock email. The latter uses invented prices; optional `--source <local.xlsm>` validates the private source locally. Never point these checks at production.
 
-Existing database: run `python backend/migrate_workflow.py` once during the normal reviewed deployment procedure. It adds portal/operations tables and verifies existing business counts; it does not delete historical contacts, quotes or orders. Fresh `init_database.py` also creates them. No migration or deployment to the live database has been performed as part of local development.
+Existing database: run `python backend/migrate_operations.py` to add current tables. Fresh initialization creates no legacy tables. Retired history tables/data are removed only through the explicit `cleanup_legacy.py --apply --backup <private-new-archive.json>` migration, after its count-only dry run and an appropriate database snapshot. It preserves current portal/project records. No live cleanup or deployment has been performed by preparing this code.
 
 ## Identity
 
-Staff tokens remain `/api/auth/login` tokens. Portal tokens only authenticate `/api/portal/*`, and cannot access staff or old CRM APIs. Portal profiles have a primary key on customer_id and unique username; each profile has one contact_name/email/phone/company_address. Provision through staff-admin `POST /api/operations/customers`, optionally linking an existing customer_id. Historical multiple-contact rows remain historical; new portal operations use only the single portal profile.
+Staff tokens remain `/api/auth/login` tokens. Portal tokens only authenticate `/api/portal/*` and cannot access staff APIs. Retired CRM APIs are absent and return 404. Portal profiles have a primary key on customer_id and unique username; each profile has one contact_name/email/phone/company_address. Provision through staff-admin `POST /api/operations/customers`, optionally linking an existing retained customer_id. There is no multiple-contact domain.
 
 `POST /api/portal/login {username,password}` → token; GET me, POST logout. GET catalog returns published product series with `price_rule` or null. GET orders and consumption are company-scoped.
 

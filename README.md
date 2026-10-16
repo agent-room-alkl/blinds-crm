@@ -1,68 +1,44 @@
 # VERA Shading Solutions
 
-## Customer portal and project-order prototype (2026-10-16)
+Vue 3 + TypeScript and FastAPI customer portal/project operations. `/portal` is the customer entry; `/crm` is for employees. Support/History, inquiries, manual quotations, follow-ups and the old AI/mail workbench are removed from frontend and backend.
 
-`/portal` uses a separate customer login provisioned by a staff administrator in CRM → Project orders. The CRM now opens on project operations; the previous inquiry/quotation/mail workflow remains under History. Customers can submit named window configurations for review, and staff can record the **60%** deposit, supplier reference, transit, partial arrivals and deliveries. Actual arrival quantities drive email notifications with explicit delivery status and retry boundaries.
+## Local development
 
-Administrators can now privately upload the current order workbook in Project orders. The server imports 23 product configurations and versioned area/matrix prices, evaluates recognized source formulas, calculates installation/GST/ROUNDUP and provides product-dependent portal fields. The public catalogue presents the five website shutter series; template-only products stay inside the portal, and Ashwood remains display-only without a confirmed price. Existing product IDs and frozen orders are preserved. Real customer files and rates are not committed to this public repository.
+Use `./dev.ps1 backend` and `./dev.ps1 frontend` in separate PowerShell terminals. The pair connects the frontend to port 8002. Keep unrelated processes running if a port is occupied.
 
-The workflow includes editable customer profiles, separate ordered/invoiced/received/outstanding totals, confirmed rebate allocation, same-company full-delivery balance drafts and manual balance receipt. Production-information and installation job-sheet XLSX files are generated from the order snapshot. **The production document is a draft, not a confirmed supplier layout.** Monthly rebate tiers, partial-arrival billing rules, cancellation/refund corrections and the final invoice layout still require confirmation. Dashboard figures are labelled examples. No live migration, source import or deployment has been performed by this change.
+Alternatively, install `backend/requirements.txt` into a Python virtual environment, run `uvicorn app.main:app --reload --port 8002` from `backend`, and run `npm install` / `npm run dev` in `frontend` with the matching proxy. Local SQLite is available without PostgreSQL configuration. Server settings load from ignored `.env` files. Initial local demo credentials are `dylan` / `vera-demo`; cloud initialization requires a configured password.
 
-Existing databases need the additive `python backend/migrate_workflow.py` migration during deployment; then an administrator uploads the workbook through the authenticated import screen. See [Excel automation and onboarding](docs/CRM-excel-automation.zh-CN.md), [API and limitations](backend/OPERATIONS.md), [implementation plan](docs/CRM-implementation-plan.zh-CN.md), [client email/workbook review](docs/CRM-source-review.zh-CN.md) and [catalogue mapping](docs/CRM-catalog-mapping.zh-CN.md).
+## Workflow
 
-Validation: `python backend/test_excel_rules.py`, `python backend/test_operations.py`, `python backend/test_api.py`, `python backend/test_workflow.py`, `python backend/test_products.py`, and `npm run build` in `frontend`. Backend checks use isolated databases, invented price fixtures and mocked external services. An optional `--source <local.xlsm>` check compares local reference rows without publishing the source or its rates.
+An administrator opens one account and one contact per company, then privately uploads the order workbook. The server extracts 23 product configurations and versioned area/matrix prices. The public catalogue shows five website shutter series; template-only products stay in the portal, and Ashwood is display-only without a confirmed price. Product IDs are not reused for different products.
 
-中英双语批发官网与客户订单 CRM 的本地演示。演示账号（CRM 登录由 T-03 实现）：`dylan` / `vera-demo`。
+Customers configure named windows, separating repeated-window quantity from panels per window. The server calculates installation, GST and ROUNDUP. Customers cannot enter prices or discounts. Employees review documented adjustments, freeze the order and create a **60% deposit** draft. Manual receipt, supplier reference, transit, partial arrival and delivery are separate actions. Batch operations report each result and reuse idempotency keys on retry.
 
-## 后端
+Customer profiles are editable. Company records separate ordered, invoiced, manually confirmed received and invoiced-outstanding totals. Fully delivered orders can form same-company balance drafts, deducting saved deposits and confirmed rebate balances once. Production-information and job-sheet XLSX files come from the frozen order. Sending and payment confirmation are separate.
 
-```powershell
-cd backend
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
+Real workbooks, private price matrices, extracted customer data and credentials are not committed to this public repository. Missing/invalid rules block pricing. ClearPVC has an unresolved installation alias; that installation quote is refused. Formal supplier layout, monthly rebate tiers, partial-arrival billing, refunds/corrections and final invoice format still require business rules. Dashboard figures are labelled examples.
 
-健康检查：`http://127.0.0.1:8000/api/health` 返回包含 `status: "ok"` 的JSON。
+## Database deployment and cleanup
 
-## 前端
+New installation: `python backend/init_database.py`. Existing installation: `python backend/migrate_operations.py` adds current tables without deleting data. An administrator then uploads the workbook in CRM.
 
-```powershell
-cd frontend
-npm install
-npm run dev
-```
+Retired Support/History tables are not created by the app. Remove existing copies using `backend/cleanup_legacy.py`: default is a count-only dry run; `--apply --backup <private-new-file.json>` archives retired rows and drops the fixed legacy table set plus unlinked legacy customers. Current products, users, sessions, portal customers and operations are verified unchanged. Keep the archive private and take a provider snapshot for full rollback. Cleanup is never a cold-start action. No live database has been cleaned or deployed by preparing this PR.
 
-打开 `http://localhost:5173`。右上角语言按钮只改文案，不改变当前路由。
+See [deployment](DEPLOYMENT.md), [API](backend/OPERATIONS.md) and [Excel automation](docs/CRM-excel-automation.zh-CN.md). Earlier source-review documents describe their original stage; this README and active API describe current behavior.
 
-内部 CRM：`http://localhost:5173/crm`，账号 `dylan` / `vera-demo`。未登录看不到客户资料。
+## Labelled local sample data
 
-跑后端测试前先在虚拟环境安装 `httpx2`，然后在 `backend` 目录执行 `python test_api.py`。
+`python backend/seed_demo.py` creates (or reuses) only `backend/.demo/vera-demo.db`, with 3 demo companies and 7 projects spanning pending review, deposit, supplier order, transit, partial arrival/delivery and settled states. It uses invented prices, example.invalid contacts and disabled SMTP. It refuses an existing database without its demo marker and cannot write PostgreSQL. The local staff demo account uses the existing README demo credentials; customer `demo-trade` uses the explicitly non-production password `local-demo-only`.
 
+To review it, launch the backend with `VERA_DB_BACKEND=sqlite`, `VERA_DB=<absolute backend/.demo/vera-demo.db>`, `VERA_STORAGE_BACKEND=local`, `SMTP_HOST=` and `SMTP_FROM=`. Point the frontend proxy to that local backend. This sample database is ignored by Git and never replaces operational data.
 
-## Current demo workflows
-- A website inquiry creates customer details and an inquiry. CRM → Quotations → latest version → Customer accepted → record acceptance evidence → Create order. External phone/email orders can also be recorded directly in Orders → Record an order. Existing orders link back to their quote version; revisions never change frozen orders.
-- Products: administrators manage bilingual details, dimension ranges, options and local images. Sales users can view them. Published products share the same API and IDs with the website; hidden products are excluded.
-- Product image uploads persist in `backend/media/`; back this directory up with the SQLite database. Both contain local state and are excluded from Git.
-- GPT-5 drafts editable email content and summarizes archived communication when configured. Raw mail is retained if analysis fails or is unconfigured. Sending still requires an explicit Send email action.
-- Sample company contacts, photos and prices are demonstrative. Replace them with confirmed company/product information before any real publication. This project is a local demo, not a production deployment.
-- Independent product checks: `python backend/test_products.py`. Main workflow checks: `python backend/test_api.py`.
-- Optional acceptance walkthrough: with the backend running, `python backend/seed_review_quote.py` adds an idempotent unaccepted demonstration quote without creating an order.
+## Verification
 
+- `python backend/test_core_api.py`: auth/users/settings, retired routes 404 and clean fresh schema.
+- `python backend/test_legacy_cleanup.py`: isolated dry run/archive/removal and current-data preservation.
+- `python backend/test_operations.py`: company isolation, 60%, batching, notification/invoice retries, receipts and settlement/rebate dedupe.
+- `python backend/test_excel_rules.py`: invented price fixtures, formula engines, catalogue scope, private matrix hiding, exports, profiles and consumption. Optional `--source <local.xlsm>` checks local reference rows without publishing rates.
+- `python backend/test_products.py`: catalogue/media permissions, validation, privacy and galleries.
+- `npm run build` in `frontend`: TypeScript and production build.
 
-## Shared PostgreSQL and cloud deployment
-
-Server loads backend/.env, then root .env (environment variables take precedence). With DATABASE_URL/POSTGRES_URL configured, it uses the isolated vera PostgreSQL schema; without configuration it retains the local SQLite demo. Cloud product images use the private Cloudflare R2 bucket. See DEPLOYMENT.md and backend/.env.example. PostgreSQL migration preserves existing users but not old sessions; sign in again after switching. Cloud deployment needs Services root ./ and the server variables described in DEPLOYMENT.md.
-
-## CRM editing and communication
-Quotation editing presents conditions, specifications and charges on one page. Incomplete drafts persist and can be resumed; finalizing validates all fields. Each project has one conversation timeline, automatic summaries and follow-up tasks, rather than duplicate manual communication forms. Direct orders record customer/source/reference, manually priced specifications and acceptance evidence without creating a fake quotation; retrying the same submission does not duplicate it.
-Optional SMTP settings and deployment setup are documented in DEPLOYMENT.md. Email is sent only by clicking Send email; the provider must first be configured server-side. Tests use a mocked mail server and send no real messages.
-
-
-## Automated project communication
-Local configuration lives in the ignored root `.env`; use `backend/.env.example` for a safe template. Set `OPENAI_API_KEY`, `OPENAI_MODEL=gpt-5`, SMTP and IMAP credentials only on the server. Missing credentials are shown honestly in Settings. Existing databases need `python backend/migrate_workflow.py` before starting this revision. Run `python backend/test_workflow.py` for isolated draft/mail/AI contract checks; it makes no real mail or model calls. See DEPLOYMENT.md for the scheduled inbox collector and webhook.
-
-
-## Keep the local preview running
-From the repository root, use two PowerShell terminals: `./dev.ps1 backend` and `./dev.ps1 frontend`. Keep both terminals open; Ctrl+C stops the corresponding service. Open http://127.0.0.1:5173/crm. This pair explicitly connects the frontend to port 8002, avoiding a stale older backend on 8000. If the port is already occupied, keep the existing current service or stop it from its own terminal before starting another; the script does not terminate unrelated processes.
+Local backend suites use temporary SQLite databases and mocked external email. Optional PostgreSQL checks use uniquely named disposable test schemas; see DEPLOYMENT.md.

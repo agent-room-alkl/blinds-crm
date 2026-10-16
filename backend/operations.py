@@ -367,6 +367,11 @@ def register(app, s):
         with s.db() as c:
             return [json.loads(r['data']) for r in c.execute('SELECT data FROM portal_profiles')]
 
+    @app.get('/api/operations/settings')
+    def settings(actor=Depends(s.require_admin)):
+        from email_service import configuration
+        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND}
+
     @app.post('/api/operations/customers')
     def create_customer(body: Profile, actor=Depends(s.require_admin)):
         with s.db() as c:

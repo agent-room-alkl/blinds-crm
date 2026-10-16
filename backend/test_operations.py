@@ -32,8 +32,10 @@ with tempfile.TemporaryDirectory() as folder:
     for c, name in [(portal, 'customerA'), (other, 'customerB')]:
         token = post(c, 'portal/login', {'username': name, 'password': 'test-password'})['token']
         c.headers['Authorization'] = 'Bearer '+token
-    for path in ('customers','orders','inquiries','users','operations/orders','operations/customers'):
+    for path in ('users','operations/orders','operations/customers'):
         assert portal.get('/api/'+path).status_code == 401, path
+    for path in ('customers','orders','inquiries','quotes','workbench'):
+        assert portal.get('/api/'+path).status_code == 404, path
     assert staff.get('/api/portal/me').status_code == 401
     assert portal.get('/api/portal/me').json()['company_address'] == 'Company address'
     assert 'password' not in str(staff.get('/api/operations/customers').json())

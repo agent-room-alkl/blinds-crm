@@ -12,6 +12,8 @@ review/
 *.pyc
 *.db-wal
 *.db-shm
+backend/.legacy-backups/
+backend/.demo/
 .env
 .env.*
 !.env.example

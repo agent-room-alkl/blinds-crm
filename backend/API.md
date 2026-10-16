@@ -1,37 +1,9 @@
-# API contract
+# VERA API
 
-Base `/api`. Public products GET returns an array with id/name_zh/name_en/material_zh/material_en/description_zh/description_en/category/sample. Product GET by id returns an object. All lists are arrays. All errors use `{detail: string | validation[]}`. CRM requests require `Authorization: Bearer <token>`; do not put token in a URL.
+The current API is documented in [OPERATIONS.md](OPERATIONS.md).
 
-- POST auth/login `{username,password}` → `{token, token_type, expires_in,user}`. POST auth/logout revokes current token.
-- POST inquiries `{company,contact_name,channel,locale:'zh'|'en',product_id?:number,quantity?:number,width?:number,height?:number,unit?:'mm'|'inch',expected_date?:string,notes?:string,submission_key?:string}` → `{id,reference,status}`. Reuse the key only for retries of the same submission. Dimensions and date may be omitted.
-- POST conversations `{company?,contact_name,channel,locale,weekday_slot,notes?,submission_key?}` → same receipt. Does not book a calendar.
-- GET inquiries → full inquiries including followups; GET inquiries/{id}. GET customers includes contacts.
-- POST followups `{inquiry_id,note,next_at:'ISO date time'|''}`. New inquiry becomes contacted.
-- GET dashboard → new_inquiries/customers/quotes/active_orders/followups.
-- POST quotes `{inquiry_id,locale,currency:'NZD',valid_until:'YYYY-MM-DD',discount:0,shipping:0,tax:0,terms,lines:[{product_id,width,height,unit,material,color,control,quantity,unit_price}]}` → quote object with versions[]. Prices demonstration only; NZD is an example, not confirmed currency.
-- GET quotes and GET quotes/{id} → quote(s) with versions. Each immutable version includes quote_id/version/lines/subtotal/discount/shipping/tax/total/created_at/accepted_order_id. Money is a two-decimal string.
-- POST quotes/{id}/versions same body → new immutable version (not quote wrapper).
-- GET quotes/{id}/versions/{n}/export?lang=zh|en → HTML. Fetch with bearer then display returned HTML in a window; browser print supports PDF. Never put bearer in query params.
-- POST quotes/{id}/versions/{n}/accept `{note}` → order. Only latest valid version can be accepted; one order per quote, retry same version is idempotent.
-- GET orders and GET orders/{id} → order(s) with snapshot and history. Snapshot includes accepted quote version plus customer and confirmation note.
-- POST orders/{id}/status `{status:'confirmed'|'production'|'ready'|'delivered',note?}` → order. Advance one step; no arbitrary backward jump.
+Retained domains: staff auth/users, products/media, `/api/portal/*` and `/api/operations/*`. The previous inquiry, quotation, manual-order, follow-up, communication, AI and mail-sync APIs have been removed and return 404.
 
-SQLite database defaults backend/vera.db; set VERA_DB to use another file. Demo single admin user. No production deployment, multiuser permissions, automated email, pricing, inventory or payment integrations are claimed.
+Create a new schema with `python backend/init_database.py`. Add current tables to an existing schema with `python backend/migrate_operations.py`.
 
-
-## Product maintenance (local demo)
-- `GET /api/admin/products`: signed-in staff/admin can view the full catalogue including hidden products.
-- `POST /api/admin/products`: administrator creates a product. `POST /api/admin/products/{id}` updates it. Fields: bilingual name/material/description, category, sample, published, image_url, unit, optional width_min/max and height_min/max, colors[], controls[]. Positive ranges, min <= max. New products default hidden.
-- `POST /api/admin/product-images`: administrator uploads JSON `{data: base64, content_type: image/png|image/jpeg|image/webp}`. Maximum decoded size 5 MB. Validates encoding/type signature; responds with local image_url. Images persist under backend/media (VERA_MEDIA_DIR can override); include this directory with database backups.
-- Public `/api/products` and `/api/products/{id}` return published catalogue entries; hidden details return404. The website uses image_url and the same product IDs.
-- Product changes do not modify immutable quote versions or order snapshots. Admin authorization is enforced by the server; staff write attempts return403.
-- `python test_products.py` runs in temporary database/media directories.
-
-- Product `image_urls[]` is an ordered gallery of up to12 local images. The first entry is the cover and is mirrored to image_url. Admin can reorder/remove images by updating the array. Public catalogue and website share the order. Published products require a cover. Legacy products without a saved gallery get coherent original room/detail demo pairs.
-
-## Direct orders and inquiry email
-- POST /api/orders/manual: authenticated direct order with existing customer_id or company/contact_name/channel; source phone/email/wechat/other, optional reference, confirmation_note, unique submission_key, currency/charges/terms/lines. Does not create a quote or inquiry. Repeating the same payload/key returns the same order; changing it returns409. Stores an immutable customer/product/price snapshot; stages use the existing order status API.
-- GET /api/email/config: authenticated delivery readiness and sender only.
-- POST /api/inquiries/{id}/email: recipient, subject and plaintext body. Sends only on an explicit user action via configured SMTP; records successful delivery in followups. SMTP errors are sanitized and tell the user to check the mailbox before retrying an ambiguous delivery.
-- Configure SMTP_HOST, SMTP_PORT, SMTP_SECURITY=starttls (587) or ssl (465), SMTP_FROM, SMTP_USERNAME, SMTP_PASSWORD in server environment; never frontend or Git.
-- python backend/test_manual_email.py uses isolated data and mocked SMTP; sends no real mail.
+Physical retired-data cleanup is explicit: `python backend/cleanup_legacy.py` prints a count-only plan. `--apply --backup <private-new-archive.json>` archives retired rows, drops only fixed legacy tables without CASCADE, removes unlinked legacy customers and verifies current records unchanged in one transaction. Use a provider snapshot for complete rollback. No live cleanup is performed by preparing this change.
