@@ -75,8 +75,8 @@ async function save() {
 <template>
   <section class="card profiles">
     <h2>{{ tx("客户资料", "Customers") }}</h2>
-    <p>{{ tx("每个客户一个登录、一个联系人。邮箱、电话和公司地址来自门户档案。旧的多联系人记录在「辅助历史 / 旧客户资料」，不在这里维护第二联系人。", "Each customer has one login and one contact. Email, phone and company address come from the portal profile. Older multi-contact rows stay under History / Old records. A second contact is not added here.") }}</p>
-    <p class="hint">{{ tx("点一家客户后可以改公司、联系人、邮箱、电话和公司地址。保存走门户档案接口，不改旧的多联系人记录。", "Choose a customer, then edit the company, contact, email, phone and company address. Saving uses the portal profile API and does not change the old multi-contact record.") }}</p>
+    <p>{{ tx("每个客户一个登录、一个联系人。邮箱、电话和公司地址来自门户档案，不在这里加第二联系人。", "Each customer has one login and one contact. Email, phone and company address come from the portal profile. A second contact is not added here.") }}</p>
+    <p class="hint">{{ tx("点一家客户后可以改公司、联系人、邮箱、电话和公司地址。", "Choose a customer, then edit the company, contact, email, phone and company address.") }}</p>
     <form v-if="selected != null" class="editor" @submit.prevent="save">
       <label>{{ tx("公司", "Company") }}<input v-model="draft.company" required /></label>
       <label>{{ tx("联系人", "Contact") }}<input v-model="draft.contact_name" required /></label>
@@ -107,9 +107,14 @@ async function save() {
 </template>
 
 <style scoped>
-.profiles article { border-top: 1px solid var(--line, #dedbd5); margin-top: 16px; padding-top: 12px; cursor: pointer; }
-.editor { display: grid; gap: 8px; margin-top: 12px; }
+.profiles { font-size: 15px; line-height: 1.55; }
+.profiles h2 { font-size: 20px; margin: 0 0 12px; }
+.profiles h3 { font-size: 18px; margin: 0 0 8px; }
+.profiles p { font-size: 15px; margin: 8px 0; }
+.profiles article { border-top: 1px solid var(--line, #dedbd5); margin-top: 20px; padding-top: 16px; cursor: pointer; }
+.editor { display: grid; gap: 12px; margin: 20px 0; max-width: 640px; }
+.editor label { font-size: 14px; }
+.editor input, .editor button { min-height: 40px; font-size: 15px; }
 .hint { color: #54645c; line-height: 1.6; }
 .alert { color: #8a3b2c; }
-h3 { margin: 0 0 6px; }
 </style>

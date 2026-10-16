@@ -20,45 +20,6 @@ export type ApiProduct = {
   sample: boolean;
 };
 
-export type InquiryPayload = {
-  company: string;
-  contact_name: string;
-  channel: string;
-  locale: "zh" | "en";
-  product_id: number | null;
-  quantity: number | null;
-  width: number | null;
-  height: number | null;
-  unit: "mm" | "inch" | null;
-  expected_date: string;
-  notes: string;
-  submission_key: string;
-  source: "website";
-};
-
-export type ConversationPayload = {
-  company: string;
-  contact_name: string;
-  channel: string;
-  locale: "zh" | "en";
-  weekday_slot: string;
-  notes: string;
-  submission_key: string;
-};
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(text || `HTTP ${response.status}`);
-  }
-  return text ? (JSON.parse(text) as T) : ({} as T);
-}
-
 const materialPhotos = {
   aluminium: "/images/aluminium.jpg",
   timber: "/images/vera-timber-detail.png",
@@ -80,12 +41,4 @@ export async function listProducts() {
   const response = await fetch("/api/products");
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as ApiProduct[];
-}
-
-export function createInquiry(body: InquiryPayload) {
-  return postJson<{ id?: number; reference?: string }>("/api/inquiries", body);
-}
-
-export function createConversation(body: ConversationPayload) {
-  return postJson<{ id?: number; reference?: string }>("/api/conversations", body);
 }
