@@ -37,7 +37,8 @@ function toggleLocale() {
         <router-link to="/">{{ t("nav.home") }}</router-link>
         <router-link to="/products">{{ t("nav.products") }}</router-link>
         <router-link to="/about">{{ t("nav.about") }}</router-link>
-        <router-link to="/inquiry" class="nav-quote">{{ t("nav.quote") }}</router-link>
+        <router-link to="/portal" class="nav-quote">{{ t("nav.portal") }}</router-link>
+        <router-link to="/inquiry">{{ t("nav.contact") }}</router-link>
       </nav>
       <button type="button" class="secondary" @click="toggleLocale">
         {{ t("switchTo") }}

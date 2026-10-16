@@ -71,6 +71,8 @@ def init_db(connection=None,seed_admin=True):
         ''')
         from workflow_schema import migrate
         migrate(c)
+        from operations import migrate as migrate_operations
+        migrate_operations(c)
         if 'notes' not in {row['name'] for row in c.execute('PRAGMA table_info(customers)')}:
             c.execute("ALTER TABLE customers ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         if 'username' not in {row['name'] for row in c.execute('PRAGMA table_info(sessions)')}:
@@ -733,3 +735,5 @@ def upload_product_image(body:ImageUpload):
 import sys
 from workflow import register as register_workflow
 register_workflow(app,sys.modules[__name__])
+from operations import register as register_operations
+register_operations(app,sys.modules[__name__])
