@@ -690,7 +690,7 @@ with tempfile.TemporaryDirectory() as folder:
             f"Expected scope=website_and_template after migration, got {upgraded_data['scope']}"
         assert len(upgraded_data['configuration_schema']) > 0, \
             f"Expected configuration_schema to be copied from Basswood, got empty list"
-        assert upgraded_data['description_zh'] == '官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。', \
+        assert upgraded_data['description_zh'] == '官网展示系列。当前为占位价 1.00/m²，严禁报价给客户。', \
             f"Expected updated description after migration"
     
     print(f'✓ Product fully migrated:')
@@ -721,6 +721,7 @@ with tempfile.TemporaryDirectory() as folder:
             print(f'    • {p["name_en"]} ({p.get("source_code")})')
     
     # Test pricing with the migrated product
+    # The provisional rule has no pricing options (synthesized with empty options dict)
     ash_price_order = {
         'project_name': 'Ashwood legacy test',
         'site_address': 'Test address',
@@ -733,7 +734,7 @@ with tempfile.TemporaryDirectory() as folder:
             'height_mm': 1500,
             'quantity': 1,
             'panel_count': 2,
-            'options': {'colour': 'White TEST', 'fitting': 'In Fit', 'opening_style': 'Hinged'}
+            'options': {}  # Provisional pricing has no options
         }]
     }
     

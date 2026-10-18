@@ -36,32 +36,132 @@ def migrate(c):
     
     # Migrate legacy VERA_Ashwood_display to VERA_Ashwood_provisional
     # On legacy DBs, Ashwood was created with orderable=False, scope=website_only, and empty configuration_schema
-    # This migration brings it up to the current state: orderable, website_and_template scope, and copies Basswood's schema
+    # This migration brings it up to the current state: orderable, website_and_template scope, and the real 11-field schema
     import json
     
-    # Find Basswood product to copy configuration from
-    basswood_row = c.execute(
-        "SELECT data FROM products WHERE json_extract(data, '$.source_code') = 'Shutters_Basswood'"
-    ).fetchone()
-    basswood_schema = []
-    if basswood_row:
-        basswood_data = json.loads(basswood_row['data'])
-        basswood_schema = basswood_data.get('configuration_schema', [])
+    # Build the real Basswood 11-field schema (do NOT copy from DB - use the canonical structure)
+    # This is the schema from excel_rules.py parse_template for shutters
+    DELUXE_SCHEMA = [
+        {
+            'key': 'colour',
+            'label_zh': '颜色',
+            'label_en': 'Colour',
+            'choices': [
+                'Golden Oak 61',
+                'Fruitwood 62',
+                'Old Mahogany 63',
+                'Coffee Bean 64',
+                'BlackWalnut 65',
+                'Light Ash 66',
+                'Limed 67',
+                'Natural 68',
+                'Rustic Gray 69',
+                'Provence Blue 70'
+            ],
+            'required': True,
+            'type': 'select'
+        },
+        {
+            'key': 'frame',
+            'label_zh': '框型',
+            'label_en': 'Frame',
+            'choices': [],
+            'required': False,
+            'type': 'select'
+        },
+        {
+            'key': 'louver_size',
+            'label_zh': '叶片尺寸',
+            'label_en': 'Louver size',
+            'choices': ['63mm', '76mm', '89mm', '114mm'],
+            'required': True,
+            'type': 'select'
+        },
+        {
+            'key': 'control_rod',
+            'label_zh': '控制杆',
+            'label_en': 'Control rod',
+            'choices': [],
+            'required': False,
+            'type': 'select'
+        },
+        {
+            'key': 'opening_style',
+            'label_zh': '开合方式',
+            'label_en': 'Opening style',
+            'choices': [],
+            'required': False,
+            'type': 'text'
+        },
+        {
+            'key': 'layout_code',
+            'label_zh': '布局代码',
+            'label_en': 'Layout code',
+            'choices': [],
+            'required': False,
+            'type': 'text'
+        },
+        {
+            'key': 'vt_post',
+            'label_zh': '竖柱',
+            'label_en': 'Vertical post',
+            'choices': [],
+            'required': False,
+            'type': 'text'
+        },
+        {
+            'key': 'ht_post',
+            'label_zh': '横柱',
+            'label_en': 'Horizontal post',
+            'choices': [],
+            'required': False,
+            'type': 'text'
+        },
+        {
+            'key': 'midrail',
+            'label_zh': '中横档',
+            'label_en': 'Midrail',
+            'choices': [],
+            'required': False,
+            'type': 'text'
+        },
+        {
+            'key': 'fitting',
+            'label_zh': '安装尺寸类型',
+            'label_en': 'Fitting',
+            'choices': [],
+            'required': False,
+            'type': 'select'
+        },
+        {
+            'key': 'special_request',
+            'label_zh': '特殊要求',
+            'label_en': 'Special request',
+            'choices': [],
+            'required': False,
+            'type': 'text'
+        }
+    ]
     
-    # Migrate any legacy Ashwood products
+    # Migrate any legacy Ashwood products (idempotent)
     for row in c.execute('SELECT id, data FROM products').fetchall():
         product = json.loads(row['data'])
-        if product.get('source_code') == 'VERA_Ashwood_display':
-            # Update to current code and make it fully orderable
+        
+        # Handle both old (VERA_Ashwood_display) and current (VERA_Ashwood_provisional) codes
+        if product.get('source_code') in ('VERA_Ashwood_display', 'VERA_Ashwood_provisional'):
+            # Always update to current code
             product['source_code'] = 'VERA_Ashwood_provisional'
             product['orderable'] = True
             product['scope'] = 'website_and_template'
-            product['description_zh'] = '官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。'
-            product['description_en'] = 'Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.'
+            product['published'] = True  # Ensure published stays true
+            product['description_zh'] = '官网展示系列。当前为占位价 1.00/m²，严禁报价给客户。'
+            product['description_en'] = 'Website collection. Current placeholder rate 1.00/m² must not be quoted to customers.'
             
-            # Copy Basswood's configuration schema if available and if Ashwood currently has none
-            if basswood_schema and not product.get('configuration_schema'):
-                product['configuration_schema'] = basswood_schema
+            # Always set the complete 11-field schema (idempotent repair)
+            product['configuration_schema'] = DELUXE_SCHEMA
+            
+            # Preserve these fields from the original row
+            # portal_only, sample, warranty_years, content_source, id stay unchanged
             
             c.execute('UPDATE products SET data=? WHERE id=?', (json.dumps(product, ensure_ascii=False), row['id']))
 
@@ -307,13 +407,38 @@ def register(app, s):
             # Synthesize provisional Ashwood rule from Basswood template
             basswood_rule = rules.get('Shutters_Basswood')
             if basswood_rule and 'VERA_Ashwood_provisional' not in rules:
+                # Use the canonical Deluxe schema for validation (stain colours 61-70)
+                DELUXE_SCHEMA_MINIMAL = [
+                    {
+                        'key': 'colour',
+                        'label_zh': '颜色',
+                        'label_en': 'Colour',
+                        'choices': [
+                            'Golden Oak 61', 'Fruitwood 62', 'Old Mahogany 63', 'Coffee Bean 64',
+                            'BlackWalnut 65', 'Light Ash 66', 'Limed 67', 'Natural 68',
+                            'Rustic Gray 69', 'Provence Blue 70'
+                        ],
+                        'required': False,  # Not required for provisional pricing
+                        'type': 'select'
+                    },
+                    {
+                        'key': 'louver_size',
+                        'label_zh': '叶片尺寸',
+                        'label_en': 'Louver size',
+                        'choices': ['63mm', '76mm', '89mm', '114mm'],
+                        'required': False,  # Not required for provisional pricing
+                        'type': 'select'
+                    }
+                ]
                 rules['VERA_Ashwood_provisional'] = {
                     **basswood_rule,
                     'source_code': 'VERA_Ashwood_provisional',
                     'rate_per_m2': '1.00',
                     'provisional': True,
                     'status': 'provisional_placeholder',
-                    'warnings': ['Placeholder price 1.00/m2 must not be quoted to customers']
+                    'warnings': ['Placeholder price 1.00/m² must not be quoted to customers'],
+                    'schema': DELUXE_SCHEMA_MINIMAL,  # Override with Deluxe schema
+                    'options': {}  # No pricing options for provisional
                 }
             
             if any(product_rows.get(l.product_id,{}).get('source_code') for l in body.lines):
@@ -564,37 +689,122 @@ def register(app, s):
                 c.execute('INSERT INTO products(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(pid,s.dump(p)))
             
             # Now handle Ashwood after all template products are processed
+            # Use the canonical 11-field Deluxe schema (stain colours 61-70, louver sizes 63/76/89/114mm)
+            DELUXE_SCHEMA = [
+                {
+                    'key': 'colour',
+                    'label_zh': '颜色',
+                    'label_en': 'Colour',
+                    'choices': [
+                        'Golden Oak 61', 'Fruitwood 62', 'Old Mahogany 63', 'Coffee Bean 64',
+                        'BlackWalnut 65', 'Light Ash 66', 'Limed 67', 'Natural 68',
+                        'Rustic Gray 69', 'Provence Blue 70'
+                    ],
+                    'required': True,
+                    'type': 'select'
+                },
+                {
+                    'key': 'frame',
+                    'label_zh': '框型',
+                    'label_en': 'Frame',
+                    'choices': [],
+                    'required': False,
+                    'type': 'select'
+                },
+                {
+                    'key': 'louver_size',
+                    'label_zh': '叶片尺寸',
+                    'label_en': 'Louver size',
+                    'choices': ['63mm', '76mm', '89mm', '114mm'],
+                    'required': True,
+                    'type': 'select'
+                },
+                {
+                    'key': 'control_rod',
+                    'label_zh': '控制杆',
+                    'label_en': 'Control rod',
+                    'choices': [],
+                    'required': False,
+                    'type': 'select'
+                },
+                {
+                    'key': 'opening_style',
+                    'label_zh': '开合方式',
+                    'label_en': 'Opening style',
+                    'choices': [],
+                    'required': False,
+                    'type': 'text'
+                },
+                {
+                    'key': 'layout_code',
+                    'label_zh': '布局代码',
+                    'label_en': 'Layout code',
+                    'choices': [],
+                    'required': False,
+                    'type': 'text'
+                },
+                {
+                    'key': 'vt_post',
+                    'label_zh': '竖柱',
+                    'label_en': 'Vertical post',
+                    'choices': [],
+                    'required': False,
+                    'type': 'text'
+                },
+                {
+                    'key': 'ht_post',
+                    'label_zh': '横柱',
+                    'label_en': 'Horizontal post',
+                    'choices': [],
+                    'required': False,
+                    'type': 'text'
+                },
+                {
+                    'key': 'midrail',
+                    'label_zh': '中横档',
+                    'label_en': 'Midrail',
+                    'choices': [],
+                    'required': False,
+                    'type': 'text'
+                },
+                {
+                    'key': 'fitting',
+                    'label_zh': '安装尺寸类型',
+                    'label_en': 'Fitting',
+                    'choices': [],
+                    'required': False,
+                    'type': 'select'
+                },
+                {
+                    'key': 'special_request',
+                    'label_zh': '特殊要求',
+                    'label_en': 'Special request',
+                    'choices': [],
+                    'required': False,
+                    'type': 'text'
+                }
+            ]
+            
             ash=next((p for p in existing.values() if p.get('source_code')=='VERA_Ashwood_provisional'),None)
             
-            # Get Basswood configuration from the JUST-UPDATED database
-            basswood_row = c.execute('SELECT data FROM products WHERE id IN (SELECT id FROM products)').fetchall()
-            basswood_data = None
-            for row in basswood_row:
-                prod = json.loads(row['data'])
-                if prod.get('source_code') == 'Shutters_Basswood':
-                    basswood_data = prod
-                    break
-            
-            config_schema = basswood_data.get('configuration_schema', []) if basswood_data else []
-            
             if not ash:
-                # Create new Ashwood product
+                # Create new Ashwood product with the canonical Deluxe schema
                 ash={'id':next_id,'source_code':'VERA_Ashwood_provisional','name_zh':'VERA Deluxe','name_en':'VERA Deluxe',
                      'material_zh':'Ashwood','material_en':'Ashwood','category':'shutters','sample':False,'published':True,
-                     'portal_only':False,'scope':'website_and_template','orderable':True,'configuration_schema':config_schema,
+                     'portal_only':False,'scope':'website_and_template','orderable':True,'configuration_schema':DELUXE_SCHEMA,
                      'warranty_years':10,'content_source':'https://verashading.com/products',
-                     'description_zh':'官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。',
-                     'description_en':'Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.', 
+                     'description_zh':'官网展示系列。当前为占位价 1.00/m²，严禁报价给客户。',
+                     'description_en':'Website collection. Current placeholder rate 1.00/m² must not be quoted to customers.', 
                      'image_urls':[]}
                 c.execute('INSERT INTO products(id,data) VALUES(?,?)',(next_id,s.dump(ash)))
             else:
-                # Update existing Ashwood to be orderable with configuration schema
+                # Update existing Ashwood with the canonical Deluxe schema
                 ash.update(
                     orderable=True, 
                     scope='website_and_template',
-                    configuration_schema=config_schema,
-                    description_zh='官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。',
-                    description_en='Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.'
+                    configuration_schema=DELUXE_SCHEMA,
+                    description_zh='官网展示系列。当前为占位价 1.00/m²，严禁报价给客户。',
+                    description_en='Website collection. Current placeholder rate 1.00/m² must not be quoted to customers.'
                 )
                 c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(ash),ash['id']))
             for pid,p in existing.items():
