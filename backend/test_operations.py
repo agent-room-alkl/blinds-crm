@@ -609,14 +609,43 @@ with tempfile.TemporaryDirectory() as folder:
     
     print('✓ Created template with Basswood pricing rule')
     
-    # Simulate a legacy database by inserting a product with the old source_code
+    # Simulate a legacy database by inserting products with the old source_code
+    # We need Basswood first so migration can copy its schema to Ashwood
     with s.db() as c:
         c.execute('BEGIN IMMEDIATE')
         # Find the next available product ID
         max_id = c.execute('SELECT MAX(id) FROM products').fetchone()[0] or 0
-        legacy_ash_id = max_id + 1
+        basswood_id = max_id + 1
+        legacy_ash_id = max_id + 2
         
-        # Insert a legacy Ashwood product with old source_code
+        # Insert Basswood product (so migration can copy its schema)
+        basswood_product = {
+            'id': basswood_id,
+            'source_code': 'Shutters_Basswood',
+            'name_zh': 'VERA Prime',
+            'name_en': 'VERA Prime',
+            'material_zh': 'Basswood',
+            'material_en': 'Basswood',
+            'category': 'shutters',
+            'sample': False,
+            'published': True,
+            'portal_only': False,
+            'scope': 'website_and_template',
+            'orderable': True,
+            'configuration_schema': basswood_rule['schema'],
+            'warranty_years': 10,
+            'description_zh': '按客户现用模板配置，规格与价格由服务端规则计算。',
+            'description_en': 'Configured from the current order workbook. Pricing is calculated by server rules.',
+            'image_urls': []
+        }
+        c.execute('INSERT INTO products(id, data) VALUES(?, ?)', (basswood_id, s.dump(basswood_product)))
+        
+        # Insert a REALISTIC legacy Ashwood product with old source_code
+        # This matches what was created in commit 45b8c70 before the rename:
+        #   - orderable=False (not available for ordering)
+        #   - scope='website_only' (display only, not for template orders)
+        #   - configuration_schema=[] (no configuration fields)
+        #   - old description mentioning ordering awaits price rules
         legacy_ash = {
             'id': legacy_ash_id,
             'source_code': 'VERA_Ashwood_display',
@@ -628,12 +657,13 @@ with tempfile.TemporaryDirectory() as folder:
             'sample': False,
             'published': True,
             'portal_only': False,
-            'scope': 'website_and_template',
-            'orderable': True,
-            'configuration_schema': basswood_rule['schema'],
+            'scope': 'website_only',  # KEY: was website_only, not website_and_template
+            'orderable': False,        # KEY: was not orderable
+            'configuration_schema': [], # KEY: empty schema
             'warranty_years': 10,
-            'description_zh': '官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。',
-            'description_en': 'Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.',
+            'content_source': 'https://verashading.com/products',
+            'description_zh': '官网展示系列。现用订单模板尚无此产品定价,待核对后开通订购。',
+            'description_en': 'Website collection. Ordering awaits a confirmed product rule in the order workbook.',
             'image_urls': []
         }
         c.execute('INSERT INTO products(id, data) VALUES(?, ?)', (legacy_ash_id, s.dump(legacy_ash)))
@@ -648,14 +678,26 @@ with tempfile.TemporaryDirectory() as folder:
     
     print('✓ Migration executed')
     
-    # Verify the product was upgraded
+    # Verify the product was fully upgraded by migration
     with s.db() as c:
         upgraded = c.execute('SELECT data FROM products WHERE id=?', (legacy_ash_id,)).fetchone()
         upgraded_data = json.loads(upgraded['data'])
         assert upgraded_data['source_code'] == 'VERA_Ashwood_provisional', \
             f"Expected source_code to be migrated to VERA_Ashwood_provisional, got {upgraded_data['source_code']}"
+        assert upgraded_data['orderable'] == True, \
+            f"Expected orderable=True after migration, got {upgraded_data['orderable']}"
+        assert upgraded_data['scope'] == 'website_and_template', \
+            f"Expected scope=website_and_template after migration, got {upgraded_data['scope']}"
+        assert len(upgraded_data['configuration_schema']) > 0, \
+            f"Expected configuration_schema to be copied from Basswood, got empty list"
+        assert upgraded_data['description_zh'] == '官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。', \
+            f"Expected updated description after migration"
     
-    print(f'✓ Product source_code migrated: VERA_Ashwood_display → VERA_Ashwood_provisional')
+    print(f'✓ Product fully migrated:')
+    print(f'  - source_code: VERA_Ashwood_display → VERA_Ashwood_provisional')
+    print(f'  - orderable: False → True')
+    print(f'  - scope: website_only → website_and_template')
+    print(f'  - configuration_schema: 0 fields → {len(upgraded_data["configuration_schema"])} fields (copied from Basswood)')
     
     # Test that the migrated product appears in portal catalog
     catalog_resp = portal_authed.get('/api/portal/catalog')

@@ -35,11 +35,34 @@ def migrate(c):
     ''')
     
     # Migrate legacy VERA_Ashwood_display to VERA_Ashwood_provisional
+    # On legacy DBs, Ashwood was created with orderable=False, scope=website_only, and empty configuration_schema
+    # This migration brings it up to the current state: orderable, website_and_template scope, and copies Basswood's schema
     import json
+    
+    # Find Basswood product to copy configuration from
+    basswood_row = c.execute(
+        "SELECT data FROM products WHERE json_extract(data, '$.source_code') = 'Shutters_Basswood'"
+    ).fetchone()
+    basswood_schema = []
+    if basswood_row:
+        basswood_data = json.loads(basswood_row['data'])
+        basswood_schema = basswood_data.get('configuration_schema', [])
+    
+    # Migrate any legacy Ashwood products
     for row in c.execute('SELECT id, data FROM products').fetchall():
         product = json.loads(row['data'])
         if product.get('source_code') == 'VERA_Ashwood_display':
+            # Update to current code and make it fully orderable
             product['source_code'] = 'VERA_Ashwood_provisional'
+            product['orderable'] = True
+            product['scope'] = 'website_and_template'
+            product['description_zh'] = '官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。'
+            product['description_en'] = 'Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.'
+            
+            # Copy Basswood's configuration schema if available and if Ashwood currently has none
+            if basswood_schema and not product.get('configuration_schema'):
+                product['configuration_schema'] = basswood_schema
+            
             c.execute('UPDATE products SET data=? WHERE id=?', (json.dumps(product, ensure_ascii=False), row['id']))
 
 
