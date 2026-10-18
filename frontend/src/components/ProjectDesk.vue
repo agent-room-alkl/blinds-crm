@@ -1211,4 +1211,13 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
   .order-list .filter-row { margin: 0; }
   .desk .mobile-project-picker button { justify-self: start; font-size: 12px; padding: 5px 10px; min-height: 32px; }
 }
+
+/* Keep navigation hover colors independent of primary action buttons. */
+.desk .section-tabs button:hover:not(:disabled),
+.desk .detail-tabs button:hover:not(:disabled) { background: #edf3ef; color: #234b37; border-color: transparent; }
+.desk .section-tabs button.active:hover:not(:disabled),
+.desk .detail-tabs button.active:hover:not(:disabled) { background: #dcebe1; color: #17432d; }
+.desk .order-pick:hover:not(:disabled) { color: #24342e; }
+.desk .list-pagination button:hover:not(:disabled) { background: #edf3ef; color: #234b37; border-color: #bfd1c5; }
+.desk .link-button:hover:not(:disabled) { background: #edf3ef; color: #17432d; }
 </style>
