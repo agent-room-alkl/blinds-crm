@@ -235,7 +235,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.crm { font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow-x: hidden; }
+.crm { font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow: visible; }
 .crm.is-signed { padding-left: 252px; }
 .desk-rail { position: fixed; inset: 0 auto 0 0; width: 228px; background: #1a2823; color: #e7eee9; padding: 24px 12px; display: flex; flex-direction: column; gap: 4px; }
 .rail-brand { font-size: 22px; letter-spacing: 0.16em; padding: 4px 12px 16px; }
@@ -278,8 +278,22 @@ th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1
 }
 @media (max-width: 390px) {
   .crm, .crm.is-signed { padding: 12px; }
-  .desk-rail { grid-template-columns: 1fr; gap: 2px; margin: -12px -12px 16px; }
+  .desk-rail { grid-template-columns: 1fr 1fr; gap: 2px; margin: -12px -12px 16px; }
   .crm-bar { min-height: 60px; margin-bottom: 16px; }
   .page-context h1 { font-size: 22px; }
 }
+
+.crm { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f3f6f4; font-size: 14px; line-height: 1.6; }
+.crm :deep(*) { box-sizing: border-box; }
+.crm :deep(h1), .crm :deep(h2), .crm :deep(h3), .crm :deep(h4) { font-family: inherit; letter-spacing: -.015em; }
+.crm :deep(button), .crm :deep(input), .crm :deep(select), .crm :deep(textarea) { font-family: inherit; }
+.crm-bar { min-height: 64px; align-items: center; margin-bottom: 24px; }
+.page-context h1 { font-size: 24px; font-weight: 650; }
+.desk-rail { width: 220px; padding: 28px 14px; background: #19392d; box-sizing: border-box; }
+.crm.is-signed { padding-left: 248px; }
+.desk-rail button { font-size: 14px; padding: 10px 12px; border-radius: 8px; }
+.desk-rail button.current { background: #315844; }
+.crm-bar button.secondary { font-size: 13px; min-height: 36px; padding: 6px 12px; }
+@media(max-width:800px) { .crm.is-signed { padding: 16px; } .desk-rail { width: auto; padding: 12px; gap: 4px; } .crm-bar { gap: 8px; } }
+@media(max-width:390px) { .crm.is-signed { padding: 12px; } .desk-rail button { font-size: 13px; min-height: 38px; } }
 </style>

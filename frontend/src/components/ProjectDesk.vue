@@ -137,7 +137,12 @@ const activeSection = ref("operations");
 const validFields = ["order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
 
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
+const listPage = ref(0);
+const mobileListOpen = ref(false);
+const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.length / 5)));
+const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 5, (Math.min(listPage.value, pageCount.value - 1) + 1) * 5));
 const selectedId = ref("");
+const detailSection = ref("fulfilment");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
 const editingProvider = ref<Provider | null>(null);
 const editProviderForm = reactive({
@@ -188,6 +193,17 @@ async function load() {
       batch[`${order.id}:${line.id}:installation_surcharge`] = Number(line.installation_surcharge ?? 0);
     }
   }
+}
+
+function orderStatus(value: string) {
+  const labels: Record<string, [string, string]> = {
+    pending_review: ["待审核", "Review pending"], accepted: ["已接收", "Accepted"],
+    deposit_unpaid: ["待收定金", "Deposit unpaid"], deposit_received: ["定金已收", "Deposit received"],
+    supplier_ordered: ["已向供应商下单", "Supplier ordered"], in_transit: ["运输中", "In transit"],
+    partially_arrived: ["部分到货", "Partly arrived"], arrived: ["已到货", "Arrived"],
+    partially_delivered: ["部分交付", "Partly delivered"], delivered: ["已交付", "Delivered"], paid: ["已结清", "Paid"],
+  };
+  return labels[value] ? tx(...labels[value]) : value;
 }
 
 function mailStatus(status: string) {
@@ -710,25 +726,34 @@ async function loadOrderProviders(orderId: string) {
     <p v-if="notice" class="success card" role="status">{{ notice }}</p>
 
     <div class="workspace-grid">
-      <aside class="card order-list">
-        <h3>{{ tx("项目列表", "Projects") }}</h3>
+      <aside class="card order-list" :class="{ 'mobile-expanded': mobileListOpen }">
+        <div class="list-heading"><h3>{{ tx("项目列表", "Projects") }}</h3><span>{{ visibleOrders.length }}</span></div>
         <label class="filter-row">{{ tx("筛选", "Filter") }}
-          <select v-model="statusFilter">
+          <select v-model="statusFilter" @change="listPage = 0">
             <option value="">{{ tx("全部", "All") }}</option>
-            <option v-for="status in [...new Set(orders.flatMap((order) => [order.status, order.payment_status]))]" :key="status" :value="status">{{ status }}</option>
+            <option v-for="status in [...new Set(orders.flatMap((order) => [order.status, order.payment_status]))]" :key="status" :value="status">{{ orderStatus(status) }}</option>
           </select>
         </label>
+        <div class="mobile-project-picker">
+          <label>{{ tx("当前项目", "Current project") }}<select :value="selectedOrder?.id" @change="selectedId = ($event.target as HTMLSelectElement).value"><option v-for="order in visibleOrders" :key="order.id" :value="order.id">{{ order.project_name }}</option></select></label>
+          <button type="button" class="secondary" @click="mobileListOpen = !mobileListOpen">{{ mobileListOpen ? tx("收起列表", "Collapse list") : tx("批量选择", "Select multiple") }}</button>
+        </div>
         <div class="order-scroll">
-          <div v-for="order in visibleOrders" :key="order.id" class="order-row">
+          <div v-for="order in pageOrders" :key="order.id" class="order-row">
             <label class="pick-mark">
               <input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
             </label>
-            <button type="button" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
+            <button type="button" :aria-pressed="selectedOrder?.id === order.id" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
               <strong>{{ order.project_name }}</strong>
               <span>{{ order.company }}</span>
-              <small>{{ order.status }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</small>
+              <small>{{ orderStatus(order.status) }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</small>
             </button>
           </div>
+        </div>
+        <div v-if="pageCount > 1" class="list-pagination">
+          <button type="button" :disabled="listPage <= 0" @click="listPage--" aria-label="Previous projects">←</button>
+          <span>{{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }}</span>
+          <button type="button" :disabled="listPage >= pageCount - 1" @click="listPage++" aria-label="Next projects">→</button>
         </div>
       </aside>
 
@@ -755,9 +780,9 @@ async function loadOrderProviders(orderId: string) {
                   <p class="company-name">{{ selectedOrder.company }}</p>
                 </div>
                 <div class="status-badges">
-                  <span class="badge">{{ selectedOrder.status }}</span>
-                  <span class="badge">{{ selectedOrder.payment_status }}</span>
-                  <span v-if="selectedOrder.arrival_status" class="badge">{{ selectedOrder.arrival_status }}</span>
+                  <span class="badge">{{ orderStatus(selectedOrder.status) }}</span>
+                  <span class="badge">{{ orderStatus(selectedOrder.payment_status) }}</span>
+                  <span v-if="selectedOrder.arrival_status" class="badge">{{ orderStatus(selectedOrder.arrival_status) }}</span>
                 </div>
               </header>
               <div class="order-meta">
@@ -765,7 +790,13 @@ async function loadOrderProviders(orderId: string) {
                 <p><strong>{{ tx("总价", "Total") }}:</strong> {{ selectedOrder.total ? `${selectedOrder.currency || ""} ${selectedOrder.total}` : tx("待计价", "Unpriced") }}</p>
                 <p v-if="selectedOrder.supplier_reference"><strong>{{ tx("供应商参考", "Supplier ref") }}:</strong> {{ selectedOrder.supplier_reference }}</p>
               </div>
-              <h3>{{ tx("产品明细", "Product lines") }}</h3>
+              <nav class="detail-tabs" aria-label="Project details">
+                <button type="button" :class="{active: detailSection === 'fulfilment'}" @click="detailSection = 'fulfilment'">{{ tx("明细与履约", "Lines & fulfilment") }}</button>
+                <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
+                <button v-if="selectedOrder.status === 'pending_review'" type="button" :class="{active: detailSection === 'adjustment'}" @click="detailSection = 'adjustment'">{{ tx("价格调整", "Adjustments") }}</button>
+                <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
+              </nav>
+<div v-show="detailSection === 'fulfilment'">              <h3>{{ tx("产品明细", "Product lines") }}</h3>
               <div class="table-scroll"><table>
                 <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "Arrival") }}</th><th>{{ tx("本批交付", "Delivery") }}</th></tr></thead>
                 <tbody>
@@ -783,7 +814,17 @@ async function loadOrderProviders(orderId: string) {
                 </tbody>
               </table></div>
 
-              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
+              <h3>{{ tx("订单操作", "Order actions") }}</h3>
+              <div class="actions">
+                <button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx("确认接收", "Accept review") }}</button>
+                <button type="button" class="secondary" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx("定金已收", "Deposit received") }}</button>
+                <label>{{ tx("供应商参考号", "Supplier ref") }}<input v-model="supplierRef[selectedOrder.id]" /></label>
+                <button type="button" class="secondary" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx("记录下单", "Record order") }}</button>
+                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
+                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
+              </div>
+
+</div><div v-show="detailSection === 'supplier'">              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
               <div class="provider-section">
                 <div class="form-row">
                   <label>{{ tx("选择供应商", "Select provider") }}
@@ -808,17 +849,7 @@ async function loadOrderProviders(orderId: string) {
                 </div>
               </div>
 
-              <h3>{{ tx("订单操作", "Order actions") }}</h3>
-              <div class="actions">
-                <button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx("确认接收", "Accept review") }}</button>
-                <button type="button" class="secondary" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx("定金已收", "Deposit received") }}</button>
-                <label>{{ tx("供应商参考号", "Supplier ref") }}<input v-model="supplierRef[selectedOrder.id]" /></label>
-                <button type="button" class="secondary" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx("记录下单", "Record order") }}</button>
-                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
-                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
-              </div>
-
-              <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
+</div><div v-show="detailSection === 'adjustment'">              <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
                 <h3>{{ tx("价格调整", "Price adjustment") }}</h3>
                 <div class="table-scroll"><table>
                   <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("折扣比例", "Discount") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Install surcharge") }}</th></tr></thead>
@@ -835,7 +866,7 @@ async function loadOrderProviders(orderId: string) {
                 <button type="button" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存员工调整", "Save adjustment") }}</button>
               </div>
 
-              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
+</div><div v-show="detailSection === 'invoices'">              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
                 <h3>{{ tx("发票", "Invoices") }}</h3>
                 <div v-for="invoice in selectedOrder.invoices" :key="invoice.id" class="invoice">
                   <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未收", "Unpaid") }}</label>
@@ -845,7 +876,7 @@ async function loadOrderProviders(orderId: string) {
                   </template>
                 </div>
               </div>
-            </article>
+<p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p></div>            </article>
           </section>
 
           <section v-if="activeSection === 'pricing'" class="card section-card">
@@ -1008,12 +1039,12 @@ async function loadOrderProviders(orderId: string) {
 .desk .card { padding: 16px; background: white; border: 1px solid #e1e6df; border-radius: 8px; }
 .alert { padding: 12px 16px; background: #fae8e1; color: #842b16; border-radius: 6px; margin-bottom: 12px; }
 .success { padding: 12px 16px; background: #e5efdd; color: #2d4a1e; border-radius: 6px; margin-bottom: 12px; }
-.workspace-grid { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: calc(100vh - 180px); min-width: 0; }
-.order-list { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 16px; max-height: calc(100vh - 200px); min-width: 0; }
+.workspace-grid { display: grid; grid-template-columns: 280px 1fr; gap: 24px; align-items: start; min-width: 0; }
+.order-list { display: flex; flex-direction: column; gap: 8px; position: static; min-width: 0; }
 .order-list h3 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
 .filter-row { font-size: 14px; margin-bottom: 8px; }
 .filter-row select { width: 100%; margin-top: 4px; }
-.order-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+.order-scroll { display: flex; flex-direction: column; gap: 4px; }
 .order-row { display: flex; gap: 6px; align-items: stretch; }
 .pick-mark { display: flex; align-items: center; padding: 0 4px; }
 .pick-mark input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
@@ -1021,17 +1052,17 @@ async function loadOrderProviders(orderId: string) {
 .order-pick:hover { border-color: #3d6b4f; background: #f9faf8; }
 .order-pick.current { border-color: #0f6e5c; background: #f4f8f2; box-shadow: 0 0 0 2px rgba(15, 110, 92, 0.1); }
 .order-pick strong { font-size: 15px; font-weight: 600; color: #1b2421; overflow-wrap: anywhere; word-break: break-word; }
-.order-pick span { font-size: 14px; color: #e7eee9; overflow-wrap: anywhere; word-break: break-word; }
+.order-pick span { font-size: 14px; color: #52615c; overflow-wrap: anywhere; word-break: break-word; }
 .order-pick.current span { color: #1b2421; }
-.order-pick small { font-size: 13px; color: #b8c5be; margin-top: 2px; overflow-wrap: anywhere; word-break: break-word; }
+.order-pick small { font-size: 13px; color: #52615c; margin-top: 2px; overflow-wrap: anywhere; word-break: break-word; }
 .order-pick.current small { color: #3d4a44; }
-.detail-panel { display: flex; flex-direction: column; min-height: 600px; min-width: 0; }
+.detail-panel { display: flex; flex-direction: column;  min-width: 0; }
 .section-tabs { display: flex; gap: 4px; padding: 8px; background: white; border: 1px solid #e1e6df; border-radius: 8px 8px 0 0; border-bottom: none; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; box-sizing: border-box; }
 .section-tabs button { padding: 10px 16px; border: none; background: transparent; color: #3d4a44; font-size: 14px; font-weight: 500; border-radius: 6px; cursor: pointer; transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
 .section-tabs button:hover { background: #f5f6f2; }
 .section-tabs button.active { background: #0f6e5c; color: white; }
 .section-content { flex: 1; min-width: 0; }
-.section-card { border-radius: 0 0 8px 8px; overflow-y: auto; max-height: calc(100vh - 280px); min-width: 0; box-sizing: border-box; }
+.section-card { border-radius: 0 0 8px 8px; overflow: visible; min-width: 0; box-sizing: border-box; }
 .order-detail h2 { font-size: 24px; margin: 0; }
 .order-detail h3 { font-size: 18px; font-weight: 600; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #e1e6df; }
 .order-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e1e6df; }
@@ -1093,9 +1124,9 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .mapping-display { display: grid; gap: 4px; margin-top: 8px; font-size: 13px; }
 .batch-actions { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
 .notification-item, .rebate-item { padding: 12px; background: #f9faf8; border-radius: 6px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-@media (max-width: 1199px) {
+@media (max-width: 1000px) {
   .workspace-grid { grid-template-columns: 1fr; }
-  .order-list { position: static; max-height: 320px; }
+  .order-list { position: static; max-height: none; }
   .section-card { max-height: none; }
 }
 @media (max-width: 760px) {
@@ -1107,7 +1138,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 @media (max-width: 390px) {
   .workspace-grid { gap: 12px; grid-template-columns: minmax(0, 1fr); }
   .desk .card { padding: 12px; min-width: 0; max-width: 100%; width: 100%; box-sizing: border-box; }
-  .order-list { max-height: 240px; min-width: 0; width: 100%; }
+  .order-list { max-height: none; min-width: 0; width: 100%; }
   .detail-panel { min-width: 0; width: 100%; }
   .section-tabs { padding: 6px; gap: 2px; min-width: 0; }
   .section-tabs button { padding: 8px 12px; font-size: 13px; }
@@ -1129,5 +1160,55 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
   .order-header { flex-wrap: wrap; }
   .order-meta { min-width: 0; }
   .table-scroll { min-width: 0; width: 100%; overflow-x: auto; }
+}
+
+/* Navigation rows are distinct from action buttons. */
+.desk { color: #24342e; font-size: 14px; line-height: 1.6; }
+.desk .card { border-color: #e0e7e3; border-radius: 12px; padding: 22px; box-shadow: 0 2px 8px #1a382b04; }
+.list-heading { display: flex; align-items: center; justify-content: space-between; }
+.list-heading h3 { margin: 0; font-size: 15px; }
+.list-heading > span { font-size: 12px; background: #eef3f0; padding: 2px 8px; border-radius: 20px; color: #52615c; }
+.desk .order-pick { background: transparent; border: 1px solid transparent; color: #24342e; padding: 12px; border-radius: 8px; gap: 3px; min-height: 0; box-shadow: none; }
+.desk .order-pick:hover:not(:disabled) { background: #f3f6f4; border-color: #e0e7e3; }
+.desk .order-pick.current { background: #edf5f1; border-color: #b8d7c9; box-shadow: inset 3px 0 #237356; }
+.desk .order-pick strong { font-size: 14px; line-height: 1.45; font-weight: 600; color: #203c30; }
+.desk .order-pick span, .desk .order-pick small { color: #53655d; font-size: 12px; line-height: 1.5; }
+.desk .pick-mark { display: flex; align-items: center; margin: 0; padding: 0 3px; }
+.desk .pick-mark input { width: 15px; height: 15px; min-height: 0; margin: 0; accent-color: #237356; }
+.desk .section-tabs { flex-wrap: wrap; overflow: visible; gap: 4px; border: 0; border-bottom: 1px solid #dce5df; background: transparent; padding: 0 0 12px; margin-bottom: 16px; border-radius: 0; }
+.desk .section-tabs button { background: transparent; color: #52615c; border: 0; padding: 8px 12px; min-height: 36px; border-radius: 7px; }
+.desk .section-tabs button.active { background: #e5f0e9; color: #17523a; font-weight: 600; }
+.desk button:focus-visible { outline: 2px solid #237356; outline-offset: 3px; }
+.desk .section-card { border-radius: 12px; max-height: none; }
+.desk .order-header { margin-bottom: 20px; padding-bottom: 20px; }
+.desk .order-detail h2 { font-size: 22px; line-height: 1.35; letter-spacing: -.02em; }
+.desk .order-detail h3 { font-size: 15px; margin: 24px 0 12px; border-bottom-width: 1px; }
+.desk .badge { padding: 4px 9px; border-radius: 20px; font-size: 12px; background: #eff4f1; }
+.desk .actions { gap: 8px; }
+.desk .form-row { gap: 12px; }
+.desk label { font-size: 13px; line-height: 1.5; }
+.desk input, .desk select, .desk textarea { background: #fff; min-height: 40px; border-color: #cdd9d1; border-radius: 7px; }
+.desk .provider-card, .desk .template-card { background: #f8faf9; padding: 18px; border-radius: 10px; }
+@media (max-width: 1000px) { .workspace-grid { grid-template-columns: minmax(0,1fr); } .order-scroll { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 600px) { .order-scroll { display: flex; } .desk .card { padding: 16px; } .desk .section-tabs { gap: 3px; } .desk .section-tabs button { padding: 7px 10px; font-size: 13px; } }
+
+.detail-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0; border-bottom: 1px solid #e0e7e3; padding-bottom: 12px; }
+.desk .detail-tabs button { background: transparent; color: #52615c; border: 0; padding: 7px 10px; min-height: 34px; font-size: 13px; }
+.desk .detail-tabs button.active { background: #edf5f1; color: #17523a; }
+.desk th { white-space: nowrap; font-size: 12px; }
+.desk td:first-child { min-width: 170px; }
+.desk .order-meta { grid-template-columns: 1fr auto; padding: 12px 0; border-bottom: 1px solid #edf1ee; }
+.desk .provider-section { border: 0; margin-top: 0; padding-top: 0; }
+@media(max-width:600px) { .desk .order-meta { grid-template-columns: 1fr; } }
+
+.list-pagination { display: flex; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid #edf1ee; margin-top: 8px; color: #52615c; font-size: 12px; }
+.desk .list-pagination button { background: #fff; color: #315844; border-color: #dce5df; padding: 4px 10px; min-height: 30px; }
+
+.mobile-project-picker { display: none; }
+@media(max-width:600px) {
+  .mobile-project-picker { display: grid; gap: 10px; }
+  .order-list:not(.mobile-expanded) .order-scroll, .order-list:not(.mobile-expanded) .list-pagination { display: none; }
+  .order-list .filter-row { margin: 0; }
+  .desk .mobile-project-picker button { justify-self: start; font-size: 12px; padding: 5px 10px; min-height: 32px; }
 }
 </style>
