@@ -407,4 +407,17 @@ button.primary:hover {
     display: none;
   }
 }
+
+.portal-layout,.portal-main{min-height:calc(100dvh - 64px)}
+.portal-content{min-width:0;max-width:none;padding:12px 16px 84px}
+@media(min-width:1024px){
+ .portal-main{grid-template-columns:192px minmax(0,1fr)}
+ .portal-sidebar{position:sticky;top:0;align-self:start;height:auto;overflow:visible;padding:16px 0}
+ .sidebar-header{padding:0 16px 12px;margin-bottom:8px}.sidebar-header h2{font-size:20px;margin:0 0 4px}
+ .sidebar-nav{flex:none;padding:0 8px}.nav-item{min-height:44px;padding:8px 10px;gap:8px;margin:0 0 2px}
+ .nav-item .nav-label{font-size:14px}.logout-btn{margin:12px 16px 0}.portal-content{padding:12px 20px}
+}
+@media(max-width:700px){.portal-layout,.portal-main{min-height:calc(100dvh - 60px)}.portal-content{padding:8px 12px 84px}}
+
+.portal-layout{flex:1;display:flex;flex-direction:column;min-height:0}.portal-main{flex:1;min-height:0;width:100%}@media(max-width:700px){.portal-layout,.portal-main{min-height:0}}
 </style>

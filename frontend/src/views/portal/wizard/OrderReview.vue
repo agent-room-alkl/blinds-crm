@@ -316,4 +316,8 @@ button.secondary:hover {
     width: 100%;
   }
 }
+
+.review-step{padding:0}.step-intro{margin:0 0 12px}.step-intro h2{margin:4px 0}.step-intro p{margin:4px 0;line-height:1.45}.section-label{margin-bottom:4px}.review-sections{gap:12px;display:grid}.review-card{padding:14px}.review-card h3{margin:0 0 10px}.review-card dd{margin-bottom:8px}.review-card input{min-height:44px;min-width:0;width:100%}.window-item{padding:10px}.window-item p{margin:4px 0}.terms-text{margin:0;padding:10px}.step-actions{padding-top:10px;margin-top:12px}.validation-alert{margin-top:12px;padding:12px}
+@media(min-width:900px){.review-sections{grid-template-columns:1fr 1fr;align-items:start}.review-card:last-child{grid-column:1/-1}}
+
 </style>

@@ -7,6 +7,7 @@ import SiteFooter from "./components/SiteFooter.vue";
 const { t, locale } = useI18n();
 const route = useRoute();
 const workbench = computed(() => route.path.startsWith("/crm"));
+const portalWorkspace = computed(() => route.path.startsWith("/portal"));
 const menuOpen = ref(false);
 const home = computed(() => route.path === '/');
 const scrolled = ref(false);
@@ -24,7 +25,7 @@ function toggleLocale() {
 </script>
 
 <template>
-  <div class="frame" :class="{ 'frame-work': workbench }">
+  <div class="frame" :class="{ 'frame-work': workbench, 'frame-portal': portalWorkspace }">
     <header v-if="!workbench" class="rail" :class="{'rail-home':home,'rail-solid':scrolled||menuOpen}" >
       <router-link to="/" class="mark">
         <span class="oval">{{ t("brand") }}</span>
@@ -45,7 +46,7 @@ function toggleLocale() {
       </button>
     </header>
     <router-view />
-    <SiteFooter v-if="!workbench" />
+    <SiteFooter v-if="!workbench && !portalWorkspace" />
 
   </div>
 </template>
@@ -64,4 +65,10 @@ function toggleLocale() {
 .rail,.rail-home,.rail-home:hover,.rail-home:has(:focus-visible),.rail-home.rail-solid{border-bottom:0}.nav a.router-link-active:not(.button){box-shadow:none}.nav-quote{background:transparent;border:0;color:inherit}
 .rail-home .oval{background:transparent;color:white;border-radius:0}.rail-home:hover .oval,.rail-home:has(:focus-visible) .oval,.rail-home.rail-solid .oval{background:transparent;color:var(--ink)}
 .rail-home:not(.rail-solid) .nav a,.rail-home:not(.rail-solid) .mark{text-shadow:0 1px 3px rgba(0,0,0,.6)}.rail-home:hover .nav a,.rail-home:has(:focus-visible) .nav a,.rail-home:hover .mark,.rail-home:has(:focus-visible) .mark{text-shadow:none}
+
+.frame-portal .rail{min-height:64px;padding:8px 24px;border-bottom:1px solid var(--line)}
+.frame-portal .rail .oval{font-size:24px}.frame-portal .rail .mark small{font-size:11px}
+@media(max-width:700px){.frame-portal .rail{min-height:60px;padding:6px 12px}}
+
+.frame-portal{padding:0;display:flex;flex-direction:column;min-height:100dvh}.frame-portal .rail{flex:none}
 </style>

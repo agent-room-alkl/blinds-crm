@@ -485,4 +485,7 @@ button.secondary:hover {
     width: 100%;
   }
 }
+
+.window-list-step{padding:0}.step-intro{margin-bottom:12px}.step-intro h2{margin:4px 0}.step-intro p{margin:4px 0;line-height:1.45}.section-label{margin-bottom:4px}.step-actions{margin-top:12px;padding-top:10px}.empty-state{padding:24px 16px}
+
 </style>

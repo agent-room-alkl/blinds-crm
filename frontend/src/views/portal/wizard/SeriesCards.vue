@@ -436,4 +436,14 @@ button.primary:hover:not(:disabled) {
     max-width: 100%;
   }
 }
+
+.series-step{padding:0}.step-intro{margin:0 0 12px}.step-intro h2{margin:4px 0;font-size:20px}.step-intro p{margin:4px 0;line-height:1.45}.section-label{margin:0 0 4px}
+.series-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:0 0 12px}.series-content{padding:14px;min-width:0}.series-title{font-size:15px;margin:0 0 6px;flex-direction:row;flex-wrap:wrap;gap:4px 8px;padding-right:20px}.series-material{font-size:12px}.series-tagline{margin:0 0 6px;font-size:13px}.series-positioning{margin:0 0 6px;font-size:13px;line-height:1.45}.series-tags{margin:0 0 8px;padding:4px 6px;font-size:12px}.series-meta{font-size:12px;gap:12px}.check-mark{top:8px;left:auto;right:8px;width:22px;height:22px;font-size:13px}.provisional-badge{position:static;align-self:flex-start;margin:8px 12px 0;padding:2px 6px;font-size:12px;color:#573600;background:#fff1ce}.series-image{max-height:80px}.other-products{display:flex;align-items:center;gap:12px;margin:0 0 12px}.other-products>.section-label{margin:0}.series-card-compact{min-width:240px;max-width:none}.series-card-compact .series-content{padding:8px 12px}.series-card-compact .series-title{margin-bottom:2px}.series-card-compact .series-positioning{margin:0}.step-actions{padding-top:10px;gap:8px}button.primary{min-height:44px;padding:8px 20px}
+@media(max-width:700px){.series-grid{grid-template-columns:1fr;gap:8px}.series-content{padding:12px}.other-products{display:block}.other-products>.section-label{margin-bottom:6px}.series-card-compact{width:100%;min-width:0}.step-intro p{font-size:13px}}
+
+.series-card{padding:0;align-items:stretch}.series-content{width:100%}.series-card-compact .series-content{padding:8px 12px}
+
+@media(max-width:700px){.series-grid .series-tagline,.series-grid .series-positioning,.series-grid .series-tags{display:none}.series-grid .series-title{margin-bottom:6px}.series-grid .series-content{padding:10px 12px}.series-grid{gap:6px}}
+
+@media(max-width:700px){.step-intro>.section-label,.step-intro>p:not(.section-label),.other-products>.section-label{display:none}.step-intro{margin-bottom:8px}.series-grid .series-content{padding:8px 12px}.other-products{margin-bottom:8px}}
 </style>

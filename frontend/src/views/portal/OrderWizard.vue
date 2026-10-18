@@ -269,4 +269,10 @@ if (portalSession.token) {
     width: 100%;
   }
 }
+
+.wizard{max-width:none;padding:0}
+.wizard-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 12px;padding:0 0 10px}
+.wizard-steps{gap:8px;margin:0;flex-wrap:wrap}.step-btn{padding:6px 12px;gap:6px}.save-indicator{margin:0;white-space:nowrap}
+@media(max-width:700px){.wizard-header{display:block}.wizard-steps{display:grid;grid-template-columns:1fr 1fr;gap:6px}.step-btn{width:100%;padding:6px 8px;justify-content:flex-start}.step-label{font-size:13px}.step-num{width:24px;height:24px;flex:none}.save-indicator{margin-top:6px;font-size:12px}}
+
 </style>
