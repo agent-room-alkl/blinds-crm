@@ -288,7 +288,20 @@ onMounted(() => {
 .login h1 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 0 0 8px; }
 .login p, .card p { font-size: var(--fs-body); line-height: var(--lh-body); }
 .crm label { display: block; margin: 14px 0; font-size: var(--fs-body); line-height: var(--lh-body); }
-.crm input, .crm select, .crm button, .crm option { line-height: var(--lh-body) !important; }
+.crm input, .crm select, .crm button { line-height: var(--lh-body); }
+.crm select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%2352615c' d='M4 6l4 4 4-4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.crm select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.crm option { line-height: var(--lh-body); }
 .crm input, .crm select { width: 100%; box-sizing: border-box; min-height: 44px; margin-top: 6px; padding: 8px 12px; font-size: var(--fs-body); border: 1px solid #d5ddd6; border-radius: 6px; }
 .password-form, .user-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; }
 .password-form label, .user-form label { margin: 0; }

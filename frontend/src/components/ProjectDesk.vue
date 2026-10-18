@@ -1045,7 +1045,20 @@ async function loadOrderProviders(orderId: string) {
   --fw-emphasis: 600;
   font-size: var(--fs-body); line-height: var(--lh-body); min-width: 0; max-width: 100%;
 }
-select { line-height: var(--lh-body) !important; }
+.desk select {
+  -webkit-appearance: none;
+  appearance: none;
+  line-height: var(--lh-body);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%2352615c' d='M4 6l4 4 4-4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.desk select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.desk option { line-height: var(--lh-body); }
 .desk .card { padding: 16px; background: white; border: 1px solid #e1e6df; border-radius: 8px; }
 .alert { padding: 12px 16px; background: #fae8e1; color: #842b16; border-radius: 6px; margin-bottom: 12px; }
 .success { padding: 12px 16px; background: #e5efdd; color: #2d4a1e; border-radius: 6px; margin-bottom: 12px; }
@@ -1097,7 +1110,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .form-row button { flex-shrink: 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-top: 12px; }
 .actions label { min-width: 200px; font-size: var(--fs-body); line-height: var(--lh-body); }
-.desk input, .desk select, .desk textarea, .desk button, .desk option { line-height: var(--lh-body) !important; }
+.desk input, .desk textarea, .desk button { line-height: var(--lh-body); }
 .desk input, .desk select, .desk textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d5ddd6; border-radius: 6px; font-size: var(--fs-body); font-family: inherit; min-width: 0; max-width: 100%; min-height: 44px; height: auto; }
 .desk button { min-height: 44px; padding: 10px 18px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; border-radius: 6px; font-size: var(--fs-body); font-weight: var(--fw-body); cursor: pointer; transition: all 0.2s; }
 .desk button:hover:not(:disabled) { background: #0d5a4a; border-color: #0d5a4a; }
@@ -1232,13 +1245,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
   .order-list .filter-row { margin: 0; }
   .desk .mobile-project-picker button { justify-self: start; font-size: var(--fs-meta); line-height: var(--lh-meta); padding: 11px 10px; min-height: 44px; font-weight: var(--fw-body); }
 }
-</style>
 
-<style>
-select { line-height: 1.55 !important; }
-</style>
-
-<style scoped>
 /* Keep navigation hover colors independent of primary action buttons. */
 .desk .section-tabs button:hover:not(:disabled),
 .desk .detail-tabs button:hover:not(:disabled) { background: #edf3ef; color: #234b37; border-color: transparent; }

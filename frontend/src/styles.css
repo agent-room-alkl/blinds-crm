@@ -19,8 +19,6 @@
 }
 
 * { box-sizing: border-box; }
-select { -webkit-appearance: none; appearance: none; line-height: 1.55 !important; }
-option { line-height: 1.55 !important; }
 
 body { margin: 0; background: var(--paper); }
 
