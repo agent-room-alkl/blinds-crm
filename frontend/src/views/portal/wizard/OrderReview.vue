@@ -73,11 +73,8 @@ function getProductName(productId: number) {
         <h3>{{ tx("窗户明细", "Window Details") }}</h3>
         <div class="window-summary">
           <div v-for="(window, index) in draft.windows" :key="window.id" class="window-item">
-            <strong>{{ index + 1 }}. {{ window.window_name }}</strong>
-            <p>{{ getProductName(window.product_id) }}</p>
-            <p>{{ window.width_mm }} × {{ window.height_mm }} mm · {{ tx("数量", "Qty") }} {{ window.quantity }} · {{ window.panel_count }} {{ tx("扇", "panels") }}</p>
-            <p v-if="window.options.colour"><strong>{{ tx("颜色", "Colour") }}:</strong> {{ window.options.colour }}</p>
-            <p v-if="window.options.louver_size"><strong>{{ tx("叶片", "Louver") }}:</strong> {{ window.options.louver_size }}</p>
+            <div class="summary-title"><strong>{{ index + 1 }}. {{ window.window_name }}</strong><span>{{ getProductName(window.product_id) }}</span></div>
+            <div class="summary-facts"><span>{{ window.width_mm }} × {{ window.height_mm }} mm</span><span>{{ tx("数量", "Qty") }} {{ window.quantity }} · {{ window.panel_count }} {{ tx("扇", "panels") }}</span><span v-if="window.options.colour">{{ window.options.colour }}</span><span v-if="window.options.louver_size">{{ window.options.louver_size }}</span><span v-if="window.options.fitting">{{ window.options.fitting }}</span></div>
           </div>
         </div>
       </div>
@@ -320,4 +317,10 @@ button.secondary:hover {
 .review-step{padding:0}.step-intro{margin:0 0 12px}.step-intro h2{margin:4px 0}.step-intro p{margin:4px 0;line-height:1.45}.section-label{margin-bottom:4px}.review-sections{gap:12px;display:grid}.review-card{padding:14px}.review-card h3{margin:0 0 10px}.review-card dd{margin-bottom:8px}.review-card input{min-height:44px;min-width:0;width:100%}.window-item{padding:10px}.window-item p{margin:4px 0}.terms-text{margin:0;padding:10px}.step-actions{padding-top:10px;margin-top:12px}.validation-alert{margin-top:12px;padding:12px}
 @media(min-width:900px){.review-sections{grid-template-columns:1fr 1fr;align-items:start}.review-card:last-child{grid-column:1/-1}}
 
+
+.window-summary{display:grid;gap:6px}.window-item{padding:8px 10px;margin:0}.summary-title{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:14px}.summary-title>span{font-size:12px;color:#56645d}.summary-facts{display:flex;flex-wrap:wrap;gap:2px 10px;font-size:12px;line-height:1.4;margin-top:4px}.summary-facts span{overflow-wrap:anywhere}.step-actions{position:sticky;bottom:0;z-index:10;background:#faf9f6;padding:8px 0;border-top:1px solid var(--line);min-height:60px}.review-card dl{margin:0}.review-card dd:last-child{margin-bottom:0}
+@media(max-width:1023px){.step-actions{bottom:76px}.summary-title{flex-wrap:wrap}}
+
+.summary-title strong{margin:0;font-size:14px;line-height:20px}.summary-title>span{line-height:20px}
+@media(min-width:900px){.review-card:nth-child(1){grid-column:1;grid-row:1}.review-card:nth-child(2){grid-column:2;grid-row:1/3}.review-card:last-child{grid-column:1;grid-row:2}.review-sections{grid-template-rows:auto 1fr}.window-item{display:grid;grid-template-columns:minmax(100px,.6fr) minmax(0,1.4fr);gap:8px}.summary-title{display:block}.summary-title strong,.summary-title>span{display:block}.summary-facts{margin:0;align-content:center}}
 </style>
