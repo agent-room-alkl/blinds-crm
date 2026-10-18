@@ -33,6 +33,14 @@ def migrate(c):
     CREATE TABLE IF NOT EXISTS provider_templates(id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id INTEGER REFERENCES providers(id),name TEXT NOT NULL,sheet_name TEXT NOT NULL,column_mappings TEXT NOT NULL,active INTEGER DEFAULT 1,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS order_providers(id INTEGER PRIMARY KEY AUTOINCREMENT,order_id TEXT NOT NULL,provider_id INTEGER REFERENCES providers(id),template_id INTEGER,is_preferred INTEGER DEFAULT 0,assigned_at TEXT NOT NULL);
     ''')
+    
+    # Migrate legacy VERA_Ashwood_display to VERA_Ashwood_provisional
+    import json
+    for row in c.execute('SELECT id, data FROM products').fetchall():
+        product = json.loads(row['data'])
+        if product.get('source_code') == 'VERA_Ashwood_display':
+            product['source_code'] = 'VERA_Ashwood_provisional'
+            c.execute('UPDATE products SET data=? WHERE id=?', (json.dumps(product, ensure_ascii=False), row['id']))
 
 
 class Input(BaseModel):
@@ -620,7 +628,8 @@ def register(app, s):
                 'Shutters_PVC',                # VERA Classic
                 'Shutters_Pinewood',           # VERA Natural
                 'Shutters_Basswood',           # VERA Prime
-                'VERA_Ashwood_provisional',    # VERA Deluxe
+                'VERA_Ashwood_provisional',    # VERA Deluxe (current)
+                'VERA_Ashwood_display',        # VERA Deluxe (legacy, migrated at startup)
                 'Shutters_Aluminium'           # VERA Aluminium (login required)
             ]
             orderable_products = [

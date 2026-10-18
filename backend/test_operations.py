@@ -1,5 +1,6 @@
 """Isolated requirements checks. No real SMTP, AI, or production database calls."""
 import os
+import json
 import tempfile
 from unittest.mock import patch
 
@@ -565,4 +566,158 @@ with tempfile.TemporaryDirectory() as folder:
     print(f'✓ Price endpoint rejected blind product: {resp.status_code} - {resp.json()["detail"]}')
     
     print('\nPASS T-13: Portal catalog allowlist excludes all blind products even if published=True and orderable=True')
+
+    # T-13 Legacy DB regression: Test that VERA_Ashwood_display products are migrated and work
+    print('\n--- T-13 Legacy DB: Migration of VERA_Ashwood_display to VERA_Ashwood_provisional ---')
+    
+    # First, create a template with Basswood pricing (needed for provisional Ashwood synthesis)
+    basswood_rule = {
+        'source_code': 'Shutters_Basswood',
+        'status': 'configured',
+        'rate_per_m2': '250.00',
+        'minimum_area': '0.5',
+        'formula': 'excel_shutter',
+        'kind': 'shutter',
+        'installation_rate': '50.00',
+        'options': {
+            'colour': {'White TEST': {'fixed': '0', 'percent': '0'}},
+            'fitting': {'In Fit': {'fixed': '0', 'percent': '0'}},
+            'opening_style': {'Hinged': {'fixed': '0', 'percent': '0'}}
+        },
+        'schema': [
+            {'key': 'colour', 'label_en': 'Colour', 'label_zh': '颜色', 'required': True, 'type': 'select', 'choices': ['White TEST']},
+            {'key': 'fitting', 'label_en': 'Fitting', 'label_zh': '安装方式', 'required': True, 'type': 'select', 'choices': ['In Fit']},
+            {'key': 'opening_style', 'label_en': 'Opening Style', 'label_zh': '开启方式', 'required': True, 'type': 'select', 'choices': ['Hinged']}
+        ]
+    }
+    
+    template_legacy = {
+        'id': 'template:legacy-test',
+        'version': 'legacy-v1',
+        'products': [basswood_rule],
+        'tax_rate': '0.15',
+        'minimum_installation': '0',
+        'discounts': []
+    }
+    
+    with s.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        c.execute('INSERT OR REPLACE INTO operations_records(id, kind, customer_id, data) VALUES(?, ?, ?, ?)', 
+                  ('template:legacy-test', 'template', None, s.dump(template_legacy)))
+        c.execute('INSERT OR REPLACE INTO operations_records(id, kind, customer_id, data) VALUES(?, ?, ?, ?)', 
+                  ('template-current', 'system', None, s.dump({'template_id': 'template:legacy-test'})))
+    
+    print('✓ Created template with Basswood pricing rule')
+    
+    # Simulate a legacy database by inserting a product with the old source_code
+    with s.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        # Find the next available product ID
+        max_id = c.execute('SELECT MAX(id) FROM products').fetchone()[0] or 0
+        legacy_ash_id = max_id + 1
+        
+        # Insert a legacy Ashwood product with old source_code
+        legacy_ash = {
+            'id': legacy_ash_id,
+            'source_code': 'VERA_Ashwood_display',
+            'name_zh': 'VERA Deluxe',
+            'name_en': 'VERA Deluxe',
+            'material_zh': 'Ashwood',
+            'material_en': 'Ashwood',
+            'category': 'shutters',
+            'sample': False,
+            'published': True,
+            'portal_only': False,
+            'scope': 'website_and_template',
+            'orderable': True,
+            'configuration_schema': basswood_rule['schema'],
+            'warranty_years': 10,
+            'description_zh': '官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。',
+            'description_en': 'Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.',
+            'image_urls': []
+        }
+        c.execute('INSERT INTO products(id, data) VALUES(?, ?)', (legacy_ash_id, s.dump(legacy_ash)))
+    
+    print(f'✓ Inserted legacy product with source_code=VERA_Ashwood_display (id={legacy_ash_id})')
+    
+    # Re-run migration to test the upgrade
+    with s.db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        from operations import migrate
+        migrate(c)
+    
+    print('✓ Migration executed')
+    
+    # Verify the product was upgraded
+    with s.db() as c:
+        upgraded = c.execute('SELECT data FROM products WHERE id=?', (legacy_ash_id,)).fetchone()
+        upgraded_data = json.loads(upgraded['data'])
+        assert upgraded_data['source_code'] == 'VERA_Ashwood_provisional', \
+            f"Expected source_code to be migrated to VERA_Ashwood_provisional, got {upgraded_data['source_code']}"
+    
+    print(f'✓ Product source_code migrated: VERA_Ashwood_display → VERA_Ashwood_provisional')
+    
+    # Test that the migrated product appears in portal catalog
+    catalog_resp = portal_authed.get('/api/portal/catalog')
+    assert catalog_resp.status_code == 200, f'Catalog request failed: {catalog_resp.status_code}'
+    catalog_products = catalog_resp.json()['products']
+    
+    # Count website series (excluding Shutters_Aluminium which is login-only special case)
+    website_series = [p for p in catalog_products if p.get('source_code') in [
+        'Shutters_PVC_Eco', 'Shutters_PVC', 'Shutters_Pinewood', 
+        'Shutters_Basswood', 'VERA_Ashwood_provisional'
+    ]]
+    
+    ashwood_in_catalog = any(p.get('source_code') == 'VERA_Ashwood_provisional' for p in catalog_products)
+    assert ashwood_in_catalog, 'Migrated Ashwood product should appear in portal catalog'
+    
+    print(f'✓ Portal catalog includes migrated Ashwood:')
+    print(f'  - Total products: {len(catalog_products)}')
+    print(f'  - Website series: {len(website_series)}')
+    for p in catalog_products:
+        if p.get('source_code') in ['VERA_Ashwood_provisional', 'Shutters_Aluminium']:
+            print(f'    • {p["name_en"]} ({p.get("source_code")})')
+    
+    # Test pricing with the migrated product
+    ash_price_order = {
+        'project_name': 'Ashwood legacy test',
+        'site_address': 'Test address',
+        'submission_key': 'ashwood-legacy-001',
+        'installation_required': False,
+        'lines': [{
+            'window_name': 'Test window',
+            'product_id': legacy_ash_id,
+            'width_mm': 1000,
+            'height_mm': 1500,
+            'quantity': 1,
+            'panel_count': 2,
+            'options': {'colour': 'White TEST', 'fitting': 'In Fit', 'opening_style': 'Hinged'}
+        }]
+    }
+    
+    price_resp = portal_authed.post('/api/portal/price', json=ash_price_order)
+    assert price_resp.status_code == 200, f'Price request failed: {price_resp.status_code} - {price_resp.text}'
+    price_data = price_resp.json()
+    
+    # Verify it's marked as provisional pricing
+    assert price_data['pricing_status'] == 'provisional', \
+        f"Expected provisional pricing status, got {price_data['pricing_status']}"
+    assert any(l['pricing_status'] == 'provisional' for l in price_data['lines']), \
+        'At least one line should have provisional pricing status'
+    
+    print(f'✓ Pricing works for migrated Ashwood:')
+    print(f'  - Total: {price_data["total"]} {price_data["currency"]}')
+    print(f'  - Pricing status: {price_data["pricing_status"]}')
+    print(f'  - Line pricing status: {price_data["lines"][0]["pricing_status"]}')
+    
+    # Test that an order can be submitted with provisional pricing
+    order_resp = portal_authed.post('/api/portal/orders', json=ash_price_order)
+    assert order_resp.status_code == 200, f'Order submission failed: {order_resp.status_code} - {order_resp.text}'
+    order_data = order_resp.json()
+    
+    assert order_data['pricing_status'] == 'provisional', \
+        f"Order should preserve provisional pricing status"
+    print(f'✓ Order submission works with provisional pricing (order status: {order_data["pricing_status"]})')
+    
+    print('\nPASS T-13 Legacy DB: VERA_Ashwood_display products are migrated to VERA_Ashwood_provisional and work correctly')
 
