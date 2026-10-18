@@ -268,6 +268,7 @@ onMounted(() => {
 .crm.is-signed { padding-left: 252px; }
 .desk-rail { position: fixed; inset: 0 auto 0 0; width: 228px; background: #1a2823; color: #e7eee9; padding: 24px 12px; display: flex; flex-direction: column; gap: 4px; }
 .rail-brand { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); letter-spacing: 0.16em; padding: 4px 12px 16px; }
+.crm h1, .crm h2, .crm h3, .crm h4, .crm h5, .crm h6 { font-weight: var(--fw-emphasis); }
 .desk-rail button { display: flex; align-items: center; gap: 10px; min-height: 44px; border: 0; background: transparent; color: #e7eee9; padding: 10px 12px; text-align: left; font-size: var(--fs-heading); line-height: var(--lh-heading); font-weight: var(--fw-body); border-radius: 6px; transition: background 0.2s; }
 .desk-rail button:hover { background: rgba(255,255,255,0.08); }
 .desk-rail button:focus-visible { outline: 2px solid #0f6e5c; outline-offset: 2px; }
@@ -278,7 +279,7 @@ onMounted(() => {
 .user-meta small { display: block; font-size: var(--fs-meta); line-height: var(--lh-meta); opacity: 0.75; margin-top: 2px; }
 .crm-bar { display: flex; align-items: flex-end; gap: 12px; min-height: 72px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #e1e6df; }
 .page-context { margin-right: auto; }
-.page-context span { font-size: var(--fs-meta); line-height: var(--lh-meta); letter-spacing: 0.14em; color: #6d7c72; }
+.page-context span { font-size: var(--fs-meta); line-height: var(--lh-meta); letter-spacing: 0.14em; color: #5d6b64; }
 .page-context h1 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 6px 0 0; }
 .crm-bar button, .login button, .password-form button, .user-form button { min-height: 44px; font-size: var(--fs-body); line-height: var(--lh-body); padding: 8px 14px; border-radius: 6px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; font-weight: var(--fw-body); }
 .crm-bar button.secondary { background: white; color: #24342c; border-color: #d5ddd6; }
@@ -287,7 +288,8 @@ onMounted(() => {
 .login h1 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 0 0 8px; }
 .login p, .card p { font-size: var(--fs-body); line-height: var(--lh-body); }
 .crm label { display: block; margin: 14px 0; font-size: var(--fs-body); line-height: var(--lh-body); }
-.crm input, .crm select { width: 100%; box-sizing: border-box; min-height: 44px; margin-top: 6px; padding: 8px 12px; font-size: var(--fs-body); line-height: var(--lh-body); border: 1px solid #d5ddd6; border-radius: 6px; }
+.crm input, .crm select, .crm button, .crm option { line-height: var(--lh-body) !important; }
+.crm input, .crm select { width: 100%; box-sizing: border-box; min-height: 44px; margin-top: 6px; padding: 8px 12px; font-size: var(--fs-body); border: 1px solid #d5ddd6; border-radius: 6px; }
 .password-form, .user-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; }
 .password-form label, .user-form label { margin: 0; }
 .settings-layout { display: grid; gap: 24px; }
@@ -295,6 +297,7 @@ onMounted(() => {
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; font-size: var(--fs-body); line-height: var(--lh-body); padding: 12px 10px; border-bottom: 1px solid #e1e6df; }
+th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 .alert { padding: 12px 16px; background: #fae8e1; color: #842b16; }
 .success { padding: 12px 16px; background: #e5efdd; }
 @media (max-width: 800px) {
