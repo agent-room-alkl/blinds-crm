@@ -263,7 +263,7 @@ onMounted(() => {
   --fs-meta: 12px; --lh-meta: 1.5;
   --fw-body: 400;
   --fw-emphasis: 600;
-  font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow: visible;
+  font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); font-size: var(--fs-body); line-height: var(--lh-body); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow: visible;
 }
 .crm.is-signed { padding-left: 252px; }
 .desk-rail { position: fixed; inset: 0 auto 0 0; width: 228px; background: #1a2823; color: #e7eee9; padding: 24px 12px; display: flex; flex-direction: column; gap: 4px; }

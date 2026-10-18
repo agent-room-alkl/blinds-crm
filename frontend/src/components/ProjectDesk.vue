@@ -1072,8 +1072,8 @@ async function loadOrderProviders(orderId: string) {
 .section-tabs button.active { background: #0f6e5c; color: white; }
 .section-content { flex: 1; min-width: 0; }
 .section-card { border-radius: 0 0 8px 8px; overflow: visible; min-width: 0; box-sizing: border-box; }
-.order-detail h2 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 0; }
-.order-detail h3 { font-size: var(--fs-title); line-height: var(--lh-title); font-weight: var(--fw-emphasis); margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #e1e6df; }
+.order-detail h2, .section-card h2 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 0; }
+.order-detail h3, .section-card h3 { font-size: var(--fs-title); line-height: var(--lh-title); font-weight: var(--fw-emphasis); margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #e1e6df; }
 .order-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e1e6df; }
 .company-name { font-size: var(--fs-heading); line-height: var(--lh-heading); color: #5d6b64; margin: 6px 0 0; }
 .status-badges { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1215,8 +1215,8 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk button:focus-visible { outline: 2px solid #237356; outline-offset: 3px; }
 .desk .section-card { border-radius: 12px; max-height: none; }
 .desk .order-header { margin-bottom: 20px; padding-bottom: 20px; }
-.desk .order-detail h2 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); letter-spacing: -.02em; }
-.desk .order-detail h3 { font-size: var(--fs-title); line-height: var(--lh-title); font-weight: var(--fw-emphasis); margin: 24px 0 12px; border-bottom-width: 1px; }
+.desk .order-detail h2, .desk .section-card h2 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); letter-spacing: -.02em; }
+.desk .order-detail h3, .desk .section-card h3 { font-size: var(--fs-title); line-height: var(--lh-title); font-weight: var(--fw-emphasis); margin: 24px 0 12px; border-bottom-width: 1px; }
 .desk .badge { padding: 4px 9px; border-radius: 20px; font-size: var(--fs-meta); line-height: var(--lh-meta); background: #eff4f1; }
 .desk .actions { gap: 8px; }
 .desk .form-row { gap: 12px; }
