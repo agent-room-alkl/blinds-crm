@@ -22,7 +22,15 @@ const products = ref<ApiProduct[]>([]);
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
 const accountMenu = ref<HTMLDetailsElement>();
-function closeAccountMenu() { if (accountMenu.value) accountMenu.value.open = false; }
+function closeAccountMenu() { 
+  if (accountMenu.value) {
+    accountMenu.value.open = false;
+    const summary = accountMenu.value.querySelector('summary');
+    if (summary && document.activeElement && accountMenu.value.contains(document.activeElement)) {
+      summary.focus();
+    }
+  }
+}
 function dismissAccountMenu(event: PointerEvent) {
   if (event.target instanceof Node && !accountMenu.value?.contains(event.target)) closeAccountMenu();
 }
@@ -321,7 +329,7 @@ th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1
 .account-dropdown { position: absolute; right: 0; top: 43px; z-index: 30; width: 196px; border: 1px solid #dce5df; border-radius: 10px; padding: 6px; background: white; box-shadow: 0 8px 32px #17382b1a; }
 .account-identity { padding: 9px 10px; margin-bottom: 4px; border-bottom: 1px solid #edf1ee; }
 .account-identity strong, .account-identity small { display: block; font-size: 13px; }
-.account-identity small { color: #718079; font-size: 12px; }
+.account-identity small { color: #5d6b64; font-size: 12px; }
 .crm .account-dropdown button { width: 100%; display: block; text-align: left; background: white; color: #31483b; border: 0; border-radius: 6px; font-size: 13px; padding: 8px 10px; min-height: 36px; }
 .crm .account-dropdown button:hover { background: #edf5f1; }
 @media(max-width:600px) { .crm .crm-bar { margin-bottom: 12px; } }
