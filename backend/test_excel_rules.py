@@ -75,6 +75,20 @@ with tempfile.TemporaryDirectory() as folder:
     
     # Portal catalog only shows published products (so 5 shutters + Ashwood, not the 18 inactive blinds)
     assert len(after) == 6, f'Expected 6 published products in portal catalog (5 series + Ashwood), got {len(after)}'
+    
+    # Critical: Verify none of the blind products appear in portal catalog
+    # This must hold even if blind products were accidentally made published/orderable
+    portal_product_codes = {p.get('source_code') for p in after if p.get('source_code')}
+    blind_product_codes = {p.get('source_code') for p in inactive_blinds if p.get('source_code')}
+    blinds_in_portal = portal_product_codes & blind_product_codes
+    assert len(blinds_in_portal) == 0, f'Portal catalog must not contain blind products, but found: {blinds_in_portal}'
+    
+    # Verify portal catalog contains only the expected shutter series
+    expected_codes = {'Shutters_PVC', 'Shutters_PVC_Eco', 'Shutters_Pinewood', 'Shutters_Basswood', 'Shutters_Aluminium', 'VERA_Ashwood_provisional'}
+    assert portal_product_codes == expected_codes, f'Expected {expected_codes}, got {portal_product_codes}'
+    print(f'\n✓ Portal catalog correctly excludes all {len(blind_product_codes)} blind products')
+    print(f'  Only 6 shutter series visible: {", ".join(sorted(portal_product_codes))}')
+    
     assert all('matrix' not in str(p.get('price_rule',{})) for p in after if p.get('source_code','').startswith('Shutters'))
     assert all('rate_per_m2' not in (p.get('price_rule') or {}) and 'matrix' not in (p.get('price_rule') or {}) for p in after)
     p=next(p for p in after if p['source_code']=='Shutters_PVC')

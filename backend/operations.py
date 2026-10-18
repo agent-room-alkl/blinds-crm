@@ -608,7 +608,14 @@ def register(app, s):
                         'version': template['version']
                     }
             
-            return {'products': [{**p, 'price_rule': imported.get(p.get('source_code')) or prices.get(p['id'])} for p in products if p['published']],
+            # Filter: only published products, exclude blind products (category='blinds' with orderable=False)
+            # Keep 5 website series + Shutters Aluminium (orderable after login)
+            orderable_products = [
+                {**p, 'price_rule': imported.get(p.get('source_code')) or prices.get(p['id'])}
+                for p in products
+                if p['published'] and not (p.get('category') == 'blinds' and not p.get('orderable', True))
+            ]
+            return {'products': orderable_products,
                     'pricing_status': 'configured' if prices or imported else 'rules_required'}
 
     @app.post('/api/portal/price')

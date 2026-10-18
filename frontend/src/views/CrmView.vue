@@ -40,7 +40,7 @@ const passwordForm = reactive({ current: "", next: "", confirm: "" });
 const users = ref<{ username: string; name: string; role: string; active: number }[]>([]);
 const newUser = reactive({ username: "", name: "", password: "", role: "staff" });
 const nav = computed(() => [
-  { key: "projects", label: tx("项目订单", "Project orders") },
+  { key: "projects", label: tx("订单", "Orders") },
   { key: "customers", label: tx("客户资料", "Customers") },
   { key: "dashboard", label: tx("分析看板", "Dashboard") },
   { key: "products", label: tx("产品目录", "Product catalogue") },
@@ -152,7 +152,7 @@ onMounted(() => {
       <div class="rail-brand">VERA</div>
       <button type="button" :class="{ current: tab === 'projects' }" @click="openTab('projects')">
         <FolderKanban :size="20" aria-hidden="true" />
-        {{ tx("项目订单", "Project orders") }}
+        {{ tx("订单", "Orders") }}
       </button>
       <button type="button" :class="{ current: tab === 'customers' }" @click="openTab('customers')">
         <Users :size="20" aria-hidden="true" />

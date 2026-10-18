@@ -87,7 +87,7 @@ async function save() {
     </form>
     <section v-if="usage">
       <h3>{{ tx("这家公司的订单、发票和返利", "This company’s orders, invoices and rebates") }}</h3>
-      <p v-if="usage.unpriced_orders">{{ tx(`有 ${usage.unpriced_orders} 个项目还没有确认价格。`, `${usage.unpriced_orders} projects have no confirmed price.`) }}</p>
+      <p v-if="usage.unpriced_orders">{{ tx(`有 ${usage.unpriced_orders} 个订单还没有确认价格。`, `${usage.unpriced_orders} orders have no confirmed price.`) }}</p>
       <p v-for="(money, currency) in usage.summary || {}" :key="currency">{{ currency }} · {{ tx("已下单", "Ordered") }} {{ money.ordered || "—" }} · {{ tx("已开票", "Invoiced") }} {{ money.invoiced || "—" }} · {{ tx("已收", "Received") }} {{ money.received || "—" }} · {{ tx("已开票未收", "Invoiced outstanding") }} {{ money.outstanding_invoiced || "—" }}</p>
       <p v-for="order in usage.orders" :key="order.id">{{ order.project_name || order.id }} · {{ order.status || "" }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("合计待配置", "Total not configured") }}</p>
       <p v-for="invoice in usage.invoices" :key="invoice.id">{{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ invoice.status || "—" }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</p>

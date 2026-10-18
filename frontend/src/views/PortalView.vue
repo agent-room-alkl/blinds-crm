@@ -233,7 +233,7 @@ async function submitOrder() {
     const saved = await portalRequest<PortalOrder>("orders", payload.value);
     notice.value = saved.total
       ? tx(`已提交待审核。合计 ${saved.currency || ""} ${saved.total}。提交没有生成发票。`, `Submitted for review. Total ${saved.currency || ""} ${saved.total}. Submission did not create an invoice.`)
-      : tx("已保存为待审核项目。价格规则未配置，合计为空，不能当作报价，也不会生成发票。", "Saved as a project awaiting review. Pricing rules are not configured, so the total is empty. This is not a quotation and no invoice was created.");
+      : tx("已保存为待审核订单。价格规则未配置，合计为空，不能当作报价，也不会生成发票。", "Saved as an order awaiting review. Pricing rules are not configured, so the total is empty. This is not a quotation and no invoice was created.");
     submissionKey.value = crypto.randomUUID();
     project.project_name = "";
     project.site_address = "";
@@ -263,8 +263,8 @@ function messageOf(cause: unknown) {
   <main class="portal">
     <header class="portal-head">
       <p class="section-label">{{ tx("客户门户", "CUSTOMER PORTAL") }}</p>
-      <h1>{{ tx("配置项目，提交待审核。", "Configure a project, then submit it for review.") }}</h1>
-      <p>{{ tx("一个客户一个登录、一个联系人。公司地址和本单施工地址分开。没有确认价格表时可以保存项目，但合计为空，不能当作报价。", "One customer, one login, one contact. The company address and this order’s site address stay separate. A project can be saved without a confirmed price list, but its total stays empty and is not a quotation.") }}</p>
+      <h1>{{ tx("配置订单，提交待审核。", "Configure a project, then submit it for review.") }}</h1>
+      <p>{{ tx("一个客户一个登录、一个联系人。公司地址和本单施工地址分开。没有确认价格表时可以保存订单，但合计为空，不能当作报价。", "One customer, one login, one contact. The company address and this order’s site address stay separate. A project can be saved without a confirmed price list, but its total stays empty and is not a quotation.") }}</p>
     </header>
 
     <section v-if="!profile" class="card login">
@@ -294,12 +294,15 @@ function messageOf(cause: unknown) {
       <p v-if="pricingStatus === 'rules_required'" class="rule-note">{{ tx("价格规则待配置。试算会拒绝，提交后的合计保持为空。", "Pricing rules are not configured. A price check is refused, and a submitted total stays empty.") }}</p>
 
       <form class="card project-form" @submit.prevent="submitOrder">
-        <h2>{{ tx("新项目", "New project") }}</h2>
+        <p class="section-label">{{ tx("步骤 1 · 订单信息", "STEP 1 · ORDER INFORMATION") }}</p>
+        <h2>{{ tx("新订单", "New order") }}</h2>
         <div class="grid">
-          <label>{{ tx("项目名称", "Project name") }}<input v-model="project.project_name" required /></label>
+          <label>{{ tx("订单名称", "Order name") }}<input v-model="project.project_name" required /></label>
           <label>{{ tx("施工或安装地址", "Site or installation address") }}<input v-model="project.site_address" required /></label>
         </div>
-        <label v-if="usesWorkbookFields" class="check"><input v-model="project.installation_required" type="checkbox" /> {{ tx("本项目需要安装。安装费由服务端计算，页面不填金额。", "This project needs installation. The server calculates the installation charge. This page does not type an amount.") }}</label>
+        <label v-if="usesWorkbookFields" class="check"><input v-model="project.installation_required" type="checkbox" /> {{ tx("本订单需要安装。安装费由服务端计算，页面不填金额。", "This order needs installation. The server calculates the installation charge. This page does not type an amount.") }}</label>
+        
+        <p class="section-label" style="margin-top: 40px;">{{ tx("步骤 2 · 配置窗户", "STEP 2 · CONFIGURE WINDOWS") }}</p>
         <article v-for="(line, index) in project.lines" :key="index" class="window-line">
           <header>
             <h3>{{ tx("窗户", "Window") }} {{ index + 1 }}</h3>
@@ -336,6 +339,8 @@ function messageOf(cause: unknown) {
           <p v-if="line.product_id && !optionNames(line).length" class="hint">{{ tx("这个系列还没有确认的加价选项。页面不接受手填单价。", "This series has no confirmed surcharge options. The page does not accept a typed unit price.") }}</p>
         </article>
         <button type="button" class="secondary" @click="addLine">{{ tx("再加一扇窗户", "Add another window") }}</button>
+        
+        <p class="section-label" style="margin-top: 40px;">{{ tx("步骤 3 · 确认价格", "STEP 3 · CONFIRM PRICE") }}</p>
         <aside class="price-block">
           <p class="section-label">{{ tx("价格", "PRICE") }}</p>
           <strong>{{ pricing ? tx("计算中", "Calculating") : (quote || tx("待配置", "Not configured")) }}</strong>
@@ -349,6 +354,8 @@ function messageOf(cause: unknown) {
           </ul>
           <p>{{ tx("行价和合计都来自服务端。尺寸或选项一变，旧金额立刻清掉。页面不自己乘面积，也不接受手填单价。", "Line prices and the total come from the server. Changing a size or option clears the previous amount at once. This page does not multiply an area or accept a typed unit price.") }}</p>
         </aside>
+        
+        <p class="section-label" style="margin-top: 40px;">{{ tx("步骤 4 · 提交待审核", "STEP 4 · SUBMIT FOR REVIEW") }}</p>
         <button :disabled="busy">{{ tx("提交待审核", "Submit for review") }}</button>
         <p class="hint">{{ tx("提交不生成发票。确认接收之后才有订单金额 60% 的定金发票；定金已收是后台另一步。发票金额以后端计算为准。", "Submission does not create an invoice. Acceptance creates a deposit invoice for 60% of the order. Recording the deposit received is a separate staff step. The invoice amount is calculated on the server.") }}</p>
         <p v-if="error" class="alert" role="alert">{{ error }}</p>
@@ -356,8 +363,8 @@ function messageOf(cause: unknown) {
       </form>
 
       <section class="card">
-        <h2>{{ tx("本公司项目", "This company’s projects") }}</h2>
-        <p v-if="!orders.length">{{ tx("还没有项目。", "No projects yet.") }}</p>
+        <h2>{{ tx("本公司订单", "This company’s projects") }}</h2>
+        <p v-if="!orders.length">{{ tx("还没有订单。", "No projects yet.") }}</p>
         <article v-for="order in orders" :key="order.id" class="order-row">
           <strong>{{ order.project_name }}</strong>
           <span>{{ order.site_address }}</span>
@@ -374,9 +381,9 @@ function messageOf(cause: unknown) {
 
       <section class="card">
         <h2>{{ tx("购买、发票和返利", "Purchases, invoices and rebates") }}</h2>
-        <p class="hint">{{ tx("这里只列出服务端返回的项目、发票和已确认返利。消费统计口径未确认，页面不把它们加总成一笔已付金额。", "This lists the projects, invoices and confirmed rebates returned by the server. The consumption basis is not confirmed, so the page does not add them into one paid total.") }}</p>
+        <p class="hint">{{ tx("这里只列出服务端返回的订单、发票和已确认返利。消费统计口径未确认，页面不把它们加总成一笔已付金额。", "This lists the orders, invoices and confirmed rebates returned by the server. The consumption basis is not confirmed, so the page does not add them into one paid total.") }}</p>
         <p v-if="consumption?.statistics_status">{{ consumption.statistics_status }}</p>
-        <p v-if="consumption?.unpriced_orders">{{ tx(`还有 ${consumption.unpriced_orders} 个项目没有确认价格，不计入下面的金额。`, `${consumption.unpriced_orders} projects have no confirmed price and are excluded from the amounts below.`) }}</p>
+        <p v-if="consumption?.unpriced_orders">{{ tx(`还有 ${consumption.unpriced_orders} 个订单没有确认价格，不计入下面的金额。`, `${consumption.unpriced_orders} orders have no confirmed price and are excluded from the amounts below.`) }}</p>
         <article v-for="(money, currency) in consumption?.summary || {}" :key="currency" class="order-row">
           <strong>{{ currency }}</strong>
           <span>{{ tx("已下单", "Ordered") }} {{ money.ordered || "—" }}</span>
@@ -402,22 +409,183 @@ function messageOf(cause: unknown) {
 </template>
 
 <style scoped>
-.portal { max-width: 960px; margin: 0 auto; padding: 48px 28px 80px; font-size: 15px; line-height: 1.6; }
-.portal h2 { font-size: 22px; font-weight: 600; margin: 28px 0 12px; }
-.portal h3 { font-size: 18px; font-weight: 600; }
-.portal p, .portal label, .portal li { font-size: 15px; }
-.portal input, .portal select, .portal button, .portal textarea { min-height: 40px; font-size: 15px; }
-.portal-head h1 { font-family: var(--font-display); font-size: clamp(32px, 4vw, 48px); line-height: 1.15; margin: 12px 0; }
-.portal-head p, .hint, .rule-note { color: #54645c; line-height: 1.7; }
-.section-label { font-size: 13px; letter-spacing: 0.08em; }
-.card, .rule-note { margin-top: 24px; }
-.account { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
-.account h2, .window-line h3 { margin: 8px 0; }
-.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
-.window-line, .order-row { border-top: 1px solid var(--line, #dedbd5); margin-top: 20px; padding-top: 16px; }
-.window-line header, .order-row { display: flex; justify-content: space-between; gap: 16px; align-items: center; flex-wrap: wrap; }
-.price-block { margin: 24px 0; padding: 20px; background: #f5f4f0; }
-.price-block strong { display: block; font-size: 28px; margin: 8px 0; }
-.alert { color: #8a3b2c; }
-@media (max-width: 700px) { .grid, .account { display: grid; grid-template-columns: 1fr; } }
-</style>
+.portal { max-width: 1040px; margin: 0 auto; padding: 48px 28px 80px; font-size: 15px; line-height: 1.6; }
+.portal h2 { font-family: var(--font-display); font-size: 24px; font-weight: 600; margin: 32px 0 16px; letter-spacing: 0.02em; }
+.portal h3 { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin: 12px 0 8px; letter-spacing: 0.01em; }
+.portal p, .portal label, .portal li { font-size: 15px; line-height: 1.65; }
+.portal input, .portal select, .portal button, .portal textarea { 
+  min-height: 44px; 
+  font-size: 15px; 
+  border: 1px solid rgba(27, 36, 33, 0.3);
+  border-radius: 4px;
+  padding: 10px 12px;
+  transition: border-color 0.2s;
+}
+.portal input:focus, .portal select:focus, .portal textarea:focus {
+  outline: none;
+  border-color: var(--cord);
+  box-shadow: 0 0 0 2px rgba(15, 110, 92, 0.1);
+}
+.portal button { 
+  min-height: 48px; 
+  font-weight: 600;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  transition: all 0.2s;
+}
+.portal button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(15, 110, 92, 0.2); }
+.portal button:disabled { opacity: 0.5; cursor: not-allowed; }
+.portal button.secondary { 
+  min-height: 44px;
+  background: transparent; 
+  color: var(--ink); 
+  border-color: rgba(27, 36, 33, 0.4);
+}
+.portal-head { margin-bottom: 40px; }
+.portal-head h1 { font-family: var(--font-display); font-size: clamp(32px, 4vw, 48px); line-height: 1.15; margin: 12px 0 16px; letter-spacing: 0.01em; }
+.portal-head p, .hint, .rule-note { color: rgba(27, 36, 33, 0.72); line-height: 1.7; max-width: 72ch; }
+.section-label { 
+  font-size: 11px; 
+  letter-spacing: 0.12em; 
+  text-transform: uppercase; 
+  color: var(--cord); 
+  font-weight: 600;
+  margin-bottom: 8px;
+  display: block;
+}
+.project-form .section-label {
+  font-size: 12px;
+  padding: 10px 14px;
+  background: rgba(15, 110, 92, 0.08);
+  border-left: 4px solid var(--cord);
+  border-radius: 4px;
+  margin-bottom: 16px;
+}
+.card { 
+  margin-top: 32px; 
+  padding: 28px; 
+  border: 1px solid var(--line); 
+  background: var(--paper); 
+  border-radius: 8px;
+}
+.rule-note { 
+  margin: 24px 0; 
+  padding: 16px 20px; 
+  background: rgba(15, 110, 92, 0.06); 
+  border-left: 4px solid var(--cord);
+  border-radius: 4px;
+}
+.account { display: flex; justify-content: space-between; gap: 20px; align-items: start; }
+.account h2 { margin: 0 0 12px; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.project-form { background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(247, 251, 248, 0.95) 100%); }
+.project-form .grid { margin-bottom: 24px; }
+.project-form label { 
+  display: grid; 
+  gap: 8px; 
+  font-size: 14px; 
+  font-weight: 500;
+  color: rgba(27, 36, 33, 0.88);
+}
+.check { 
+  display: grid;
+  grid-template-columns: 22px 1fr; 
+  align-items: start; 
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(15, 110, 92, 0.04);
+  border-radius: 4px;
+  margin: 20px 0;
+}
+.check input { 
+  width: 20px; 
+  min-height: 20px; 
+  margin-top: 2px;
+  cursor: pointer;
+}
+.window-line { 
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+  margin-top: 24px;
+  background: white;
+}
+.window-line header { 
+  display: flex; 
+  justify-content: space-between; 
+  gap: 16px; 
+  align-items: center; 
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(27, 36, 33, 0.08);
+}
+.window-line h3 { margin: 0; color: var(--cord); }
+.window-line .grid { margin-top: 0; }
+.order-row { 
+  border-top: 1px solid var(--line);
+  margin-top: 20px; 
+  padding-top: 16px; 
+  display: flex; 
+  justify-content: space-between; 
+  gap: 16px; 
+  align-items: start; 
+  flex-wrap: wrap;
+}
+.order-row strong { color: var(--cord); }
+.price-block { 
+  margin: 32px 0; 
+  padding: 28px; 
+  background: linear-gradient(135deg, #f7fbf8 0%, #eef4f0 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.price-block .section-label { margin-bottom: 12px; }
+.price-block strong { 
+  display: block; 
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 700;
+  color: var(--cord);
+  margin: 4px 0 16px;
+  letter-spacing: 0.01em;
+}
+.price-block ul { 
+  margin: 16px 0; 
+  padding: 0; 
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.price-block li { 
+  padding: 8px 12px; 
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  font-size: 14px;
+}
+.price-block > p { 
+  margin-top: 20px; 
+  padding-top: 16px; 
+  border-top: 1px solid rgba(27, 36, 33, 0.12);
+  font-size: 13px; 
+}
+.alert { 
+  color: var(--danger); 
+  background: rgba(140, 47, 47, 0.08);
+  padding: 14px 16px;
+  border-radius: 4px;
+  margin-top: 16px;
+  border-left: 4px solid var(--danger);
+}
+@media (max-width: 700px) { 
+  .grid, .account { grid-template-columns: 1fr; }
+  .portal { padding: 32px 20px 60px; }
+  .card { padding: 20px; }
+  .window-line { padding: 20px; }
+  .price-block { padding: 20px; }
+  .price-block strong { font-size: 28px; }
+}
+@media (max-width: 390px) {
+  .portal { padding: 24px 16px 48px; }
+  .card { padding: 16px; }
+  .window-line { padding: 16px; }
+}</style>

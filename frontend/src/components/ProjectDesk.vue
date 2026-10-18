@@ -279,7 +279,7 @@ function toggleOrder(id: string) {
 function transitSelected() {
   const ids = [...picked.value].sort();
   if (!ids.length) {
-    error.value = tx("先勾选要标为在途的项目。", "Select the projects to mark in transit.");
+    error.value = tx("先勾选要标为在途的订单。", "Select the orders to mark in transit.");
     return;
   }
   const signature = `transit:${ids.join(",")}`;
@@ -308,7 +308,7 @@ function optionText(line: Line) {
 async function arriveSelected() {
   const targets = orders.value.filter((order) => picked.value.includes(order.id));
   if (!targets.length) {
-    error.value = tx("先勾选要记录到货的项目。", "Select the projects whose arrival to record.");
+    error.value = tx("先勾选要记录到货的订单。", "Select the orders whose arrival to record.");
     return;
   }
   busy.value = true;
@@ -405,7 +405,7 @@ function selectedOrders() {
 function oneCompany(rows: ProjectOrder[]) {
   const ids = [...new Set(rows.map((order) => order.customer_id))];
   if (!rows.length) {
-    error.value = tx("先勾选同一公司的项目。", "Select projects from one company.");
+    error.value = tx("先勾选同一公司的订单。", "Select orders from one company.");
     return null;
   }
   if (ids.length !== 1) {
@@ -476,7 +476,7 @@ function markBalanceReceived(invoice: Invoice) {
 
 function adjust(order: ProjectOrder) {
   if (order.status !== "pending_review") {
-    error.value = tx("只有待审核项目可以改折扣和附加费。客户页面不能填这些数。", "Only a project awaiting review can change a discount or surcharge. The customer page cannot enter these figures.");
+    error.value = tx("只有待审核订单可以改折扣和附加费。客户页面不能填这些数。", "Only an order awaiting review can change a discount or surcharge. The customer page cannot enter these figures.");
     return;
   }
   const note = (adjustNote[order.id] || "").trim();
@@ -727,7 +727,7 @@ async function loadOrderProviders(orderId: string) {
 
     <div class="workspace-grid">
       <aside class="card order-list" :class="{ 'mobile-expanded': mobileListOpen }">
-        <div class="list-heading"><h3>{{ tx("项目列表", "Projects") }}</h3><span>{{ visibleOrders.length }}</span></div>
+        <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
         <label class="filter-row">{{ tx("筛选", "Filter") }}
           <select v-model="statusFilter" @change="listPage = 0">
             <option value="">{{ tx("全部", "All") }}</option>
@@ -735,7 +735,7 @@ async function loadOrderProviders(orderId: string) {
           </select>
         </label>
         <div class="mobile-project-picker">
-          <label>{{ tx("当前项目", "Current project") }}<select :value="selectedOrder?.id" @change="selectedId = ($event.target as HTMLSelectElement).value"><option v-for="order in visibleOrders" :key="order.id" :value="order.id">{{ order.project_name }}</option></select></label>
+          <label>{{ tx("当前订单", "Current order") }}<select :value="selectedOrder?.id" @change="selectedId = ($event.target as HTMLSelectElement).value"><option v-for="order in visibleOrders" :key="order.id" :value="order.id">{{ order.project_name }}</option></select></label>
           <button type="button" class="secondary" @click="mobileListOpen = !mobileListOpen">{{ mobileListOpen ? tx("收起列表", "Collapse list") : tx("批量选择", "Select multiple") }}</button>
         </div>
         <div class="order-scroll">
@@ -771,7 +771,7 @@ async function loadOrderProviders(orderId: string) {
           <section v-if="activeSection === 'operations'" class="card section-card">
 
             <div v-if="!selectedOrder">
-              <p>{{ tx("选择一个项目查看详情", "Select a project to view details") }}</p>
+              <p>{{ tx("选择一个订单查看详情", "Select an order to view details") }}</p>
             </div>
             <article v-else class="order-detail">
               <header class="order-header">
@@ -989,7 +989,7 @@ async function loadOrderProviders(orderId: string) {
 
           <section v-if="activeSection === 'batch'" class="card section-card">
             <h2>{{ tx("批量操作", "Batch operations") }}</h2>
-            <p class="hint">{{ tx("勾选多个项目后批量标记在途或记录到货", "Select multiple projects for batch transit or arrival") }}</p>
+            <p class="hint">{{ tx("勾选多个订单后批量标记在途或记录到货", "Select multiple orders for batch transit or arrival") }}</p>
             <div class="batch-actions">
               <button type="button" :disabled="busy" @click="transitSelected">{{ tx("批量标为在途", "Mark in transit") }}</button>
               <button type="button" :disabled="busy" @click="arriveSelected">{{ tx("批量记录到货", "Record arrival") }}</button>
@@ -1011,7 +1011,7 @@ async function loadOrderProviders(orderId: string) {
 
           <section v-if="activeSection === 'settlement'" class="card section-card">
             <h2>{{ tx("同公司尾款", "Balance invoice") }}</h2>
-            <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的项目生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed projects of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
+            <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的订单生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed orders of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
             <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="3" /></label>
             <button type="button" :disabled="busy" @click="settleSelected">{{ tx("生成尾款草稿", "Create balance") }}</button>
 
