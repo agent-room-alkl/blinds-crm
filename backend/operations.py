@@ -18,6 +18,104 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 # Latest client reply overrides the earlier 20% planning baseline.
 DEPOSIT_RATE = Decimal('0.60')
 
+# Canonical VERA Deluxe (Ashwood) configuration schema
+# Single source of truth: used by product records and pricing rules
+# Stain colours 61-70, louver sizes 63/76/89/114mm, 11 fields total
+DELUXE_SCHEMA = [
+    {
+        'key': 'colour',
+        'label_zh': '颜色',
+        'label_en': 'Colour',
+        'choices': [
+            'Golden Oak 61', 'Fruitwood 62', 'Old Mahogany 63', 'Coffee Bean 64',
+            'BlackWalnut 65', 'Light Ash 66', 'Limed 67', 'Natural 68',
+            'Rustic Gray 69', 'Provence Blue 70'
+        ],
+        'required': True,
+        'type': 'select'
+    },
+    {
+        'key': 'frame',
+        'label_zh': '框型',
+        'label_en': 'Frame',
+        'choices': [],
+        'required': False,
+        'type': 'select'
+    },
+    {
+        'key': 'louver_size',
+        'label_zh': '叶片尺寸',
+        'label_en': 'Louver size',
+        'choices': ['63mm', '76mm', '89mm', '114mm'],
+        'required': True,
+        'type': 'select'
+    },
+    {
+        'key': 'control_rod',
+        'label_zh': '控制杆',
+        'label_en': 'Control rod',
+        'choices': [],
+        'required': False,
+        'type': 'select'
+    },
+    {
+        'key': 'opening_style',
+        'label_zh': '开合方式',
+        'label_en': 'Opening style',
+        'choices': [],
+        'required': False,
+        'type': 'text'
+    },
+    {
+        'key': 'layout_code',
+        'label_zh': '布局代码',
+        'label_en': 'Layout code',
+        'choices': [],
+        'required': False,
+        'type': 'text'
+    },
+    {
+        'key': 'vt_post',
+        'label_zh': '竖柱',
+        'label_en': 'Vertical post',
+        'choices': [],
+        'required': False,
+        'type': 'text'
+    },
+    {
+        'key': 'ht_post',
+        'label_zh': '横柱',
+        'label_en': 'Horizontal post',
+        'choices': [],
+        'required': False,
+        'type': 'text'
+    },
+    {
+        'key': 'midrail',
+        'label_zh': '中横档',
+        'label_en': 'Midrail',
+        'choices': [],
+        'required': False,
+        'type': 'text'
+    },
+    {
+        'key': 'fitting',
+        'label_zh': '安装尺寸类型',
+        'label_en': 'Fitting',
+        'choices': [],
+        'required': False,
+        'type': 'select'
+    },
+    {
+        'key': 'special_request',
+        'label_zh': '特殊要求',
+        'label_en': 'Special request',
+        'choices': [],
+        'required': False,
+        'type': 'text'
+    }
+]
+
 
 def deposit_amount(total):
     """Matches the 60% output in the supplied workbook, In Put!P51."""
@@ -39,109 +137,7 @@ def migrate(c):
     # This migration brings it up to the current state: orderable, website_and_template scope, and the real 11-field schema
     import json
     
-    # Build the real Basswood 11-field schema (do NOT copy from DB - use the canonical structure)
-    # This is the schema from excel_rules.py parse_template for shutters
-    DELUXE_SCHEMA = [
-        {
-            'key': 'colour',
-            'label_zh': '颜色',
-            'label_en': 'Colour',
-            'choices': [
-                'Golden Oak 61',
-                'Fruitwood 62',
-                'Old Mahogany 63',
-                'Coffee Bean 64',
-                'BlackWalnut 65',
-                'Light Ash 66',
-                'Limed 67',
-                'Natural 68',
-                'Rustic Gray 69',
-                'Provence Blue 70'
-            ],
-            'required': True,
-            'type': 'select'
-        },
-        {
-            'key': 'frame',
-            'label_zh': '框型',
-            'label_en': 'Frame',
-            'choices': [],
-            'required': False,
-            'type': 'select'
-        },
-        {
-            'key': 'louver_size',
-            'label_zh': '叶片尺寸',
-            'label_en': 'Louver size',
-            'choices': ['63mm', '76mm', '89mm', '114mm'],
-            'required': True,
-            'type': 'select'
-        },
-        {
-            'key': 'control_rod',
-            'label_zh': '控制杆',
-            'label_en': 'Control rod',
-            'choices': [],
-            'required': False,
-            'type': 'select'
-        },
-        {
-            'key': 'opening_style',
-            'label_zh': '开合方式',
-            'label_en': 'Opening style',
-            'choices': [],
-            'required': False,
-            'type': 'text'
-        },
-        {
-            'key': 'layout_code',
-            'label_zh': '布局代码',
-            'label_en': 'Layout code',
-            'choices': [],
-            'required': False,
-            'type': 'text'
-        },
-        {
-            'key': 'vt_post',
-            'label_zh': '竖柱',
-            'label_en': 'Vertical post',
-            'choices': [],
-            'required': False,
-            'type': 'text'
-        },
-        {
-            'key': 'ht_post',
-            'label_zh': '横柱',
-            'label_en': 'Horizontal post',
-            'choices': [],
-            'required': False,
-            'type': 'text'
-        },
-        {
-            'key': 'midrail',
-            'label_zh': '中横档',
-            'label_en': 'Midrail',
-            'choices': [],
-            'required': False,
-            'type': 'text'
-        },
-        {
-            'key': 'fitting',
-            'label_zh': '安装尺寸类型',
-            'label_en': 'Fitting',
-            'choices': [],
-            'required': False,
-            'type': 'select'
-        },
-        {
-            'key': 'special_request',
-            'label_zh': '特殊要求',
-            'label_en': 'Special request',
-            'choices': [],
-            'required': False,
-            'type': 'text'
-        }
-    ]
+    # Use the canonical DELUXE_SCHEMA defined at module level
     
     # Migrate any legacy Ashwood products (idempotent)
     for row in c.execute('SELECT id, data FROM products').fetchall():
@@ -404,42 +400,24 @@ def register(app, s):
             rules = {p['source_code']:p for p in template['products']}
             product_rows = {r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
             
-            # Synthesize provisional Ashwood rule from Basswood template
+            # Synthesize or update provisional Ashwood rule from Basswood template
             basswood_rule = rules.get('Shutters_Basswood')
-            if basswood_rule and 'VERA_Ashwood_provisional' not in rules:
-                # Use the canonical Deluxe schema for validation (stain colours 61-70)
-                DELUXE_SCHEMA_MINIMAL = [
-                    {
-                        'key': 'colour',
-                        'label_zh': '颜色',
-                        'label_en': 'Colour',
-                        'choices': [
-                            'Golden Oak 61', 'Fruitwood 62', 'Old Mahogany 63', 'Coffee Bean 64',
-                            'BlackWalnut 65', 'Light Ash 66', 'Limed 67', 'Natural 68',
-                            'Rustic Gray 69', 'Provence Blue 70'
-                        ],
-                        'required': False,  # Not required for provisional pricing
-                        'type': 'select'
-                    },
-                    {
-                        'key': 'louver_size',
-                        'label_zh': '叶片尺寸',
-                        'label_en': 'Louver size',
-                        'choices': ['63mm', '76mm', '89mm', '114mm'],
-                        'required': False,  # Not required for provisional pricing
-                        'type': 'select'
+            if basswood_rule:
+                existing_deluxe = rules.get('VERA_Ashwood_provisional')
+                # Create or update the rule to use the canonical DELUXE_SCHEMA
+                # This ensures product schema and rule schema stay in sync
+                # Also fixes any existing rules that were created with the 2-field minimal schema
+                if not existing_deluxe or len(existing_deluxe.get('schema', [])) != 11:
+                    rules['VERA_Ashwood_provisional'] = {
+                        **basswood_rule,
+                        'source_code': 'VERA_Ashwood_provisional',
+                        'rate_per_m2': '1.00',
+                        'provisional': True,
+                        'status': 'provisional_placeholder',
+                        'warnings': ['Placeholder price 1.00/m² must not be quoted to customers'],
+                        'schema': DELUXE_SCHEMA,  # Full 11-field schema (same as product)
+                        'options': {}  # No pricing options for provisional
                     }
-                ]
-                rules['VERA_Ashwood_provisional'] = {
-                    **basswood_rule,
-                    'source_code': 'VERA_Ashwood_provisional',
-                    'rate_per_m2': '1.00',
-                    'provisional': True,
-                    'status': 'provisional_placeholder',
-                    'warnings': ['Placeholder price 1.00/m² must not be quoted to customers'],
-                    'schema': DELUXE_SCHEMA_MINIMAL,  # Override with Deluxe schema
-                    'options': {}  # No pricing options for provisional
-                }
             
             if any(product_rows.get(l.product_id,{}).get('source_code') for l in body.lines):
                 from excel_rules import calculate_line, up
@@ -689,101 +667,7 @@ def register(app, s):
                 c.execute('INSERT INTO products(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(pid,s.dump(p)))
             
             # Now handle Ashwood after all template products are processed
-            # Use the canonical 11-field Deluxe schema (stain colours 61-70, louver sizes 63/76/89/114mm)
-            DELUXE_SCHEMA = [
-                {
-                    'key': 'colour',
-                    'label_zh': '颜色',
-                    'label_en': 'Colour',
-                    'choices': [
-                        'Golden Oak 61', 'Fruitwood 62', 'Old Mahogany 63', 'Coffee Bean 64',
-                        'BlackWalnut 65', 'Light Ash 66', 'Limed 67', 'Natural 68',
-                        'Rustic Gray 69', 'Provence Blue 70'
-                    ],
-                    'required': True,
-                    'type': 'select'
-                },
-                {
-                    'key': 'frame',
-                    'label_zh': '框型',
-                    'label_en': 'Frame',
-                    'choices': [],
-                    'required': False,
-                    'type': 'select'
-                },
-                {
-                    'key': 'louver_size',
-                    'label_zh': '叶片尺寸',
-                    'label_en': 'Louver size',
-                    'choices': ['63mm', '76mm', '89mm', '114mm'],
-                    'required': True,
-                    'type': 'select'
-                },
-                {
-                    'key': 'control_rod',
-                    'label_zh': '控制杆',
-                    'label_en': 'Control rod',
-                    'choices': [],
-                    'required': False,
-                    'type': 'select'
-                },
-                {
-                    'key': 'opening_style',
-                    'label_zh': '开合方式',
-                    'label_en': 'Opening style',
-                    'choices': [],
-                    'required': False,
-                    'type': 'text'
-                },
-                {
-                    'key': 'layout_code',
-                    'label_zh': '布局代码',
-                    'label_en': 'Layout code',
-                    'choices': [],
-                    'required': False,
-                    'type': 'text'
-                },
-                {
-                    'key': 'vt_post',
-                    'label_zh': '竖柱',
-                    'label_en': 'Vertical post',
-                    'choices': [],
-                    'required': False,
-                    'type': 'text'
-                },
-                {
-                    'key': 'ht_post',
-                    'label_zh': '横柱',
-                    'label_en': 'Horizontal post',
-                    'choices': [],
-                    'required': False,
-                    'type': 'text'
-                },
-                {
-                    'key': 'midrail',
-                    'label_zh': '中横档',
-                    'label_en': 'Midrail',
-                    'choices': [],
-                    'required': False,
-                    'type': 'text'
-                },
-                {
-                    'key': 'fitting',
-                    'label_zh': '安装尺寸类型',
-                    'label_en': 'Fitting',
-                    'choices': [],
-                    'required': False,
-                    'type': 'select'
-                },
-                {
-                    'key': 'special_request',
-                    'label_zh': '特殊要求',
-                    'label_en': 'Special request',
-                    'choices': [],
-                    'required': False,
-                    'type': 'text'
-                }
-            ]
+            # Use the canonical DELUXE_SCHEMA defined at module level
             
             ash=next((p for p in existing.values() if p.get('source_code')=='VERA_Ashwood_provisional'),None)
             

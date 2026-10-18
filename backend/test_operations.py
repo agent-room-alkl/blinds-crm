@@ -734,7 +734,10 @@ with tempfile.TemporaryDirectory() as folder:
             'height_mm': 1500,
             'quantity': 1,
             'panel_count': 2,
-            'options': {}  # Provisional pricing has no options
+            'options': {
+                'colour': 'Golden Oak 61',
+                'louver_size': '89mm'
+            }  # Required fields for Deluxe
         }]
     }
     
