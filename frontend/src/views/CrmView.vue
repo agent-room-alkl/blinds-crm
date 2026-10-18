@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
 import ProductManager from "../components/ProductManager.vue";
@@ -21,6 +21,13 @@ const credentials = reactive({ username: "", password: "" });
 const products = ref<ApiProduct[]>([]);
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
+const accountMenu = ref<HTMLDetailsElement>();
+function closeAccountMenu() { if (accountMenu.value) accountMenu.value.open = false; }
+function dismissAccountMenu(event: PointerEvent) {
+  if (event.target instanceof Node && !accountMenu.value?.contains(event.target)) closeAccountMenu();
+}
+onMounted(() => document.addEventListener("pointerdown", dismissAccountMenu));
+onUnmounted(() => document.removeEventListener("pointerdown", dismissAccountMenu));
 const passwordForm = reactive({ current: "", next: "", confirm: "" });
 const users = ref<{ username: string; name: string; role: string; active: number }[]>([]);
 const newUser = reactive({ username: "", name: "", password: "", role: "staff" });
@@ -177,13 +184,18 @@ onMounted(() => {
 
     <template v-else>
       <header class="crm-bar">
-        <div class="page-context">
-          <span>VERA / CRM</span>
-          <h1>{{ pageTitle }}</h1>
-        </div>
-        <button type="button" class="secondary" @click="toggleLocale">{{ locale === "zh" ? "English" : "中文" }}</button>
-        <button type="button" class="secondary" @click="passwordOpen = !passwordOpen">{{ tx("修改密码", "Change password") }}</button>
-        <button type="button" class="secondary" @click="logout">{{ tx("退出", "Sign out") }}</button>
+        <nav class="page-context" :aria-label="tx('当前位置', 'Breadcrumb')">
+          <span>VERA</span><span aria-hidden="true">/</span><span>CRM</span><span aria-hidden="true">/</span><strong aria-current="page">{{ pageTitle }}</strong>
+        </nav>
+        <details ref="accountMenu" class="account-menu" @keydown.esc="closeAccountMenu">
+          <summary :aria-label="tx('账户菜单', 'Account menu')" :title="me.name"><span>{{ (me.name || 'V').slice(0, 1) }}</span></summary>
+          <div class="account-dropdown">
+            <div class="account-identity"><strong>{{ me.name }}</strong><small>{{ me.role === 'admin' ? tx('管理员', 'Admin') : tx('员工', 'Staff') }}</small></div>
+            <button type="button" @click="toggleLocale(); closeAccountMenu()">{{ locale === 'zh' ? 'English' : '中文' }}</button>
+            <button type="button" @click="passwordOpen = !passwordOpen; closeAccountMenu()">{{ tx('修改密码', 'Change password') }}</button>
+            <button type="button" @click="logout(); closeAccountMenu()">{{ tx('退出', 'Sign out') }}</button>
+          </div>
+        </details>
       </header>
       <form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword">
         <label>{{ tx("当前密码", "Current password") }}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label>
@@ -296,4 +308,21 @@ th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1
 .crm-bar button.secondary { font-size: 13px; min-height: 36px; padding: 6px 12px; }
 @media(max-width:800px) { .crm.is-signed { padding: 16px; } .desk-rail { width: auto; padding: 12px; gap: 4px; } .crm-bar { gap: 8px; } }
 @media(max-width:390px) { .crm.is-signed { padding: 12px; } .desk-rail button { font-size: 13px; min-height: 38px; } }
+
+.crm .crm-bar { min-height: 44px; padding: 0 0 10px; margin-bottom: 16px; display: flex; align-items: center; flex-wrap: nowrap; }
+.crm .page-context { display: flex; align-items: center; gap: 9px; min-width: 0; margin-right: auto; flex-basis: auto; }
+.crm .page-context span { font-size: 12px; letter-spacing: 0; color: #718079; }
+.crm .page-context strong { font-size: 14px; font-weight: 600; color: #203c30; }
+.account-menu { position: relative; flex-shrink: 0; }
+.account-menu summary { list-style: none; cursor: pointer; border-radius: 50%; }
+.account-menu summary::-webkit-details-marker { display: none; }
+.account-menu summary > span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #e4eee7; color: #234b37; border: 1px solid #cadbce; font-size: 13px; font-weight: 600; }
+.account-menu summary:focus-visible { outline: 2px solid #237356; outline-offset: 3px; }
+.account-dropdown { position: absolute; right: 0; top: 43px; z-index: 30; width: 196px; border: 1px solid #dce5df; border-radius: 10px; padding: 6px; background: white; box-shadow: 0 8px 32px #17382b1a; }
+.account-identity { padding: 9px 10px; margin-bottom: 4px; border-bottom: 1px solid #edf1ee; }
+.account-identity strong, .account-identity small { display: block; font-size: 13px; }
+.account-identity small { color: #718079; font-size: 12px; }
+.crm .account-dropdown button { width: 100%; display: block; text-align: left; background: white; color: #31483b; border: 0; border-radius: 6px; font-size: 13px; padding: 8px 10px; min-height: 36px; }
+.crm .account-dropdown button:hover { background: #edf5f1; }
+@media(max-width:600px) { .crm .crm-bar { margin-bottom: 12px; } }
 </style>
