@@ -33,11 +33,10 @@ a { color: inherit; text-decoration: none; }
 
 button, .button {
   min-height: 44px;
-  min-width: 44px;
   border: 1px solid var(--cord);
   background: var(--cord);
   color: var(--paper);
-  padding: 0 16px;
+  padding: 10px 20px;
   font-family: var(--font-body);
   font-size: 15px;
   font-weight: 600;
@@ -125,10 +124,9 @@ button, .button {
 
 .nav a:not(.button) {
   min-height: 44px;
-  min-width: 44px;
   display: inline-flex;
   align-items: center;
-  padding: 0 2px;
+  padding: 10px 12px;
 }
 
 .nav a.router-link-active:not(.button) {
