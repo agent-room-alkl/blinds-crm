@@ -33,6 +33,7 @@ a { color: inherit; text-decoration: none; }
 
 button, .button {
   min-height: 44px;
+  min-width: 44px;
   border: 1px solid var(--cord);
   background: var(--cord);
   color: var(--paper);
@@ -124,6 +125,7 @@ button, .button {
 
 .nav a:not(.button) {
   min-height: 44px;
+  min-width: 44px;
   display: inline-flex;
   align-items: center;
   padding: 0 2px;

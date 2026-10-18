@@ -48,20 +48,27 @@ def measure_overflow_and_targets(page: Page) -> dict:
         const innerWidth = window.innerWidth;
         const overflow = scrollWidth > innerWidth;
         
-        // Find all interactive elements
-        const selectors = 'button, a, input, select, textarea, [role="button"], [role="link"]';
+        // Find all truly interactive elements (not decorative spans inside buttons)
+        const selectors = 'button:not([aria-hidden="true"]), a[href]:not([aria-hidden="true"]), input:not([type="hidden"]), select, textarea, [role="button"]:not([aria-hidden="true"]), [role="link"]:not([aria-hidden="true"]), [tabindex]:not([tabindex="-1"])';
         const elements = Array.from(document.querySelectorAll(selectors));
         
         let minWidth = Infinity;
         let minHeight = Infinity;
         let minElement = null;
+        let minTagInfo = null;
         
         elements.forEach(el => {
             const rect = el.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
+            const computedStyle = window.getComputedStyle(el);
+            const isVisible = computedStyle.display !== 'none' && 
+                            computedStyle.visibility !== 'hidden' && 
+                            rect.width > 0 && rect.height > 0;
+            
+            if (isVisible) {
                 if (rect.width < minWidth) {
                     minWidth = rect.width;
                     minElement = el.tagName;
+                    minTagInfo = `${el.tagName} ${el.className ? '.' + el.className.split(' ')[0] : ''}`;
                 }
                 if (rect.height < minHeight) {
                     minHeight = rect.height;
@@ -75,7 +82,7 @@ def measure_overflow_and_targets(page: Page) -> dict:
             overflow,
             minWidth: minWidth === Infinity ? null : minWidth,
             minHeight: minHeight === Infinity ? null : minHeight,
-            minElement,
+            minElement: minTagInfo,
             minTarget: Math.min(minWidth === Infinity ? Infinity : minWidth, 
                                minHeight === Infinity ? Infinity : minHeight)
         };
@@ -106,7 +113,7 @@ def capture_screenshots(page: Page, name: str, viewport: dict, measurements: dic
     }
     
     print(f"  ✓ {name} @ {viewport_label}: scroll={metrics['scrollWidth']} inner={metrics['innerWidth']} "
-          f"overflow={metrics['overflow']} minTarget={metrics.get('minTarget', 'N/A')}")
+          f"overflow={metrics['overflow']} minTarget={metrics.get('minTarget', 'N/A')} minElement={metrics.get('minElement', 'N/A')}")
 
 def main():
     SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -294,8 +301,8 @@ def main():
     
     # Summary table
     print("\n=== Measurement Summary ===")
-    print(f"{'Page':<30} {'Viewport':<10} {'Overflow':<10} {'Min Target (px)':<15}")
-    print("-" * 70)
+    print(f"{'Page':<35} {'Viewport':<10} {'Overflow':<10} {'Min Target (px)':<20} {'Element':<30}")
+    print("-" * 110)
     for name, data in sorted(measurements.items()):
         metrics = data["metrics"]
         overflow = "YES ❌" if metrics["overflow"] else "NO ✓"
@@ -306,8 +313,9 @@ def main():
         else:
             target_str += " ✓"
         
+        element_info = metrics.get("minElement", "N/A")
         viewport_str = f"{data['viewport']['width']}px"
-        print(f"{name:<30} {viewport_str:<10} {overflow:<10} {target_str:<15}")
+        print(f"{name:<35} {viewport_str:<10} {overflow:<10} {target_str:<20} {element_info:<30}")
     
     # Save results
     RESULTS_FILE.parent.mkdir(parents=True, exist_ok=True)
