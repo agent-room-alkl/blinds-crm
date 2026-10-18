@@ -65,7 +65,7 @@ def init_db(connection=None,seed_admin=True,seed_catalog=True):
             {'id':1,'name_zh':'铝百叶（示例）','name_en':'Aluminium Blinds (Sample)','material_zh':'铝合金','material_en':'Aluminium','description_zh':'轻盈的叶片与灵活的光线控制。产品及规格待客户确认。','description_en':'Lightweight slats and versatile light control. Product and specifications await confirmation.','category':'aluminium','sample':True},
             {'id':2,'name_zh':'木百叶（示例）','name_en':'Timber Blinds (Sample)','material_zh':'木材','material_en':'Timber','description_zh':'温暖质感，适合自然风格空间。产品及规格待客户确认。','description_en':'Warm texture for natural interiors. Product and specifications await confirmation.','category':'timber','sample':True},
             {'id':3,'name_zh':'复合百叶（示例）','name_en':'Composite Blinds (Sample)','material_zh':'复合材料','material_en':'Composite','description_zh':'简洁耐用的示例系列，实际选项待确认。','description_en':'A simple sample collection. Actual options await confirmation.','category':'composite','sample':True}
-        ] if seed_catalog else []):
+        ] if seed_catalog and not c.execute('SELECT 1 FROM products LIMIT 1').fetchone() else []):
             c.execute('INSERT OR IGNORE INTO products VALUES(?,?)',(p['id'],dump(p)))
 
 if BACKEND=='sqlite' or os.getenv('VERA_AUTO_INIT')=='1':init_db()
@@ -225,7 +225,9 @@ def products(credentials: HTTPAuthorizationCredentials | None = Depends(security
             if not is_authenticated and d.get('category') == 'aluminium' and not d.get('sample', False):
                 continue
             result.append(catalog_product(d))
-        return result
+        from operations import WEBSITE_IMAGES
+        order = {code: index for index, code in enumerate(WEBSITE_IMAGES)}
+        return sorted(result, key=lambda p: order.get(p.get('source_code'), 99))
 
 @app.get('/api/products/{pid}')
 def product(pid:int, credentials: HTTPAuthorizationCredentials | None = Depends(security)):

@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory() as folder:
     products=catalog_response['products']
     
     # Test 1: Catalog ordering matches website (Eco, Classic, Natural, Prime, Deluxe, Aluminium)
-    expected_order=['Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood','VERA_Ashwood_provisional','Shutters_Aluminium']
+    expected_order=['Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood','VERA_Ashwood_provisional']
     actual_codes=[p['source_code'] for p in products]
     
     # Filter to only codes that exist (not all may be in seed)

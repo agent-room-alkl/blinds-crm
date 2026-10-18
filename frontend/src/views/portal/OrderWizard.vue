@@ -18,6 +18,7 @@ const saving = ref(false);
 const error = ref("");
 const catalog = ref<any[]>([]);
 const lastSaved = ref<string | null>(null);
+const draftKey = ref("");
 
 interface WindowDraft {
   id: string;
@@ -48,14 +49,23 @@ const STEPS = [
 
 async function loadCatalog() {
   try {
-    const result = await portalRequest<{ products: any[] }>("catalog");
+    const [result, account] = await Promise.all([
+      portalRequest<{ products: any[] }>("catalog"),
+      portalRequest<{ customer_id: number }>("me"),
+    ]);
     catalog.value = result.products;
+    draftKey.value = `vera-order-draft:${account.customer_id}`;
+    // The previous demo used one shared draft across all accounts.
+    localStorage.removeItem("vera-order-draft");
     // Load draft from localStorage
-    const saved = localStorage.getItem("vera-order-draft");
+    const saved = localStorage.getItem(draftKey.value);
     if (saved) {
       const parsed = JSON.parse(saved);
-      Object.assign(draft, parsed);
-      lastSaved.value = new Date(parsed.saved_at || Date.now()).toLocaleTimeString();
+      const ids = new Set(catalog.value.map(p => p.id));
+      if ((!parsed.default_series || ids.has(parsed.default_series)) && Array.isArray(parsed.windows) && parsed.windows.every((w: WindowDraft) => ids.has(Number(w.product_id)))) {
+        Object.assign(draft, parsed);
+        lastSaved.value = new Date(parsed.saved_at || Date.now()).toLocaleTimeString();
+      } else localStorage.removeItem(draftKey.value);
     }
     // Sync step from URL query param
     const urlStep = parseInt(String(route.query.step || "1"));
@@ -83,8 +93,9 @@ watch(step, (newStep) => {
 });
 
 function saveDraft() {
+  if (!draftKey.value) return;
   const data = { ...draft, saved_at: Date.now() };
-  localStorage.setItem("vera-order-draft", JSON.stringify(data));
+  localStorage.setItem(draftKey.value, JSON.stringify(data));
   lastSaved.value = new Date().toLocaleTimeString();
 }
 
@@ -101,7 +112,7 @@ function goToStep(num: number) {
 function canProgress(fromStep: number): boolean {
   if (fromStep === 1) return draft.default_series !== null;
   if (fromStep === 2) return draft.windows.length > 0;
-  if (fromStep === 3) return draft.windows.every((w) => w.configured);
+  if (fromStep === 3) return draft.windows.length > 0 && draft.windows.every((w) => w.configured);
   return false;
 }
 
@@ -137,7 +148,7 @@ async function submitOrder() {
       })),
     };
     const saved = await portalRequest<any>("orders", payload);
-    localStorage.removeItem("vera-order-draft");
+    localStorage.removeItem(draftKey.value);
     router.push(`/portal/orders/${saved.id}`);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);

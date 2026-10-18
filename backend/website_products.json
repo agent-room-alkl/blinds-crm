@@ -1,0 +1,27 @@
+{
+  "Shutters_PVC_Eco": {
+    "source": "https://verashading.com/images/products/eco-pvc.jpg",
+    "local": "/images/website-eco-pvc.jpg",
+    "sha256": "6c51abaa16f006be796fe925acd05fd698d644599ef8eac16b4cfcf3e3751412"
+  },
+  "Shutters_PVC": {
+    "source": "https://verashading.com/images/products/classic-pvc-premium.jpg",
+    "local": "/images/website-classic-pvc-premium.jpg",
+    "sha256": "3a4fd90f6f28e5053a283c18ae620964a88d0d3db4c03e6146c3c6346aa1833f"
+  },
+  "Shutters_Pinewood": {
+    "source": "https://verashading.com/images/products/natural-pinewood.jpg",
+    "local": "/images/website-natural-pinewood.jpg",
+    "sha256": "5b5453c3c82fb0f132a70fa90d8563e31aebc9bd0957cd42136e2bddf0415157"
+  },
+  "Shutters_Basswood": {
+    "source": "https://verashading.com/images/products/prime-basswood.jpg",
+    "local": "/images/website-prime-basswood.jpg",
+    "sha256": "a61ab574ad603858c2ac090e1448538ffd6a038110be7fe7f336b32f8e5eb8db"
+  },
+  "VERA_Ashwood_provisional": {
+    "source": "https://verashading.com/images/products/deluxe-ashwood.jpg",
+    "local": "/images/website-deluxe-ashwood.png",
+    "sha256": "b0d582dddecbab6a4225a04533fbaec40fc05898acf6891acbcf1b8e0967aa35"
+  }
+}

@@ -446,4 +446,7 @@ button.primary:hover:not(:disabled) {
 @media(max-width:700px){.series-grid .series-tagline,.series-grid .series-positioning,.series-grid .series-tags{display:none}.series-grid .series-title{margin-bottom:6px}.series-grid .series-content{padding:10px 12px}.series-grid{gap:6px}}
 
 @media(max-width:700px){.step-intro>.section-label,.step-intro>p:not(.section-label),.other-products>.section-label{display:none}.step-intro{margin-bottom:8px}.series-grid .series-content{padding:8px 12px}.other-products{margin-bottom:8px}}
+
+.series-image{position:absolute;left:12px;top:12px;width:88px;height:70px;aspect-ratio:auto;border-radius:4px}.series-card:has(.series-image) .series-content{padding-left:112px}.series-card:has(.provisional-badge) .series-image{top:44px}
+@media(max-width:700px){.series-image{left:auto;right:34px;top:9px;width:44px;height:44px}.series-card:has(.series-image) .series-content{padding-left:12px;padding-right:84px}.series-card:has(.provisional-badge) .series-image{top:36px}}
 </style>

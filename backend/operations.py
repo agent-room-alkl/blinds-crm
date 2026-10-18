@@ -11,6 +11,9 @@ import secrets
 import time
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 from typing import Literal
+from pathlib import Path
+
+WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").read_text(encoding="utf-8"))
 
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator
@@ -180,7 +183,7 @@ class Profile(Input):
     @classmethod
     def valid_email(cls, v):
         from email_service import address
-        return address(v)
+        return address(v) if v else ''
 
 
 class Login(Input):
@@ -222,7 +225,7 @@ class ProfileEdit(Input):
     @classmethod
     def valid_email(cls,v):
         from email_service import address
-        return address(v)
+        return address(v) if v else ''
 
 
 class LineAdjustment(Input):
@@ -427,6 +430,8 @@ def register(app, s):
                     rule = rules.get(p.get('source_code'))
                     
                     # Portal catalog allowlist: reject blind products
+                    if p.get('source_code') == 'Shutters_Aluminium':
+                        raise HTTPException(422, 'This product is outside the five VERA website series')
                     if p.get('category') == 'blinds':
                         raise HTTPException(422, 'Blind products are not available for customer orders')
                     
@@ -642,6 +647,9 @@ def register(app, s):
                     'Shutters_Pinewood':('VERA Natural','Pinewood'), 'Shutters_Basswood':('VERA Prime','Basswood')}
             for rule in manifest['products']:
                 code=rule['source_code']
+                # Current catalogue is exactly the five website series; retain other rules only in the private manifest.
+                if code not in brands:
+                    continue
                 old=next((p for p in existing.values() if p.get('source_code')==code),None)
                 pid=old['id'] if old else next_id
                 if not old: next_id+=1
@@ -660,7 +668,7 @@ def register(app, s):
                    'scope':'website_and_template' if code in brands else 'template_only',
                    'description_zh':'按客户现用模板配置，规格与价格由服务端规则计算。',
                    'description_en':'Configured from the current order workbook. Pricing is calculated by server rules.',
-                   'image_urls':(old or {}).get('image_urls',[]),'configuration_schema':rule['schema'],
+                   'image_urls':(old or {}).get('image_urls') or [WEBSITE_IMAGES[code]['local']],'configuration_schema':rule['schema'],
                    'orderable':orderable,'rule_version':manifest['version']}
                 if warranty:
                     p.update(warranty_years=warranty,content_source='https://verashading.com/products')
@@ -679,7 +687,7 @@ def register(app, s):
                      'warranty_years':10,'content_source':'https://verashading.com/products',
                      'description_zh':'官网展示系列。当前为占位价 1.00/m²，严禁报价给客户。',
                      'description_en':'Website collection. Current placeholder rate 1.00/m² must not be quoted to customers.', 
-                     'image_urls':[]}
+                     'image_urls':[WEBSITE_IMAGES['VERA_Ashwood_provisional']['local']]}
                 c.execute('INSERT INTO products(id,data) VALUES(?,?)',(next_id,s.dump(ash)))
             else:
                 # Update existing Ashwood with the canonical Deluxe schema
@@ -748,8 +756,7 @@ def register(app, s):
                 'Shutters_Pinewood',           # VERA Natural
                 'Shutters_Basswood',           # VERA Prime
                 'VERA_Ashwood_provisional',    # VERA Deluxe (current)
-                'VERA_Ashwood_display',        # VERA Deluxe (legacy, migrated at startup)
-                'Shutters_Aluminium'           # VERA Aluminium (login required)
+                'VERA_Ashwood_display'         # VERA Deluxe (legacy, migrated at startup)
             ]
             
             # Build product dict for ordering - normalize old Ashwood code
@@ -765,7 +772,7 @@ def register(app, s):
             
             # Return products in website order with price rules and affects_price metadata
             orderable_products = []
-            ORDER = ['Shutters_PVC_Eco', 'Shutters_PVC', 'Shutters_Pinewood', 'Shutters_Basswood', 'VERA_Ashwood_provisional', 'Shutters_Aluminium']
+            ORDER = ['Shutters_PVC_Eco', 'Shutters_PVC', 'Shutters_Pinewood', 'Shutters_Basswood', 'VERA_Ashwood_provisional']
             for code in ORDER:
                 if code in product_map:
                     p = product_map[code]
