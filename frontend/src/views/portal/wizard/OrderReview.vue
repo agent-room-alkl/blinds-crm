@@ -323,4 +323,7 @@ button.secondary:hover {
 
 .summary-title strong{margin:0;font-size:14px;line-height:20px}.summary-title>span{line-height:20px}
 @media(min-width:900px){.review-card:nth-child(1){grid-column:1;grid-row:1}.review-card:nth-child(2){grid-column:2;grid-row:1/3}.review-card:last-child{grid-column:1;grid-row:2}.review-sections{grid-template-rows:auto 1fr}.window-item{display:grid;grid-template-columns:minmax(100px,.6fr) minmax(0,1.4fr);gap:8px}.summary-title{display:block}.summary-title strong,.summary-title>span{display:block}.summary-facts{margin:0;align-content:center}}
+
+.review-step>.step-intro>p{display:none}.review-step>.step-intro h2{margin:0}.review-step>.step-intro{margin-bottom:10px}.window-summary{gap:4px}
+.step-actions{margin-top:0}
 </style>
