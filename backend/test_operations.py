@@ -276,3 +276,17 @@ with tempfile.TemporaryDirectory() as folder:
     print('✓ Basic fallback: BASIC-NOT-VERIFIED filename, Project sheet (generic, not supplier-specific)')
     
     print('PASS provider management: two providers with DIFFERENT templates (AlphaOrders 6-col vs BetaProduction 8-col), validated DIFFERENT headers/columns/sheet names, invalid mapping rejected, inactive provider blocked, basic fallback clearly labeled')
+
+    for mapping in [{'order_id':'INVALID!'}, {'order_id':'XFE'}, {'order_id':'A','window_name':'A'}]:
+        assert staff.post('/api/operations/provider-templates',json={'provider_id':pid_a,'name':'Invalid','sheet_name':'Valid','column_mappings':mapping}).status_code==422
+    for name in ['Bad/Sheet', 'a'*32, "'Bad", 'Bad\x01']:
+        assert staff.post('/api/operations/provider-templates',json={'provider_id':pid_a,'name':'Invalid','sheet_name':name,'column_mappings':{'order_id':'A'}}).status_code==422
+    config={'provider_id':pid_a,'name':'Sparse','sheet_name':'A & "B"','column_mappings':{'order_id':'C','window_name':'AA','quantity':'Z'}}
+    template=post(staff,'operations/provider-templates',config)
+    post(staff,f'operations/orders/{oid1}/assign-provider',{'provider_id':pid_a,'template_id':template['id']})
+    response=staff.get(f'/api/operations/orders/{oid1}/supplier-export')
+    sheet=openpyxl.load_workbook(io.BytesIO(response.content)).active
+    assert sheet.title=='A & "B"'
+    assert sheet['A1'].value is None and sheet['C1'].value=='order_id' and sheet['Z1'].value=='quantity' and sheet['AA1'].value=='window_name'
+    assert sheet['C2'].value==oid1 and isinstance(sheet['Z2'].value,int)
+    print('PASS sparse C/Z/AA placement, numeric cells, XML names, invalid/duplicate/out-of-range columns')

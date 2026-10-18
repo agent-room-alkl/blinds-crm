@@ -4,6 +4,7 @@ Separate customer sessions never authenticate against the legacy staff API.
 JSON snapshots use the existing SQLite/PostgreSQL transaction adapter.
 """
 import hashlib
+import re
 import base64
 import json
 import secrets
@@ -107,6 +108,25 @@ class LineAdjustment(Input):
 class Adjustments(Input):
     lines: list[LineAdjustment] = Field(max_length=200)
     note: str = Field(min_length=5,max_length=1000)
+
+def column_number(value):
+    if not re.fullmatch(r'[A-Z]{1,3}', value):
+        raise HTTPException(422, 'Invalid Excel column')
+    number = 0
+    for letter in value:
+        number = number * 26 + ord(letter) - 64
+    if number > 16384:
+        raise HTTPException(422, 'Excel column exceeds XFD')
+    return number
+
+
+def validate_template(sheet_name, mappings):
+    if not sheet_name.strip() or len(sheet_name) > 31 or re.search(r"[\\/?:*\[\]\x00-\x1f]", sheet_name) or sheet_name.startswith("'") or sheet_name.endswith("'"):
+        raise HTTPException(422, 'Invalid Excel sheet name')
+    columns = [column_number(value) for value in mappings.values()]
+    if len(set(columns)) != len(columns):
+        raise HTTPException(422, 'Duplicate Excel columns')
+
 
 class ProviderCreate(Input):
     name: str = Field(min_length=1, max_length=200)
@@ -640,7 +660,7 @@ def register(app, s):
         from fastapi.responses import Response
         import io, zipfile
         from xml.etree import ElementTree as ET
-        from excel_rules import column
+        from xml.sax.saxutils import quoteattr
         
         with s.db() as c:
             d=get(c,oid,'project')
@@ -694,12 +714,13 @@ def register(app, s):
             # Generate custom template export
             mappings=json.loads(template['column_mappings'])
             sheet_name=template['sheet_name']
+            validate_template(sheet_name, mappings)
             ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
             ET.register_namespace('',ns)
             
             # Build header row
-            columns=sorted(mappings.items(),key=lambda x:x[1])  # Sort by column letter
-            headers=[field for field,_ in columns]
+            columns=sorted(mappings.items(),key=lambda x:column_number(x[1]))
+            headers={col:field for field,col in columns}
             
             # Build data rows
             rows=[headers]
@@ -723,16 +744,15 @@ def register(app, s):
                     elif field=='options': row_data[field]='; '.join(f"{k}: {v}" for k,v in line['options'].items())
                     elif field=='arrived': row_data[field]=line['arrived']
                     elif field=='delivered': row_data[field]=line['delivered']
-                rows.append([row_data.get(field,'') for field,_ in columns])
+                rows.append({col:row_data.get(field,'') for field,col in columns})
             
             # Create XLSX
             sheet=ET.Element('{'+ns+'}worksheet')
             data=ET.SubElement(sheet,'{'+ns+'}sheetData')
             for r,values in enumerate(rows,1):
                 row=ET.SubElement(data,'{'+ns+'}row',{'r':str(r)})
-                for col_idx,v in enumerate(values,1):
-                    col_letter=column(col_idx)
-                    numeric=(r>1 and col_idx>1 and isinstance(v,(int,float)))
+                for col_letter,v in values.items():
+                    numeric=(r>1 and isinstance(v,(int,float)))
                     cell=ET.SubElement(row,'{'+ns+'}c',{'r':col_letter+str(r),**({} if numeric else {'t':'inlineStr'})})
                     if numeric:
                         ET.SubElement(cell,'{'+ns+'}v').text=str(v)
@@ -743,7 +763,7 @@ def register(app, s):
             package={
                 '[Content_Types].xml':'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
                 '_rels/.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-                'xl/workbook.xml':f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets></workbook>',
+                'xl/workbook.xml':f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name={quoteattr(sheet_name)} sheetId="1" r:id="rId1"/></sheets></workbook>',
                 'xl/_rels/workbook.xml.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
                 'xl/worksheets/sheet1.xml':ET.tostring(sheet,encoding='utf-8')}
             
@@ -752,7 +772,7 @@ def register(app, s):
                 for name,content in package.items():
                     z.writestr(name,content)
             
-            filename=f"vera-{provider_name.replace(' ','-')}-{d['id']}.xlsx"
+            filename=f"vera-provider-{provider_id}-{d['id'].replace(':','-')}.xlsx"
             return Response(out.getvalue(),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                            headers={'Content-Disposition':f'attachment; filename="{filename}"','Cache-Control':'no-store'})
 
@@ -1054,6 +1074,7 @@ def register(app, s):
             for field in body.column_mappings:
                 if field not in valid_fields:
                     raise HTTPException(422,f'Unknown field: {field}')
+            validate_template(body.sheet_name, body.column_mappings)
             cursor=c.execute('INSERT INTO provider_templates(provider_id,name,sheet_name,column_mappings,created_at) VALUES(?,?,?,?,?)',
                      (body.provider_id,body.name,body.sheet_name,json.dumps(body.column_mappings),s.now()))
             tid=cursor.lastrowid
@@ -1076,6 +1097,8 @@ def register(app, s):
                 if not template:
                     raise HTTPException(404,'Active template not found for this provider')
             # Check if already assigned
+            if body.is_preferred:
+                c.execute('UPDATE order_providers SET is_preferred=0 WHERE order_id=?', (oid,))
             existing=c.execute('SELECT id FROM order_providers WHERE order_id=? AND provider_id=?',(oid,body.provider_id)).fetchone()
             if existing:
                 c.execute('UPDATE order_providers SET template_id=?,is_preferred=? WHERE id=?',

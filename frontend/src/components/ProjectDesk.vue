@@ -180,6 +180,7 @@ async function load() {
     supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
     if (!orderProviderForm[order.id]) {
       orderProviderForm[order.id] = { provider_id: 0, template_id: 0 };
+      await loadOrderProviders(order.id);
     }
     for (const line of order.lines) {
       batch[`${order.id}:${line.id}:discount`] = Number(line.discount ?? 0);
@@ -651,6 +652,10 @@ async function exportWithProvider(orderId: string, providerId?: number, allowFal
   error.value = "";
   notice.value = "";
   try {
+    if (providerId && !allowFallback) {
+      const form = orderProviderForm[orderId];
+      await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: form.template_id || null, is_preferred: true });
+    }
     const params = new URLSearchParams();
     if (providerId) params.set("provider_id", String(providerId));
     if (allowFallback) params.set("allow_basic_fallback", "true");
@@ -782,7 +787,7 @@ async function loadOrderProviders(orderId: string) {
               <div class="provider-section">
                 <div class="form-row">
                   <label>{{ tx("选择供应商", "Select provider") }}
-                    <select v-model="orderProviderForm[selectedOrder.id].provider_id" @change="() => { orderProviderForm[selectedOrder.id].template_id = 0; loadOrderProviders(selectedOrder.id); }">
+                    <select v-model="orderProviderForm[selectedOrder.id].provider_id" @change="() => { orderProviderForm[selectedOrder.id].template_id = 0; }">
                       <option :value="0">{{ tx("未分配", "Not assigned") }}</option>
                       <option v-for="p in providers.filter(p => p.active)" :key="p.id" :value="p.id">{{ p.name }}</option>
                     </select>
