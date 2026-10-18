@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory() as folder:
     staff.headers['Authorization'] = 'Bearer ' + r.json()['token']
     
     # Load the real legacy row from the owner's backup DB
-    with open('/home/ubuntu/.cursor/projects/workspace/uploads/legacy_ashwood_row_id27_28b7.json') as f:
+    with open('/home/ubuntu/.cursor/projects/workspace/uploads/legacy_ashwood_row_id27_3a22.json') as f:
         legacy_row = json.load(f)
     
     print(f'✓ Loaded real legacy row id={legacy_row["id"]}:')
