@@ -1124,6 +1124,11 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .mapping-display { display: grid; gap: 4px; margin-top: 8px; font-size: 13px; }
 .batch-actions { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
 .notification-item, .rebate-item { padding: 12px; background: #f9faf8; border-radius: 6px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+/* A long unbroken reference must break inside the text instead of pushing the row past the viewport.
+   min-width:0 lets the flex item shrink below its content width; flex-wrap would break the line
+   before shrinking, which drops the action button onto its own row, so it is deliberately not used. */
+.notification-item > span, .rebate-item > span { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.notification-item > button, .rebate-item > button { flex-shrink: 0; }
 @media (max-width: 1000px) {
   .workspace-grid { grid-template-columns: 1fr; }
   .order-list { position: static; max-height: none; }
