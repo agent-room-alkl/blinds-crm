@@ -272,6 +272,19 @@ def register(app, s):
             template = get(c,template_id,'template')
             rules = {p['source_code']:p for p in template['products']}
             product_rows = {r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
+            
+            # Synthesize provisional Ashwood rule from Basswood template
+            basswood_rule = rules.get('Shutters_Basswood')
+            if basswood_rule and 'VERA_Ashwood_provisional' not in rules:
+                rules['VERA_Ashwood_provisional'] = {
+                    **basswood_rule,
+                    'source_code': 'VERA_Ashwood_provisional',
+                    'rate_per_m2': '1.00',
+                    'provisional': True,
+                    'status': 'provisional_placeholder',
+                    'warnings': ['Placeholder price 1.00/m2 must not be quoted to customers']
+                }
+            
             if any(product_rows.get(l.product_id,{}).get('source_code') for l in body.lines):
                 from excel_rules import calculate_line, up
                 lines, subtotal, installation = [], Decimal(0), Decimal(0)
@@ -284,6 +297,11 @@ def register(app, s):
                     selected_adjustment=(adjustments or {}).get(str(n+1))
                     if selected_adjustment and Decimal(selected_adjustment.get('discount','0')) not in {Decimal(0),*[Decimal(v) for v in template['discounts'] if v is not None]}:
                         raise HTTPException(422,'Select a discount defined by the imported workbook')
+                    
+                    # Check orderable status: configured or provisional
+                    if rule['status'] not in ('configured', 'provisional_placeholder'):
+                        raise HTTPException(409, f"Product pricing rule is not ready: {rule.get('status')}")
+                    
                     try:
                         calculated=calculate_line(rule,raw,selected_adjustment)
                     except ValueError as e:
@@ -293,19 +311,25 @@ def register(app, s):
                     subtotal+=Decimal(calculated['amount'])
                     if body.installation_required:
                         installation+=Decimal(calculated['installation_amount'])
+                    
+                    # Mark provisional pricing on the line
+                    pricing_status = 'provisional' if rule.get('provisional') else 'configured'
                     lines.append({**raw,**calculated,'id':str(n+1),'arrived':0,'delivered':0,
                                   'source_code':p['source_code'],'product_name':p.get('name_en'),
-                                  'pricing_status':'configured','rule_version':template['version'],
+                                  'pricing_status':pricing_status,'rule_version':template['version'],
                                   'price_snapshot':rule})
                 installation=max(installation,Decimal(template['minimum_installation'])) if body.installation_required else Decimal(0)
                 # Excel Q33/P49 retain precision; currency display rounds only at the boundary.
                 tax=(subtotal+installation)*Decimal(template['tax_rate'])
                 total=subtotal+installation+tax
+                
+                # Mark overall status as provisional if any line is provisional
+                overall_status = 'provisional' if any(l['pricing_status'] == 'provisional' for l in lines) else 'configured'
                 return {'lines':lines,'subtotal':money(subtotal),'installation':money(installation),
                         'installation_required':body.installation_required,'tax':money(tax),'tax_rate':template['tax_rate'],
                         'total':money(total),'tax_exact':str(tax),'total_exact':str(total),
                         'deposit':deposit_amount(total),'currency':'NZD','tax_basis':'GST included in total',
-                        'pricing_status':'configured','missing_price_rules':[],'rule_version':template['version']}
+                        'pricing_status':overall_status,'missing_price_rules':[],'rule_version':template['version']}
         lines, total, currency, tax_basis, missing = [], Decimal(0), None, None, []
         for n, line in enumerate(body.lines):
             p = c.execute('SELECT data FROM products WHERE id=?', (line.product_id,)).fetchone()
@@ -495,17 +519,34 @@ def register(app, s):
                 if warranty:
                     p.update(warranty_years=warranty,content_source='https://verashading.com/products')
                 c.execute('INSERT INTO products(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(pid,s.dump(p)))
-            ash=next((p for p in existing.values() if p.get('source_code')=='VERA_Ashwood_display'),None)
+            ash=next((p for p in existing.values() if p.get('source_code')=='VERA_Ashwood_provisional'),None)
             if not ash:
-                ash={'id':next_id,'source_code':'VERA_Ashwood_display','name_zh':'VERA Deluxe','name_en':'VERA Deluxe',
+                # Get Basswood product for configuration schema reference
+                basswood_product = next((p for p in existing.values() if p.get('source_code')=='Shutters_Basswood'), None)
+                config_schema = basswood_product.get('configuration_schema', []) if basswood_product else []
+                
+                ash={'id':next_id,'source_code':'VERA_Ashwood_provisional','name_zh':'VERA Deluxe','name_en':'VERA Deluxe',
                      'material_zh':'Ashwood','material_en':'Ashwood','category':'shutters','sample':False,'published':True,
-                     'portal_only':False,'scope':'website_only','orderable':False,'configuration_schema':[],
+                     'portal_only':False,'scope':'website_and_template','orderable':True,'configuration_schema':config_schema,
                      'warranty_years':10,'content_source':'https://verashading.com/products',
-                     'description_zh':'官网展示系列。现用订单模板尚无此产品定价，待核对后开通订购。',
-                     'description_en':'Website collection. Ordering awaits a confirmed product rule in the order workbook.', 'image_urls':[]}
+                     'description_zh':'官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。',
+                     'description_en':'Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.', 
+                     'image_urls':[]}
                 c.execute('INSERT INTO products(id,data) VALUES(?,?)',(next_id,s.dump(ash)))
+            else:
+                # Update existing Ashwood to be orderable with configuration schema
+                basswood_product = next((p for p in existing.values() if p.get('source_code')=='Shutters_Basswood'), None)
+                config_schema = basswood_product.get('configuration_schema', []) if basswood_product else ash.get('configuration_schema', [])
+                ash.update(
+                    orderable=True, 
+                    scope='website_and_template',
+                    configuration_schema=config_schema,
+                    description_zh='官网展示系列。当前为占位价 1.00/m2，严禁报价给客户。',
+                    description_en='Website collection. Current placeholder rate 1.00/m2 must not be quoted to customers.'
+                )
+                c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(ash),ash['id']))
             for pid,p in existing.items():
-                if p.get('source_code') and p['source_code']!='VERA_Ashwood_display' and p['source_code'] not in {r['source_code'] for r in manifest['products']}:
+                if p.get('source_code') and p['source_code'] not in ('VERA_Ashwood_provisional', 'VERA_Ashwood_display') and p['source_code'] not in {r['source_code'] for r in manifest['products']}:
                     p.update(published=False,orderable=False)
                     c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(p),pid))
                 if p.get('sample') and ('示例' in p.get('name_zh','') or 'Sample' in p.get('name_en','')):

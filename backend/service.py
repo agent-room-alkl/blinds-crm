@@ -186,18 +186,60 @@ def logout(credentials: HTTPAuthorizationCredentials = Depends(security), actor=
         c.execute('DELETE FROM sessions WHERE token_hash=?',(hashlib.sha256(credentials.credentials.encode()).hexdigest(),))
     return {'ok':True}
 
-@app.get('/api/products')
-def products():
+def is_authenticated_user(credentials: HTTPAuthorizationCredentials | None) -> bool:
+    """Check if user is authenticated (staff or portal customer)."""
+    if not credentials or credentials.scheme.lower() != 'bearer':
+        return False
+    
+    token_hash = hashlib.sha256(credentials.credentials.encode()).hexdigest()
+    
+    # Try staff session
     with db() as c:
-        return [catalog_product(json.loads(r['data'])) for r in c.execute('SELECT data FROM products ORDER BY id') if json.loads(r['data']).get('published',True) and not json.loads(r['data']).get('portal_only',False)]
+        row = c.execute('SELECT expires_at, username FROM sessions WHERE token_hash=?', (token_hash,)).fetchone()
+        if row:
+            user = c.execute('SELECT active FROM users WHERE username=?', (row['username'],)).fetchone()
+            if user and user['active'] and row['expires_at'] >= time.time():
+                return True
+        
+        # Try portal customer session
+        row = c.execute('SELECT * FROM portal_sessions WHERE token_hash=?', (token_hash,)).fetchone()
+        if row and row['expires_at'] >= time.time():
+            return True
+    
+    return False
+
+
+@app.get('/api/products')
+def products(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
+    # Check if user is authenticated (staff or portal customer)
+    is_authenticated = is_authenticated_user(credentials)
+    
+    with db() as c:
+        result = []
+        for r in c.execute('SELECT data FROM products ORDER BY id'):
+            d = json.loads(r['data'])
+            if not d.get('published', True) or d.get('portal_only', False):
+                continue
+            # Hide aluminium products for non-authenticated users
+            if not is_authenticated and d.get('category') == 'aluminium':
+                continue
+            result.append(catalog_product(d))
+        return result
 
 @app.get('/api/products/{pid}')
-def product(pid:int):
+def product(pid:int, credentials: HTTPAuthorizationCredentials | None = Depends(security)):
+    # Check if user is authenticated (staff or portal customer)
+    is_authenticated = is_authenticated_user(credentials)
+    
     with db() as c:
         r=c.execute('SELECT data FROM products WHERE id=?',(pid,)).fetchone()
         if not r: raise HTTPException(404,'Product not found')
         d=json.loads(r['data'])
-        if not d.get('published',True) or d.get('portal_only'): raise HTTPException(404,'Product not found')
+        if not d.get('published',True) or d.get('portal_only'): 
+            raise HTTPException(404,'Product not found')
+        # Block aluminium products for non-authenticated users
+        if not is_authenticated and d.get('category') == 'aluminium':
+            raise HTTPException(403,'Authentication required to view aluminium products')
         return catalog_product(d)
 
 @app.get('/api/admin/image-upload-config',dependencies=[Depends(auth)])
