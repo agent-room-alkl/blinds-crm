@@ -1012,15 +1012,15 @@ async function loadOrderProviders(orderId: string) {
 .order-row { display: flex; gap: 6px; align-items: stretch; }
 .pick-mark { display: flex; align-items: center; padding: 0 4px; }
 .pick-mark input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
-.order-pick { flex: 1; display: grid; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid #d5ddd6; background: #fff; color: #1b2421; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+.order-pick { flex: 1; display: grid; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid #d5ddd6; background: #fff; color: #1b2421; border-radius: 6px; cursor: pointer; transition: all 0.2s; min-width: 0; max-width: 100%; }
 .order-pick:hover { border-color: #3d6b4f; background: #f9faf8; }
 .order-pick.current { border-color: #0f6e5c; background: #f4f8f2; box-shadow: 0 0 0 2px rgba(15, 110, 92, 0.1); }
-.order-pick strong { font-size: 15px; font-weight: 600; color: #1b2421; }
-.order-pick span { font-size: 14px; color: #3d4a44; }
-.order-pick small { font-size: 13px; color: #6d7c72; margin-top: 2px; }
+.order-pick strong { font-size: 15px; font-weight: 600; color: #1b2421; overflow-wrap: anywhere; word-break: break-word; }
+.order-pick span { font-size: 14px; color: #e7eee9; overflow-wrap: anywhere; word-break: break-word; }
+.order-pick small { font-size: 13px; color: #b8c5be; margin-top: 2px; overflow-wrap: anywhere; word-break: break-word; }
 .detail-panel { display: flex; flex-direction: column; min-height: 600px; }
-.section-tabs { display: flex; gap: 4px; padding: 8px; background: white; border: 1px solid #e1e6df; border-radius: 8px 8px 0 0; border-bottom: none; flex-wrap: wrap; }
-.section-tabs button { padding: 10px 16px; border: none; background: transparent; color: #3d4a44; font-size: 14px; font-weight: 500; border-radius: 6px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.section-tabs { display: flex; gap: 4px; padding: 8px; background: white; border: 1px solid #e1e6df; border-radius: 8px 8px 0 0; border-bottom: none; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.section-tabs button { padding: 10px 16px; border: none; background: transparent; color: #3d4a44; font-size: 14px; font-weight: 500; border-radius: 6px; cursor: pointer; transition: all 0.2s; white-space: nowrap; flex-shrink: 0; }
 .section-tabs button:hover { background: #f5f6f2; }
 .section-tabs button.active { background: #0f6e5c; color: white; }
 .section-content { flex: 1; }
@@ -1046,7 +1046,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .form-row button { flex-shrink: 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-top: 12px; }
 .actions label { min-width: 200px; font-size: 14px; }
-.desk input, .desk select, .desk textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d5ddd6; border-radius: 6px; font-size: 14px; font-family: inherit; }
+.desk input, .desk select, .desk textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d5ddd6; border-radius: 6px; font-size: 14px; font-family: inherit; min-width: 0; max-width: 100%; }
 .desk button { min-height: 40px; padding: 10px 18px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
 .desk button:hover:not(:disabled) { background: #0d5a4a; border-color: #0d5a4a; }
 .desk button.secondary { background: white; color: #3d4a44; border-color: #d5ddd6; }
@@ -1057,11 +1057,15 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .hint { color: #6d7c72; font-size: 14px; line-height: 1.6; margin: 8px 0; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 16px; }
 .form-grid button { grid-column: 1 / -1; justify-self: start; }
+@media (max-width: 600px) {
+  .form-grid { grid-template-columns: 1fr; }
+}
 .invoice { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px; background: #f9faf8; border-radius: 6px; margin-top: 8px; font-size: 14px; }
 .invoice label { margin: 0; display: flex; align-items: center; gap: 8px; }
 .provider-list, .template-list { display: grid; gap: 12px; margin-top: 16px; }
-.provider-card, .template-card { padding: 16px; background: #f9faf8; border: 1px solid #e1e6df; border-radius: 6px; }
-.provider-card h4, .template-card h4 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+.provider-card, .template-card { padding: 16px; background: #f9faf8; border: 1px solid #e1e6df; border-radius: 6px; min-width: 0; max-width: 100%; }
+.provider-card h4, .template-card h4 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; overflow-wrap: anywhere; word-break: break-word; }
+.provider-card p, .template-card p { overflow-wrap: anywhere; word-break: break-word; }
 .status-active { color: #0f6e5c; font-size: 13px; font-weight: 500; }
 .status-inactive { color: #8a3b2c; font-size: 13px; font-weight: 500; }
 .provider-badge { padding: 4px 8px; background: #e1e6df; color: #3d4a44; border-radius: 4px; font-size: 12px; font-weight: 500; }
@@ -1086,12 +1090,16 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 }
 @media (max-width: 390px) {
   .workspace-grid { gap: 12px; }
-  .desk .card { padding: 12px; }
-  .order-list { max-height: 240px; }
+  .desk .card { padding: 12px; min-width: 0; max-width: 100%; box-sizing: border-box; }
+  .order-list { max-height: 240px; min-width: 0; }
   .section-tabs { padding: 6px; gap: 2px; }
   .section-tabs button { padding: 8px 12px; font-size: 13px; }
   .form-grid { grid-template-columns: 1fr; }
   .form-row, .actions, .batch-actions { flex-direction: column; align-items: stretch; }
   .form-row button, .actions button { width: 100%; }
+  .form-row label, .actions label { min-width: 0; max-width: 100%; }
+  .desk input, .desk select, .desk textarea, .desk button { font-size: 14px; }
+  .mapping-controls { flex-direction: column; }
+  .mapping-controls select, .mapping-controls input, .mapping-controls button { width: 100%; }
 }
 </style>
