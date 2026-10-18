@@ -144,11 +144,17 @@ with tempfile.TemporaryDirectory() as folder:
     assert resp.status_code==401,'Portal token must not access operations endpoints'
     print('✓ Portal token rejected by operations/providers')
     
-    # Create active provider
-    resp=staff.post('/api/operations/providers',json={'name':'Test Supplier','contact_email':'supplier@example.com','notes':'Test notes'})
-    assert resp.status_code==200,f'Create provider failed: {resp.text}'
-    pid=resp.json()['id']
-    print(f'✓ Created provider {pid}')
+    # Create Provider A with template config A
+    resp=staff.post('/api/operations/providers',json={'name':'Supplier Alpha','contact_email':'alpha@example.com','notes':'Focused on shutters'})
+    assert resp.status_code==200,f'Create provider A failed: {resp.text}'
+    pid_a=resp.json()['id']
+    print(f'✓ Created Provider A (Supplier Alpha) id={pid_a}')
+    
+    # Create Provider B with different template config B
+    resp=staff.post('/api/operations/providers',json={'name':'Supplier Beta','contact_email':'beta@example.com','notes':'Focused on blinds'})
+    assert resp.status_code==200,f'Create provider B failed: {resp.text}'
+    pid_b=resp.json()['id']
+    print(f'✓ Created Provider B (Supplier Beta) id={pid_b}')
     
     # Create inactive provider
     resp=staff.post('/api/operations/providers',json={'name':'Inactive Supplier','contact_email':'inactive@example.com','notes':'Inactive'})
@@ -156,73 +162,117 @@ with tempfile.TemporaryDirectory() as folder:
     staff.post(f'/api/operations/providers/{inactive_pid}',json={'name':'Inactive Supplier','contact_email':'inactive@example.com','notes':'Inactive','active':False})
     print(f'✓ Created inactive provider {inactive_pid}')
     
-    # List providers
-    resp=staff.get('/api/operations/providers')
-    assert resp.status_code==200
-    assert any(p['id']==pid for p in resp.json())
-    print('✓ Listed providers')
-    
-    # Create custom template with column mappings
-    mappings={'order_id':'A','window_name':'B','width_mm':'C','height_mm':'D','quantity':'E','arrived':'F'}
+    # Template A: 6 columns in specific order
+    mappings_a={'order_id':'A','window_name':'B','width_mm':'C','height_mm':'D','quantity':'E','arrived':'F'}
     resp=staff.post('/api/operations/provider-templates',json={
-        'provider_id':pid,'name':'Custom Template','sheet_name':'OrderSheet','column_mappings':mappings})
-    assert resp.status_code==200,f'Create template failed: {resp.text}'
-    tid=resp.json()['id']
-    print(f'✓ Created custom template {tid}')
+        'provider_id':pid_a,'name':'Alpha Template','sheet_name':'AlphaOrders','column_mappings':mappings_a})
+    assert resp.status_code==200,f'Create template A failed: {resp.text}'
+    tid_a=resp.json()['id']
+    assert resp.json()['sheet_name']=='AlphaOrders'
+    print(f'✓ Created Template A (AlphaOrders, 6 cols) id={tid_a}')
     
-    # Assign provider with template to order
+    # Template B: DIFFERENT columns, DIFFERENT order, DIFFERENT sheet name
+    mappings_b={'project_name':'A','company':'B','contact_name':'C','window_name':'D','product_id':'E','quantity':'F','panel_count':'G','delivered':'H'}
+    resp=staff.post('/api/operations/provider-templates',json={
+        'provider_id':pid_b,'name':'Beta Template','sheet_name':'BetaProduction','column_mappings':mappings_b})
+    assert resp.status_code==200,f'Create template B failed: {resp.text}'
+    tid_b=resp.json()['id']
+    assert resp.json()['sheet_name']=='BetaProduction'
+    print(f'✓ Created Template B (BetaProduction, 8 cols) id={tid_b}')
+    
+    # Invalid mapping (unknown field) should be rejected
+    resp=staff.post('/api/operations/provider-templates',json={
+        'provider_id':pid_a,'name':'Bad Template','sheet_name':'Bad','column_mappings':{'invalid_field':'A'}})
+    assert resp.status_code==422,'Invalid field should be rejected'
+    print('✓ Invalid field mapping rejected')
+    
+    # Empty mappings should be rejected
+    resp=staff.post('/api/operations/provider-templates',json={
+        'provider_id':pid_a,'name':'Empty Template','sheet_name':'Empty','column_mappings':{}})
+    assert resp.status_code==422,'Empty mappings should be rejected'
+    print('✓ Empty column mappings rejected')
+    
+    # Assign Provider A + Template A to first order
     orders_list=staff.get('/api/operations/orders').json()
-    oid=orders_list[0]['id']
-    resp=staff.post(f'/api/operations/orders/{oid}/assign-provider',json={'provider_id':pid,'template_id':tid,'is_preferred':True})
+    oid1=orders_list[0]['id']
+    resp=staff.post(f'/api/operations/orders/{oid1}/assign-provider',json={'provider_id':pid_a,'template_id':tid_a,'is_preferred':True})
     assert resp.status_code==200
-    assert resp.json()['provider_id']==pid
-    print('✓ Assigned provider with custom template to order')
+    print(f'✓ Assigned Provider A + Template A to order {oid1}')
+    
+    # Re-login portal (was logged out earlier in test) and create second order for Provider B testing
+    token=post(portal,'portal/login',{'username':'customerA','password':'test-password'})['token']
+    portal.headers['Authorization']='Bearer '+token
+    project2={'project_name':'Test Project 2','site_address':'789 Site Ave','submission_key':'test-sub-002',
+             'lines':[{'window_name':'Office','product_id':1,'width_mm':1800,'height_mm':2100,'quantity':1,'panel_count':2,'options':{}}]}
+    post(portal,'portal/orders',project2)
+    oid2=portal.get('/api/portal/orders').json()[-1]['id']
+    post(staff,f'operations/orders/{oid2}/review')
+    post(staff,f'operations/orders/{oid2}/deposit-received')
+    resp=staff.post(f'/api/operations/orders/{oid2}/assign-provider',json={'provider_id':pid_b,'template_id':tid_b,'is_preferred':True})
+    assert resp.status_code==200
+    print(f'✓ Assigned Provider B + Template B to order {oid2}')
     
     # Cannot assign inactive provider
-    resp=staff.post(f'/api/operations/orders/{oid}/assign-provider',json={'provider_id':inactive_pid,'template_id':None})
+    resp=staff.post(f'/api/operations/orders/{oid1}/assign-provider',json={'provider_id':inactive_pid,'template_id':None})
     assert resp.status_code==404,'Inactive provider should be rejected'
     print('✓ Inactive provider assignment blocked')
     
-    # Get order providers
-    resp=staff.get(f'/api/operations/orders/{oid}/providers')
-    assert resp.status_code==200
-    assert len(resp.json())>0
-    print('✓ Retrieved order providers')
-    
-    # Export with custom template and validate XLSX structure
+    # Export order 1 with Template A: validate AlphaOrders sheet with 6 specific columns
     import openpyxl,io
-    resp=staff.get(f'/api/operations/orders/{oid}/supplier-export')
-    assert resp.status_code==200,f'Custom template export failed: {resp.status_code} {resp.text}'
-    assert resp.headers['content-type']=='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    wb=openpyxl.load_workbook(io.BytesIO(resp.content))
-    assert 'OrderSheet' in wb.sheetnames,'Custom sheet name must exist'
-    ws=wb['OrderSheet']
-    # Validate headers match mappings
-    assert ws['A1'].value=='order_id','Header A1 should be order_id'
-    assert ws['B1'].value=='window_name','Header B1 should be window_name'
-    assert ws['C1'].value=='width_mm','Header C1 should be width_mm'
-    # Validate data rows
-    assert ws['A2'].value is not None,'Order ID data in row 2'
-    assert ws['B2'].value is not None,'Window name data in row 2'
-    print('✓ Exported with custom template; validated XLSX structure (OrderSheet, mapped headers, data rows)')
+    resp=staff.get(f'/api/operations/orders/{oid1}/supplier-export')
+    assert resp.status_code==200,f'Template A export failed: {resp.status_code} {resp.text}'
+    wb_a=openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert 'AlphaOrders' in wb_a.sheetnames,'Template A sheet name AlphaOrders'
+    ws_a=wb_a['AlphaOrders']
+    assert ws_a['A1'].value=='order_id','Template A col A = order_id'
+    assert ws_a['B1'].value=='window_name','Template A col B = window_name'
+    assert ws_a['C1'].value=='width_mm','Template A col C = width_mm'
+    assert ws_a['D1'].value=='height_mm','Template A col D = height_mm'
+    assert ws_a['E1'].value=='quantity','Template A col E = quantity'
+    assert ws_a['F1'].value=='arrived','Template A col F = arrived'
+    assert ws_a['G1'].value is None,'Template A has only 6 columns'
+    assert ws_a['A2'].value is not None,'Data row exists'
+    print('✓ Provider A export: AlphaOrders sheet, 6 columns (order_id, window_name, width_mm, height_mm, quantity, arrived), data validated')
+    
+    # Export order 2 with Template B: validate BetaProduction sheet with 8 DIFFERENT columns
+    resp=staff.get(f'/api/operations/orders/{oid2}/supplier-export')
+    assert resp.status_code==200,f'Template B export failed: {resp.status_code} {resp.text}'
+    wb_b=openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert 'BetaProduction' in wb_b.sheetnames,'Template B sheet name BetaProduction'
+    ws_b=wb_b['BetaProduction']
+    assert ws_b['A1'].value=='project_name','Template B col A = project_name (DIFFERENT from Template A)'
+    assert ws_b['B1'].value=='company','Template B col B = company (DIFFERENT from Template A)'
+    assert ws_b['C1'].value=='contact_name','Template B col C = contact_name (DIFFERENT from Template A)'
+    assert ws_b['D1'].value=='window_name','Template B col D = window_name (DIFFERENT position)'
+    assert ws_b['E1'].value=='product_id','Template B col E = product_id (DIFFERENT from Template A)'
+    assert ws_b['F1'].value=='quantity','Template B col F = quantity (DIFFERENT position)'
+    assert ws_b['G1'].value=='panel_count','Template B col G = panel_count (NOT in Template A)'
+    assert ws_b['H1'].value=='delivered','Template B col H = delivered (NOT in Template A)'
+    assert ws_b['A2'].value is not None,'Data row exists'
+    print('✓ Provider B export: BetaProduction sheet, 8 columns (project_name, company, contact_name, window_name, product_id, quantity, panel_count, delivered), COMPLETELY DIFFERENT from Provider A, data validated')
     
     # Export for inactive provider should fail
-    resp=staff.get(f'/api/operations/orders/{oid}/supplier-export?provider_id={inactive_pid}')
+    resp=staff.get(f'/api/operations/orders/{oid1}/supplier-export?provider_id={inactive_pid}')
     assert resp.status_code==404,'Cannot export for inactive provider'
     print('✓ Inactive provider export blocked')
     
-    # Export without template but no fallback allowed should fail
-    oid2=orders_list[1]['id'] if len(orders_list)>1 else oid
-    resp=staff.get(f'/api/operations/orders/{oid2}/supplier-export')
+    # Create third order without provider assignment for fallback testing
+    project3={'project_name':'Unassigned Project','site_address':'999 Site Ave','submission_key':'test-sub-003',
+             'lines':[{'window_name':'Garage','product_id':1,'width_mm':1600,'height_mm':1900,'quantity':1,'panel_count':1,'options':{}}]}
+    post(portal,'portal/orders',project3)
+    oid3=portal.get('/api/portal/orders').json()[-1]['id']
+    post(staff,f'operations/orders/{oid3}/review')
+    post(staff,f'operations/orders/{oid3}/deposit-received')
+    resp=staff.get(f'/api/operations/orders/{oid3}/supplier-export')
     assert resp.status_code==422,'Should require template or explicit fallback'
-    print('✓ Export without template requires explicit fallback flag')
+    print('✓ Export without template requires explicit fallback flag (422)')
     
-    # Basic fallback with flag
-    resp=staff.get(f'/api/operations/orders/{oid2}/supplier-export?allow_basic_fallback=true')
+    # Basic fallback with flag: clearly labeled filename
+    resp=staff.get(f'/api/operations/orders/{oid3}/supplier-export?allow_basic_fallback=true')
     assert resp.status_code==200,'Basic fallback with flag should work'
-    assert 'BASIC-NOT-VERIFIED' in resp.headers['content-disposition'],'Filename must indicate basic fallback'
-    wb2=openpyxl.load_workbook(io.BytesIO(resp.content))
-    assert 'Project' in wb2.sheetnames,'Basic fallback uses Project sheet'
-    print('✓ Basic fallback export with explicit flag; XLSX validated; filename clearly marked BASIC-NOT-VERIFIED')
+    assert 'BASIC-NOT-VERIFIED' in resp.headers['content-disposition'],'Filename must indicate BASIC-NOT-VERIFIED'
+    wb_basic=openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert 'Project' in wb_basic.sheetnames,'Basic fallback uses Project sheet (different from both custom templates)'
+    print('✓ Basic fallback: BASIC-NOT-VERIFIED filename, Project sheet (generic, not supplier-specific)')
     
-    print('PASS provider management: portal token rejection, CRUD, templates, active/inactive handling, custom XLSX with mapped columns, basic fallback with clear labeling')
+    print('PASS provider management: two providers with DIFFERENT templates (AlphaOrders 6-col vs BetaProduction 8-col), validated DIFFERENT headers/columns/sheet names, invalid mapping rejected, inactive provider blocked, basic fallback clearly labeled')
