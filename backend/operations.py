@@ -519,12 +519,23 @@ def register(app, s):
                 if warranty:
                     p.update(warranty_years=warranty,content_source='https://verashading.com/products')
                 c.execute('INSERT INTO products(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(pid,s.dump(p)))
+            
+            # Now handle Ashwood after all template products are processed
             ash=next((p for p in existing.values() if p.get('source_code')=='VERA_Ashwood_provisional'),None)
+            
+            # Get Basswood configuration from the JUST-UPDATED database
+            basswood_row = c.execute('SELECT data FROM products WHERE id IN (SELECT id FROM products)').fetchall()
+            basswood_data = None
+            for row in basswood_row:
+                prod = json.loads(row['data'])
+                if prod.get('source_code') == 'Shutters_Basswood':
+                    basswood_data = prod
+                    break
+            
+            config_schema = basswood_data.get('configuration_schema', []) if basswood_data else []
+            
             if not ash:
-                # Get Basswood product for configuration schema reference
-                basswood_product = next((p for p in existing.values() if p.get('source_code')=='Shutters_Basswood'), None)
-                config_schema = basswood_product.get('configuration_schema', []) if basswood_product else []
-                
+                # Create new Ashwood product
                 ash={'id':next_id,'source_code':'VERA_Ashwood_provisional','name_zh':'VERA Deluxe','name_en':'VERA Deluxe',
                      'material_zh':'Ashwood','material_en':'Ashwood','category':'shutters','sample':False,'published':True,
                      'portal_only':False,'scope':'website_and_template','orderable':True,'configuration_schema':config_schema,
@@ -535,8 +546,6 @@ def register(app, s):
                 c.execute('INSERT INTO products(id,data) VALUES(?,?)',(next_id,s.dump(ash)))
             else:
                 # Update existing Ashwood to be orderable with configuration schema
-                basswood_product = next((p for p in existing.values() if p.get('source_code')=='Shutters_Basswood'), None)
-                config_schema = basswood_product.get('configuration_schema', []) if basswood_product else ash.get('configuration_schema', [])
                 ash.update(
                     orderable=True, 
                     scope='website_and_template',
@@ -581,6 +590,17 @@ def register(app, s):
             if active:
                 template=get(c,json.loads(active['data'])['template_id'],'template')
                 imported={r['source_code']:{k:r[k] for k in ('options','formula','status','version') if k in r} for r in template['products']}
+                
+                # Synthesize provisional Ashwood rule for catalog display
+                basswood_rule = next((r for r in template['products'] if r['source_code'] == 'Shutters_Basswood'), None)
+                if basswood_rule and 'VERA_Ashwood_provisional' not in imported:
+                    imported['VERA_Ashwood_provisional'] = {
+                        'options': basswood_rule.get('options', {}),
+                        'formula': basswood_rule.get('formula'),
+                        'status': 'provisional_placeholder',
+                        'version': template['version']
+                    }
+            
             return {'products': [{**p, 'price_rule': imported.get(p.get('source_code')) or prices.get(p['id'])} for p in products if p['published']],
                     'pricing_status': 'configured' if prices or imported else 'rules_required'}
 
