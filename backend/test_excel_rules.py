@@ -53,7 +53,17 @@ with tempfile.TemporaryDirectory() as folder:
     post(staff,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()})
     after=customer.get('/api/portal/catalog').json()['products']
     assert [(p['id'],p['source_code']) for p in before]==[(p['id'],p['source_code']) for p in after]
-    assert len(staff.get('/api/products').json())==5
+    
+    # Verify public /api/products returns exactly 5 website series (staff login, but endpoint is mixed auth)
+    public_products = staff.get('/api/products').json()
+    assert len(public_products)==5, f'Expected 5 website series, got {len(public_products)}'
+    website_series_names = sorted([p['name_en'] for p in public_products])
+    expected_series = sorted(['VERA Classic', 'VERA Eco', 'VERA Natural', 'VERA Prime', 'VERA Deluxe'])
+    assert website_series_names == expected_series, f'Expected {expected_series}, got {website_series_names}'
+    # Verify no aluminium or inactive blinds in public catalog
+    assert all(p.get('category') != 'aluminium' or p.get('sample', False) for p in public_products), 'No aluminium shutters in public'
+    assert all(p.get('category') not in ('roller', 'venetian', 'vertical', 'exterior') for p in public_products), 'No inactive blinds in public'
+    
     assert len(after)==24 and all('matrix' not in str(p.get('price_rule',{})) for p in after if p.get('source_code','').startswith('Shutters'))
     assert all('rate_per_m2' not in (p.get('price_rule') or {}) and 'matrix' not in (p.get('price_rule') or {}) for p in after)
     p=next(p for p in after if p['source_code']=='Shutters_PVC')

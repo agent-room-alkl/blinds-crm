@@ -1,12 +1,22 @@
-"""Migration: Deactivate 18 roller/venetian/vertical/exterior blind products.
+"""Migration: Deactivate/reactivate roller/venetian/vertical/exterior blind products.
 
-This migration marks specific blind products as inactive (published=False, orderable=False)
-to hide them from the catalog while preserving order history.
+NOTE: As of the latest seed, these 18 products are ALREADY inactive (published=False, 
+orderable=False) when the database is initialized. This script exists only for manual 
+reactivation or for databases that were initialized before this change.
 
-To revert: Run with --undo flag to restore published=True, orderable=True for these products.
+The 18 inactive products (IDs 10-27):
+- Roller blinds (6): IDs 10-15 (Blockout, Translucent, Sheer, Dual, Zebra, Waterproof)
+- Venetian blinds (6): IDs 16-21 (Alu 25mm, Alu 50mm, Wood Grain, Bamboo, Wood, Faux Wood)
+- Vertical blinds (3): IDs 22-24 (89mm, 127mm, PVC)
+- Exterior blinds (3): IDs 25-27 (Aluminium, Canvas, Shade Mesh)
 
-Usage:
-    python backend/deactivate_blind_products.py [--undo]
+To REACTIVATE these products (undo the deactivation):
+    python backend/deactivate_blind_products.py --undo
+
+To manually DEACTIVATE (if needed on an old database):
+    python backend/deactivate_blind_products.py
+
+Order history for these products is preserved regardless of their active/inactive state.
 """
 import argparse
 import json
