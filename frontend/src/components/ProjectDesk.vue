@@ -883,7 +883,7 @@ async function loadOrderProviders(orderId: string) {
             <h2>{{ tx("导入计价模板", "Import pricing template") }}</h2>
             <p class="hint">{{ tx("只把选项和价格放进私有库。页面不展示整张批发价矩阵，也不把客户原文件提交到公开仓库。", "Options and prices go into the private store. This page does not show the wholesale price matrix, and the customer's original file is not committed to the public repository.") }}</p>
             <input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" />
-            <p v-if="templateStatus">{{ templateStatus }}</p>
+            <p v-if="templateStatus" class="template-status">{{ templateStatus }}</p>
           </section>
 
           <section v-if="activeSection === 'customers'" class="card section-card">
@@ -1129,6 +1129,10 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
    before shrinking, which drops the action button onto its own row, so it is deliberately not used. */
 .notification-item > span, .rebate-item > span { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .notification-item > button, .rebate-item > button { flex-shrink: 0; }
+/* Status and prose paragraphs in the detail panel carry machine values - template SHAs,
+   invoice references, error text - that have no break opportunity. Every ancestor here is
+   overflow-x:visible, so one long token reaches the root and scrolls the whole page sideways. */
+.desk .section-content p, .desk .template-status { overflow-wrap: anywhere; word-break: break-word; }
 @media (max-width: 1000px) {
   .workspace-grid { grid-template-columns: 1fr; }
   .order-list { position: static; max-height: none; }
