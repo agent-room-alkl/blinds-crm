@@ -44,6 +44,29 @@ interface Rebate {
   remaining?: string;
   evidence?: string;
 }
+interface Provider {
+  id: number;
+  name: string;
+  contact_email: string;
+  notes: string;
+  active: number;
+}
+interface ProviderTemplate {
+  id: number;
+  provider_id: number;
+  name: string;
+  sheet_name: string;
+  column_mappings: string;
+  active: number;
+}
+interface OrderProvider {
+  provider_id: number;
+  provider_name: string;
+  provider_active: number;
+  template_id?: number;
+  template_name?: string;
+  sheet_name?: string;
+}
 interface ProjectOrder {
   id: string;
   customer_id: number;
@@ -69,6 +92,8 @@ const orders = ref<ProjectOrder[]>([]);
 const invoices = ref<Invoice[]>([]);
 const notices = ref<Notice[]>([]);
 const rebates = ref<Rebate[]>([]);
+const providers = ref<Provider[]>([]);
+const providerTemplates = ref<ProviderTemplate[]>([]);
 const rebateStatus = ref("");
 const settlementEvidence = ref("");
 const rebateForm = reactive({ month: "", amount: "", evidence: "" });
@@ -94,10 +119,33 @@ const account = reactive({
   username: "",
   password: "",
 });
+const providerForm = reactive({
+  name: "",
+  contact_email: "",
+  notes: "",
+});
+const templateForm = reactive({
+  provider_id: 0,
+  name: "",
+  sheet_name: "",
+  column_mappings: {} as Record<string, string>,
+});
+const mappingField = ref("");
+const mappingColumn = ref("");
+const orderProviderForm = reactive<Record<string, { provider_id: number; template_id: number }>>({});
+const activeSection = ref("operations");
+const validFields = ["order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
 
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
 const selectedId = ref("");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
+const editingProvider = ref<Provider | null>(null);
+const editProviderForm = reactive({
+  name: "",
+  contact_email: "",
+  notes: "",
+  active: true,
+});
 
 onMounted(() => {
   void load();
@@ -112,20 +160,27 @@ function stableKey(signature: string) {
 }
 
 async function load() {
-  const [listed, billed, mailed, credits] = await Promise.all([
+  const [listed, billed, mailed, credits, providerList, templateList] = await Promise.all([
     request<ProjectOrder[]>("operations/orders"),
     request<Invoice[]>("operations/invoices"),
     request<Notice[]>("operations/notifications"),
     request<{ calculation_status: string; credits: Rebate[] }>("operations/rebates"),
+    request<Provider[]>("operations/providers"),
+    request<ProviderTemplate[]>("operations/provider-templates"),
   ]);
   orders.value = listed;
   invoices.value = billed;
   notices.value = mailed;
   rebates.value = credits.credits;
+  providers.value = providerList;
+  providerTemplates.value = templateList;
   await refreshTemplate();
   rebateStatus.value = credits.calculation_status;
   for (const order of orders.value) {
     supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
+    if (!orderProviderForm[order.id]) {
+      orderProviderForm[order.id] = { provider_id: 0, template_id: 0 };
+    }
     for (const line of order.lines) {
       batch[`${order.id}:${line.id}:discount`] = Number(line.discount ?? 0);
       batch[`${order.id}:${line.id}:product_surcharge`] = Number(line.product_surcharge ?? 0);
@@ -506,198 +561,537 @@ function retryNotice(id: string) {
     notice.value = tx(`通知状态：${mailStatus(sent.status)}`, `Notification status: ${mailStatus(sent.status)}`);
   });
 }
+
+function createProvider() {
+  if (!providerForm.name.trim()) {
+    error.value = tx("供应商名称不能为空", "Provider name is required");
+    return;
+  }
+  return act(async () => {
+    await request("operations/providers", { ...providerForm });
+    providerForm.name = "";
+    providerForm.contact_email = "";
+    providerForm.notes = "";
+    notice.value = tx("已创建供应商", "Provider created");
+  });
+}
+
+function startEditProvider(provider: Provider) {
+  editingProvider.value = provider;
+  editProviderForm.name = provider.name;
+  editProviderForm.contact_email = provider.contact_email;
+  editProviderForm.notes = provider.notes;
+  editProviderForm.active = !!provider.active;
+}
+
+function updateProvider() {
+  if (!editingProvider.value) return;
+  return act(async () => {
+    await request(`operations/providers/${editingProvider.value!.id}`, { ...editProviderForm });
+    editingProvider.value = null;
+    notice.value = tx("已更新供应商", "Provider updated");
+  });
+}
+
+function addMapping() {
+  if (!mappingField.value || !mappingColumn.value) {
+    error.value = tx("请选择字段和输入列号", "Select field and enter column letter");
+    return;
+  }
+  if (!validFields.includes(mappingField.value)) {
+    error.value = tx("无效字段", "Invalid field");
+    return;
+  }
+  if (!/^[A-Z]+$/.test(mappingColumn.value.toUpperCase())) {
+    error.value = tx("列号必须是字母（如 A, B, C）", "Column must be letters (e.g. A, B, C)");
+    return;
+  }
+  templateForm.column_mappings[mappingField.value] = mappingColumn.value.toUpperCase();
+  mappingField.value = "";
+  mappingColumn.value = "";
+}
+
+function removeMapping(field: string) {
+  delete templateForm.column_mappings[field];
+}
+
+function createTemplate() {
+  if (!templateForm.provider_id || !templateForm.name || !templateForm.sheet_name || Object.keys(templateForm.column_mappings).length === 0) {
+    error.value = tx("请填写供应商、模板名称、表单名和至少一个字段映射", "Provider, template name, sheet name and at least one field mapping required");
+    return;
+  }
+  return act(async () => {
+    await request("operations/provider-templates", { ...templateForm });
+    templateForm.provider_id = 0;
+    templateForm.name = "";
+    templateForm.sheet_name = "";
+    templateForm.column_mappings = {};
+    notice.value = tx("已创建供应商模板", "Provider template created");
+  });
+}
+
+async function assignProvider(orderId: string) {
+  const form = orderProviderForm[orderId];
+  if (!form || !form.provider_id) {
+    error.value = tx("请选择供应商", "Select a provider");
+    return;
+  }
+  return act(async () => {
+    await request(`operations/orders/${orderId}/assign-provider`, {
+      provider_id: form.provider_id,
+      template_id: form.template_id || null,
+      is_preferred: true,
+    });
+    notice.value = tx("已分配供应商", "Provider assigned to order");
+  });
+}
+
+async function exportWithProvider(orderId: string, providerId?: number, allowFallback = false) {
+  busy.value = true;
+  error.value = "";
+  notice.value = "";
+  try {
+    const params = new URLSearchParams();
+    if (providerId) params.set("provider_id", String(providerId));
+    if (allowFallback) params.set("allow_basic_fallback", "true");
+    const response = await fetch(`/api/operations/orders/${orderId}/supplier-export?${params}`, {
+      headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { detail?: string };
+      throw new Error(typeof data.detail === "string" ? data.detail : response.statusText);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = /filename="([^"]+)"/.exec(disposition);
+    const filename = match ? match[1] : `supplier-export-${orderId}.xlsx`;
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    if (filename.includes("BASIC-NOT-VERIFIED")) {
+      notice.value = tx("已下载基本模板（未经供应商验证）", "Downloaded basic template (not supplier-verified)");
+    } else {
+      notice.value = tx("已下载供应商专用模板", "Downloaded provider-specific template");
+    }
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function loadOrderProviders(orderId: string) {
+  try {
+    const assigned = await request<OrderProvider[]>(`operations/orders/${orderId}/providers`);
+    if (assigned.length > 0) {
+      const first = assigned[0];
+      orderProviderForm[orderId] = {
+        provider_id: first.provider_id,
+        template_id: first.template_id || 0,
+      };
+    }
+  } catch (e) {
+    console.error("Failed to load order providers:", e);
+  }
+}
 </script>
 
 <template>
-  <section class="desk">
-    <div class="card intro">
-      <h2>{{ tx("项目订单", "Project orders") }}</h2>
-      <p>{{ tx("客户在门户提交。这里审核、定金、供应商记录和分批到货。正式工厂格式仍会拒绝；生产资料草稿和安装工作单草稿可以下载，不是已验收的工厂文件。", "Customers submit in the portal. Review, deposit, supplier reference and partial arrival happen here. Factory format is still refused. Production and job-sheet drafts can be downloaded and are not an accepted factory file.") }}</p>
-      <p v-if="error" class="alert" role="alert">{{ error }}</p>
-      <p v-if="notice" role="status">{{ notice }}</p>
-    </div>
+  <section class="desk" :class="{ 'workspace-layout': true }">
+    <p v-if="error" class="alert card" role="alert">{{ error }}</p>
+    <p v-if="notice" class="success card" role="status">{{ notice }}</p>
 
-    <details v-if="admin" class="card fold">
-      <summary>{{ tx("导入计价模板", "Import the pricing template") }}</summary>
-      <h2>{{ tx("导入计价模板", "Import the pricing template") }}</h2>
-      <p class="hint">{{ tx("只把选项和价格放进私有库。页面不展示整张批发价矩阵，也不把客户原文件提交到公开仓库。", "Options and prices go into the private store. This page does not show the wholesale price matrix, and the customer's original file is not committed to the public repository.") }}</p>
-      <input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" />
-      <p v-if="templateStatus">{{ templateStatus }}</p>
-    </details>
-
-    <details v-if="admin" class="card fold">
-      <summary>{{ tx("开通客户账号", "Open a customer account") }}</summary>
-    <form @submit.prevent="openAccount">
-      <h2>{{ tx("开通客户账号", "Open a customer account") }}</h2>
-      <p class="hint">{{ tx("一个客户只能有一个登录和一个联系人。", "A customer can have only one login and one contact.") }}</p>
-      <div class="grid">
-        <label>{{ tx("公司", "Company") }}<input v-model="account.company" required /></label>
-        <label>{{ tx("联系人", "Contact") }}<input v-model="account.contact_name" required /></label>
-        <label>{{ tx("邮箱", "Email") }}<input v-model="account.email" type="email" required /></label>
-        <label>{{ tx("电话", "Phone") }}<input v-model="account.phone" required /></label>
-        <label>{{ tx("公司地址", "Company address") }}<input v-model="account.company_address" required /></label>
-        <label>{{ tx("登录账号", "Username") }}<input v-model="account.username" required autocomplete="off" /></label>
-        <label>{{ tx("初始密码", "Starting password") }}<input v-model="account.password" type="password" required autocomplete="new-password" /></label>
-      </div>
-      <button :disabled="busy">{{ tx("开通", "Open account") }}</button>
-    </form>
-    </details>
-
-    <section class="card batch-bar">
-      <label>{{ tx("按状态筛选", "Filter by status") }}
-        <select v-model="statusFilter">
-          <option value="">{{ tx("全部", "All") }}</option>
-          <option v-for="status in [...new Set(orders.flatMap((order) => [order.status, order.payment_status]))]" :key="status" :value="status">{{ status }}</option>
-        </select>
-      </label>
-      <button type="button" :disabled="busy" @click="transitSelected">{{ tx("批量标为在途", "Mark selected in transit") }}</button>
-      <button type="button" :disabled="busy" @click="arriveSelected">{{ tx("批量记录到货", "Record arrival for selected") }}</button>
-      <p v-if="transitRows.length">{{ transitRows.map((row) => `${row.order_id}: ${row.status}${row.reason ? " (" + row.reason + ")" : ""}`).join(" · ") }}</p>
-      <p v-if="arrivalRows.length">{{ arrivalRows.map((row) => `${row.order_id}: ${row.status} ${row.detail}`).join(" · ") }}</p>
-    </section>
-
-    <p v-if="!visibleOrders.length" class="card">{{ tx("没有符合筛选的门户项目。", "No portal projects match this filter.") }}</p>
-    <div v-else class="split">
+    <div class="workspace-grid">
       <aside class="card order-list">
-        <div v-for="order in visibleOrders" :key="order.id" class="order-row">
-          <label class="pick-mark">
-            <input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
-            <span>{{ picked.includes(order.id) ? tx("已勾选", "Selected") : tx("未勾选", "Not selected") }}</span>
-          </label>
-          <button type="button" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
-            <strong>{{ order.project_name }}</strong>
-            <span>{{ order.company }} · {{ order.status }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</span>
-          </button>
+        <h3>{{ tx("项目列表", "Projects") }}</h3>
+        <label class="filter-row">{{ tx("筛选", "Filter") }}
+          <select v-model="statusFilter">
+            <option value="">{{ tx("全部", "All") }}</option>
+            <option v-for="status in [...new Set(orders.flatMap((order) => [order.status, order.payment_status]))]" :key="status" :value="status">{{ status }}</option>
+          </select>
+        </label>
+        <div class="order-scroll">
+          <div v-for="order in visibleOrders" :key="order.id" class="order-row">
+            <label class="pick-mark">
+              <input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
+            </label>
+            <button type="button" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
+              <strong>{{ order.project_name }}</strong>
+              <span>{{ order.company }}</span>
+              <small>{{ order.status }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</small>
+            </button>
+          </div>
         </div>
       </aside>
-    <article v-for="order in selectedOrder ? [selectedOrder] : []" :key="order.id" class="card order">
-      <header>
-        <label><input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /> {{ order.project_name }}</label>
-        <span>{{ order.company }}</span>
-      </header>
-      <p>{{ tx("施工地址", "Site address") }}：{{ order.site_address }}</p>
-      <p>{{ order.status }} · {{ tx("收款", "Payment") }} {{ order.payment_status }}<template v-if="order.arrival_status"> · {{ order.arrival_status }}</template><template v-if="order.delivery_status"> · {{ order.delivery_status }}</template></p>
-      <p>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("合计待配置，不能审核开票", "Total is not configured, so review and invoicing stay closed") }}</p>
-      <div class="table-scroll"><table>
-        <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "This arrival") }}</th><th>{{ tx("本批交付", "This delivery") }}</th><th>{{ tx("折扣比例", "Discount ratio") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Installation surcharge") }}</th></tr></thead>
-        <tbody>
-          <tr v-for="line in order.lines" :key="line.id">
-            <td>{{ line.window_name }}<small>{{ tx("系列", "Series") }} {{ line.product_id || "—" }} · {{ line.width_mm || "—" }}×{{ line.height_mm || "—" }} mm<span v-if="optionText(line)"> · {{ optionText(line) }}</span><span v-if="line.amount"> · {{ order.currency || "" }} {{ line.amount }}</span><span v-else> · {{ tx("行价待配置", "Line price not configured") }}</span></small></td>
-            <td>{{ line.quantity }}</td>
-            <td>{{ line.arrived }}</td>
-            <td>{{ line.delivered }}</td>
-            <td><input v-model.number="batch[`${order.id}:${line.id}:arrival`]" type="number" min="0" step="1" /></td>
-            <td><input v-model.number="batch[`${order.id}:${line.id}:delivery`]" type="number" min="0" step="1" /></td>
-            <td><input v-model.number="batch[`${order.id}:${line.id}:discount`]" type="number" min="0" max="1" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
-            <td><input v-model.number="batch[`${order.id}:${line.id}:product_surcharge`]" type="number" min="0" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
-            <td><input v-model.number="batch[`${order.id}:${line.id}:installation_surcharge`]" type="number" min="0" step="0.01" :disabled="order.status !== 'pending_review'" /></td>
-          </tr>
-        </tbody>
-      </table></div>
-      <div class="actions">
-        <button type="button" :disabled="busy" @click="review(order.id)">{{ tx("确认接收", "Accept review") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="deposit(order.id)">{{ tx("定金已收", "Deposit received") }}</button>
-        <label>{{ tx("供应商参考号", "Supplier reference") }}<input v-model="supplierRef[order.id]" /></label>
-        <button type="button" class="secondary" :disabled="busy || !supplierRef[order.id]" @click="supplier(order)">{{ tx("记录下单", "Record supplier order") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="exportBlocked(order.id)">{{ tx("正式工厂格式", "Factory format") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(order.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(order.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job-sheet draft") }}</button>
-        <label v-if="order.status === 'pending_review'">{{ tx("调整说明", "Adjustment note") }}<input v-model="adjustNote[order.id]" /></label>
-        <button v-if="order.status === 'pending_review'" type="button" class="secondary" :disabled="busy" @click="adjust(order)">{{ tx("保存员工调整", "Save staff adjustment") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="fulfil(order, 'arrival')">{{ tx("记录本批到货", "Record this arrival") }}</button>
-        <button type="button" class="secondary" :disabled="busy" @click="fulfil(order, 'delivery')">{{ tx("记录本批交付", "Record this delivery") }}</button>
+
+      <div class="detail-panel">
+        <nav class="section-tabs">
+          <button type="button" :class="{ active: activeSection === 'operations' }" @click="activeSection = 'operations'">{{ tx("订单操作", "Operations") }}</button>
+          <button type="button" :class="{ active: activeSection === 'pricing' }" @click="activeSection = 'pricing'">{{ tx("定价模板", "Pricing") }}</button>
+          <button type="button" :class="{ active: activeSection === 'customers' }" @click="activeSection = 'customers'">{{ tx("客户账号", "Customers") }}</button>
+          <button type="button" :class="{ active: activeSection === 'providers' }" @click="activeSection = 'providers'">{{ tx("供应商管理", "Providers") }}</button>
+          <button type="button" :class="{ active: activeSection === 'batch' }" @click="activeSection = 'batch'">{{ tx("批量操作", "Batch") }}</button>
+          <button type="button" :class="{ active: activeSection === 'settlement' }" @click="activeSection = 'settlement'">{{ tx("结算返利", "Settlement") }}</button>
+        </nav>
+
+        <div class="section-content">
+          <section v-if="activeSection === 'operations'" class="card section-card">
+
+            <div v-if="!selectedOrder">
+              <p>{{ tx("选择一个项目查看详情", "Select a project to view details") }}</p>
+            </div>
+            <article v-else class="order-detail">
+              <header class="order-header">
+                <div>
+                  <h2>{{ selectedOrder.project_name }}</h2>
+                  <p class="company-name">{{ selectedOrder.company }}</p>
+                </div>
+                <div class="status-badges">
+                  <span class="badge">{{ selectedOrder.status }}</span>
+                  <span class="badge">{{ selectedOrder.payment_status }}</span>
+                  <span v-if="selectedOrder.arrival_status" class="badge">{{ selectedOrder.arrival_status }}</span>
+                </div>
+              </header>
+              <div class="order-meta">
+                <p><strong>{{ tx("施工地址", "Site") }}:</strong> {{ selectedOrder.site_address }}</p>
+                <p><strong>{{ tx("总价", "Total") }}:</strong> {{ selectedOrder.total ? `${selectedOrder.currency || ""} ${selectedOrder.total}` : tx("待计价", "Unpriced") }}</p>
+                <p v-if="selectedOrder.supplier_reference"><strong>{{ tx("供应商参考", "Supplier ref") }}:</strong> {{ selectedOrder.supplier_reference }}</p>
+              </div>
+              <h3>{{ tx("产品明细", "Product lines") }}</h3>
+              <div class="table-scroll"><table>
+                <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "Arrival") }}</th><th>{{ tx("本批交付", "Delivery") }}</th></tr></thead>
+                <tbody>
+                  <tr v-for="line in selectedOrder.lines" :key="line.id">
+                    <td>
+                      <strong>{{ line.window_name }}</strong>
+                      <small>{{ tx("系列", "Series") }} {{ line.product_id || "—" }} · {{ line.width_mm || "—" }}×{{ line.height_mm || "—" }} mm<span v-if="optionText(line)"> · {{ optionText(line) }}</span></small>
+                    </td>
+                    <td>{{ line.quantity }}</td>
+                    <td>{{ line.arrived }}</td>
+                    <td>{{ line.delivered }}</td>
+                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:arrival`]" type="number" min="0" step="1" /></td>
+                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:delivery`]" type="number" min="0" step="1" /></td>
+                  </tr>
+                </tbody>
+              </table></div>
+
+              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
+              <div class="provider-section">
+                <div class="form-row">
+                  <label>{{ tx("选择供应商", "Select provider") }}
+                    <select v-model="orderProviderForm[selectedOrder.id].provider_id" @change="() => { orderProviderForm[selectedOrder.id].template_id = 0; loadOrderProviders(selectedOrder.id); }">
+                      <option :value="0">{{ tx("未分配", "Not assigned") }}</option>
+                      <option v-for="p in providers.filter(p => p.active)" :key="p.id" :value="p.id">{{ p.name }}</option>
+                    </select>
+                  </label>
+                  <label v-if="orderProviderForm[selectedOrder.id].provider_id">{{ tx("选择模板", "Select template") }}
+                    <select v-model="orderProviderForm[selectedOrder.id].template_id">
+                      <option :value="0">{{ tx("默认", "Default") }}</option>
+                      <option v-for="t in providerTemplates.filter(t => t.provider_id === orderProviderForm[selectedOrder.id].provider_id && t.active)" :key="t.id" :value="t.id">{{ t.name }}</option>
+                    </select>
+                  </label>
+                  <button type="button" :disabled="busy || !orderProviderForm[selectedOrder.id].provider_id" @click="assignProvider(selectedOrder.id)">{{ tx("分配供应商", "Assign provider") }}</button>
+                </div>
+                <div class="form-row">
+                  <button type="button" class="secondary" :disabled="busy" @click="exportWithProvider(selectedOrder.id, orderProviderForm[selectedOrder.id].provider_id || undefined, false)">{{ tx("导出供应商模板", "Export provider template") }}</button>
+                  <button type="button" class="secondary" :disabled="busy" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx("导出基本模板（未验证）", "Export basic (not verified)") }}</button>
+                  <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button>
+                  <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job sheet") }}</button>
+                </div>
+              </div>
+
+              <h3>{{ tx("订单操作", "Order actions") }}</h3>
+              <div class="actions">
+                <button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx("确认接收", "Accept review") }}</button>
+                <button type="button" class="secondary" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx("定金已收", "Deposit received") }}</button>
+                <label>{{ tx("供应商参考号", "Supplier ref") }}<input v-model="supplierRef[selectedOrder.id]" /></label>
+                <button type="button" class="secondary" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx("记录下单", "Record order") }}</button>
+                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
+                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
+              </div>
+
+              <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
+                <h3>{{ tx("价格调整", "Price adjustment") }}</h3>
+                <div class="table-scroll"><table>
+                  <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("折扣比例", "Discount") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Install surcharge") }}</th></tr></thead>
+                  <tbody>
+                    <tr v-for="line in selectedOrder.lines" :key="line.id">
+                      <td>{{ line.window_name }}</td>
+                      <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:discount`]" type="number" min="0" max="1" step="0.01" /></td>
+                      <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:product_surcharge`]" type="number" min="0" step="0.01" /></td>
+                      <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:installation_surcharge`]" type="number" min="0" step="0.01" /></td>
+                    </tr>
+                  </tbody>
+                </table></div>
+                <label>{{ tx("调整说明", "Adjustment note") }}<input v-model="adjustNote[selectedOrder.id]" /></label>
+                <button type="button" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存员工调整", "Save adjustment") }}</button>
+              </div>
+
+              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
+                <h3>{{ tx("发票", "Invoices") }}</h3>
+                <div v-for="invoice in selectedOrder.invoices" :key="invoice.id" class="invoice">
+                  <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未收", "Unpaid") }}</label>
+                  <template v-if="invoice.kind === 'balance'">
+                    <input v-model="receiptNote[invoice.id]" :placeholder="tx('尾款备注', 'Balance note')" />
+                    <button type="button" class="secondary" :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx("尾款已收", "Balance received") }}</button>
+                  </template>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <section v-if="activeSection === 'pricing'" class="card section-card">
+            <h2>{{ tx("导入计价模板", "Import pricing template") }}</h2>
+            <p class="hint">{{ tx("只把选项和价格放进私有库。页面不展示整张批发价矩阵，也不把客户原文件提交到公开仓库。", "Options and prices go into the private store. This page does not show the wholesale price matrix, and the customer's original file is not committed to the public repository.") }}</p>
+            <input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" />
+            <p v-if="templateStatus">{{ templateStatus }}</p>
+          </section>
+
+          <section v-if="activeSection === 'customers'" class="card section-card">
+            <h2>{{ tx("开通客户账号", "Open customer account") }}</h2>
+            <p class="hint">{{ tx("一个客户只能有一个登录和一个联系人。", "A customer can have only one login and one contact.") }}</p>
+            <form @submit.prevent="openAccount" class="form-grid">
+              <label>{{ tx("公司", "Company") }}<input v-model="account.company" required /></label>
+              <label>{{ tx("联系人", "Contact") }}<input v-model="account.contact_name" required /></label>
+              <label>{{ tx("邮箱", "Email") }}<input v-model="account.email" type="email" required /></label>
+              <label>{{ tx("电话", "Phone") }}<input v-model="account.phone" required /></label>
+              <label>{{ tx("公司地址", "Company address") }}<input v-model="account.company_address" required /></label>
+              <label>{{ tx("登录账号", "Username") }}<input v-model="account.username" required autocomplete="off" /></label>
+              <label>{{ tx("初始密码", "Starting password") }}<input v-model="account.password" type="password" required autocomplete="new-password" /></label>
+              <button :disabled="busy">{{ tx("开通", "Open") }}</button>
+            </form>
+          </section>
+
+          <section v-if="activeSection === 'providers'" class="card section-card">
+            <h2>{{ tx("供应商管理", "Provider management") }}</h2>
+            
+            <h3>{{ tx("创建供应商", "Create provider") }}</h3>
+            <form @submit.prevent="createProvider" class="form-grid">
+              <label>{{ tx("供应商名称", "Provider name") }}<input v-model="providerForm.name" required /></label>
+              <label>{{ tx("联系邮箱", "Contact email") }}<input v-model="providerForm.contact_email" type="email" /></label>
+              <label>{{ tx("备注", "Notes") }}<input v-model="providerForm.notes" /></label>
+              <button :disabled="busy">{{ tx("创建", "Create") }}</button>
+            </form>
+
+            <h3>{{ tx("现有供应商", "Existing providers") }}</h3>
+            <div class="provider-list">
+              <div v-for="provider in providers" :key="provider.id" class="provider-card">
+                <div v-if="editingProvider?.id !== provider.id">
+                  <h4>{{ provider.name }} <span :class="{ 'status-active': provider.active, 'status-inactive': !provider.active }">{{ provider.active ? tx("活跃", "Active") : tx("停用", "Inactive") }}</span></h4>
+                  <p v-if="provider.contact_email"><strong>{{ tx("邮箱", "Email") }}:</strong> {{ provider.contact_email }}</p>
+                  <p v-if="provider.notes"><strong>{{ tx("备注", "Notes") }}:</strong> {{ provider.notes }}</p>
+                  <button type="button" class="secondary" @click="startEditProvider(provider)">{{ tx("编辑", "Edit") }}</button>
+                </div>
+                <form v-else @submit.prevent="updateProvider" class="edit-form">
+                  <label>{{ tx("名称", "Name") }}<input v-model="editProviderForm.name" required /></label>
+                  <label>{{ tx("邮箱", "Email") }}<input v-model="editProviderForm.contact_email" type="email" /></label>
+                  <label>{{ tx("备注", "Notes") }}<input v-model="editProviderForm.notes" /></label>
+                  <label class="checkbox-label"><input type="checkbox" v-model="editProviderForm.active" /> {{ tx("活跃", "Active") }}</label>
+                  <div class="button-group">
+                    <button type="submit" :disabled="busy">{{ tx("保存", "Save") }}</button>
+                    <button type="button" class="secondary" @click="editingProvider = null">{{ tx("取消", "Cancel") }}</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <h3>{{ tx("配置供应商输出模板", "Configure provider template") }}</h3>
+            <p class="hint">{{ tx("为每个供应商配置专用Excel模板，定义字段到列的映射关系。", "Configure custom Excel templates for each provider with field-to-column mappings.") }}</p>
+            <form @submit.prevent="createTemplate" class="template-form">
+              <div class="form-grid">
+                <label>{{ tx("供应商", "Provider") }}
+                  <select v-model="templateForm.provider_id" required>
+                    <option :value="0">{{ tx("选择供应商", "Select provider") }}</option>
+                    <option v-for="p in providers.filter(p => p.active)" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                </label>
+                <label>{{ tx("模板名称", "Template name") }}<input v-model="templateForm.name" required /></label>
+                <label>{{ tx("工作表名称", "Sheet name") }}<input v-model="templateForm.sheet_name" required /></label>
+              </div>
+
+              <h4>{{ tx("字段映射", "Field mappings") }}</h4>
+              <div class="mapping-controls">
+                <select v-model="mappingField">
+                  <option value="">{{ tx("选择字段", "Select field") }}</option>
+                  <option v-for="field in validFields" :key="field" :value="field">{{ field }}</option>
+                </select>
+                <input v-model="mappingColumn" :placeholder="tx('列号 (A, B, C...)', 'Column (A, B, C...)')" />
+                <button type="button" class="secondary" @click="addMapping">{{ tx("添加", "Add") }}</button>
+              </div>
+
+              <div v-if="Object.keys(templateForm.column_mappings).length" class="mappings-list">
+                <div v-for="(col, field) in templateForm.column_mappings" :key="field" class="mapping-item">
+                  <span><strong>{{ field }}</strong> → {{ tx("列", "Col") }} {{ col }}</span>
+                  <button type="button" class="link-button" @click="removeMapping(field)">{{ tx("删除", "Remove") }}</button>
+                </div>
+              </div>
+
+              <button :disabled="busy">{{ tx("创建模板", "Create template") }}</button>
+            </form>
+
+            <h3>{{ tx("现有模板", "Existing templates") }}</h3>
+            <div class="template-list">
+              <div v-for="template in providerTemplates" :key="template.id" class="template-card">
+                <h4>{{ template.name }} <span class="provider-badge">{{ providers.find(p => p.id === template.provider_id)?.name }}</span></h4>
+                <p><strong>{{ tx("工作表", "Sheet") }}:</strong> {{ template.sheet_name }}</p>
+                <p><strong>{{ tx("映射", "Mappings") }}:</strong> {{ Object.keys(JSON.parse(template.column_mappings)).length }} {{ tx("个字段", "fields") }}</p>
+                <p><strong>{{ tx("状态", "Status") }}:</strong> {{ template.active ? tx("活跃", "Active") : tx("停用", "Inactive") }}</p>
+                <details>
+                  <summary>{{ tx("查看映射", "View mappings") }}</summary>
+                  <div class="mapping-display">
+                    <div v-for="(col, field) in JSON.parse(template.column_mappings)" :key="field">
+                      <strong>{{ field }}</strong> → {{ tx("列", "Col") }} {{ col }}
+                    </div>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="activeSection === 'batch'" class="card section-card">
+            <h2>{{ tx("批量操作", "Batch operations") }}</h2>
+            <p class="hint">{{ tx("勾选多个项目后批量标记在途或记录到货", "Select multiple projects for batch transit or arrival") }}</p>
+            <div class="batch-actions">
+              <button type="button" :disabled="busy" @click="transitSelected">{{ tx("批量标为在途", "Mark in transit") }}</button>
+              <button type="button" :disabled="busy" @click="arriveSelected">{{ tx("批量记录到货", "Record arrival") }}</button>
+            </div>
+            <p v-if="transitRows.length">{{ transitRows.map((row) => `${row.order_id}: ${row.status}${row.reason ? " (" + row.reason + ")" : ""}`).join(" · ") }}</p>
+            <p v-if="arrivalRows.length">{{ arrivalRows.map((row) => `${row.order_id}: ${row.status} ${row.detail}`).join(" · ") }}</p>
+
+            <h3>{{ tx("发票发送", "Invoice sending") }}</h3>
+            <p class="hint">{{ tx("勾选同一公司的发票后一起发送。跨公司会被拦住。重复发送不会再发一封。", "Select invoices from one company, then send them together. A mix of companies is blocked. Sending again does not send another copy.") }}</p>
+            <button type="button" :disabled="busy" @click="sendSelectedInvoices">{{ tx("发送勾选的发票", "Send selected") }}</button>
+
+            <h3>{{ tx("通知状态", "Notifications") }}</h3>
+            <p v-if="!notices.length">{{ tx("还没有到货或发票通知。", "No notifications yet.") }}</p>
+            <div v-for="item in notices" :key="item.id" class="notification-item">
+              <span>{{ item.subject }} · {{ item.recipient }} · {{ mailStatus(item.status) }}</span>
+              <button v-if="item.status === 'not_configured'" type="button" class="secondary" :disabled="busy" @click="retryNotice(item.id)">{{ tx("重试", "Retry") }}</button>
+            </div>
+          </section>
+
+          <section v-if="activeSection === 'settlement'" class="card section-card">
+            <h2>{{ tx("同公司尾款", "Balance invoice") }}</h2>
+            <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的项目生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed projects of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
+            <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="3" /></label>
+            <button type="button" :disabled="busy" @click="settleSelected">{{ tx("生成尾款草稿", "Create balance") }}</button>
+
+            <h3>{{ tx("已确认返利", "Confirmed rebates") }}</h3>
+            <p class="hint">{{ tx("只记录已经确认的月度金额。没有阶梯公式，页面不算返点。同一订单不能重复计入。", "Record only a confirmed monthly amount. There is no tier formula, and this page does not calculate a rebate. An order cannot be counted twice.") }}</p>
+            <p v-if="rebateStatus">{{ rebateStatus }}</p>
+            <div class="form-grid">
+              <label>{{ tx("年月", "Month") }}<input v-model="rebateForm.month" placeholder="2026-10" /></label>
+              <label>{{ tx("金额", "Amount") }}<input v-model="rebateForm.amount" inputmode="decimal" /></label>
+              <label>{{ tx("确认依据", "Evidence") }}<input v-model="rebateForm.evidence" /></label>
+              <button type="button" :disabled="busy" @click="recordRebate">{{ tx("记入", "Record") }}</button>
+            </div>
+            <div v-for="credit in rebates" :key="credit.id" class="rebate-item">
+              <span>#{{ credit.customer_id }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span>
+            </div>
+          </section>
+        </div>
       </div>
-      <div v-for="invoice in order.invoices || []" :key="invoice.id" class="invoice">
-        <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ mailStatus(invoice.status) }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</label>
-        <template v-if="invoice.kind === 'balance'">
-          <input v-model="receiptNote[invoice.id]" :placeholder="tx('尾款备注', 'Balance note')" />
-          <button type="button" class="secondary" :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx("尾款已收", "Balance received") }}</button>
-        </template>
-      </div>
-    </article>
     </div>
-
-    <details class="card fold">
-      <summary>{{ tx("同公司尾款", "Balance for one company") }}</summary>
-      <h2>{{ tx("同公司尾款", "Balance for one company") }}</h2>
-      <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的项目生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed projects of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
-      <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="2" /></label>
-      <button type="button" :disabled="busy" @click="settleSelected">{{ tx("生成尾款草稿", "Create balance draft") }}</button>
-    </details>
-
-    <details class="card fold">
-      <summary>{{ tx("已确认返利", "Confirmed rebates") }}</summary>
-      <h2>{{ tx("已确认返利", "Confirmed rebates") }}</h2>
-      <p class="hint">{{ tx("只记录已经确认的月度金额。没有阶梯公式，页面不算返点。同一订单不能重复计入。", "Record only a confirmed monthly amount. There is no tier formula, and this page does not calculate a rebate. An order cannot be counted twice.") }}</p>
-      <p v-if="rebateStatus">{{ rebateStatus }}</p>
-      <div class="grid">
-        <label>{{ tx("年月", "Month") }}<input v-model="rebateForm.month" placeholder="2026-10" /></label>
-        <label>{{ tx("金额", "Amount") }}<input v-model="rebateForm.amount" inputmode="decimal" /></label>
-        <label>{{ tx("确认依据", "Evidence") }}<input v-model="rebateForm.evidence" /></label>
-      </div>
-      <button type="button" :disabled="busy" @click="recordRebate">{{ tx("记入勾选项目的返利", "Record a rebate for the selected projects") }}</button>
-      <article v-for="credit in rebates" :key="credit.id" class="invoice">
-        <span>#{{ credit.customer_id }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span>
-      </article>
-    </details>
-
-    <details class="card fold">
-      <summary>{{ tx("同公司发票", "Invoices for one company") }}</summary>
-      <h2>{{ tx("同公司发票", "Invoices for one company") }}</h2>
-      <p class="hint">{{ tx("勾选同一公司的发票后一起发送。跨公司会被拦住。重复发送不会再发一封。", "Select invoices from one company, then send them together. A mix of companies is blocked. Sending again does not send another copy.") }}</p>
-      <button type="button" :disabled="busy" @click="sendSelectedInvoices">{{ tx("发送勾选的发票", "Send selected invoices") }}</button>
-    </details>
-
-    <details class="card fold">
-      <summary>{{ tx("通知状态", "Notification status") }}</summary>
-      <h2>{{ tx("通知状态", "Notification status") }}</h2>
-      <p v-if="!notices.length">{{ tx("还没有到货或发票通知。", "No arrival or invoice notifications yet.") }}</p>
-      <article v-for="item in notices" :key="item.id" class="invoice">
-        <span>{{ item.subject }} · {{ item.recipient }} · {{ mailStatus(item.status) }}</span>
-        <button v-if="item.status === 'not_configured'" type="button" class="secondary" :disabled="busy" @click="retryNotice(item.id)">{{ tx("配置好后重试", "Retry after mail is configured") }}</button>
-      </article>
-    </details>
   </section>
 </template>
 
 <style scoped>
-.desk { display: grid; gap: 12px; font-size: 15px; line-height: 1.55; min-width: 0; max-width: 100%; overflow-x: hidden; }
-.desk .card { padding: 12px 16px; }
-.intro h2, .intro p { margin: 0; }
-.intro p { margin-top: 8px; }
-.split { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 16px; align-items: start; min-width: 0; }
-.order-list { display: grid; gap: 8px; max-height: 640px; overflow: auto; padding: 8px; }
-.order-row { display: flex; gap: 8px; align-items: stretch; min-width: 0; }
-.pick-mark { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 72px; font-size: 13px; color: #1b2421; }
-.order-pick { display: grid; gap: 2px; width: 100%; text-align: left; justify-content: flex-start; padding: 8px 10px; border: 1px solid #c5d0c8; background: #fff; color: #1b2421; border-radius: 6px; cursor: pointer; min-height: 44px; }
-.order-pick.current { border-color: #3d6b4f; background: #f4f8f2; color: #1b2421; }
-.order-pick strong { font-size: 15px; color: #1b2421; font-weight: 650; }
-.order-pick span { font-size: 13px; color: #3d4a44; line-height: 1.4; }
-.fold > summary { font-size: 16px; font-weight: 600; cursor: pointer; min-height: 36px; display: flex; align-items: center; }
-.fold > h2, .fold form > h2 { margin-top: 16px; }
-.table-scroll { overflow-x: auto; max-width: 100%; }
-.table-scroll table { width: max-content; min-width: 100%; margin: 8px 0; }
-.table-scroll th, .table-scroll td { white-space: nowrap; }
-.table-scroll td small { display: block; max-width: 280px; white-space: normal; }
-.batch-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
-.desk h2 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
-.desk h3 { font-size: 18px; font-weight: 600; margin: 16px 0 8px; }
-.section-label { font-size: 13px; letter-spacing: 0.08em; color: #52635a; }
-.hint, .desk p, .desk li { font-size: 15px; }
-.hint { color: #54645c; line-height: 1.6; }
-.grid, .actions { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; }
-.grid label, .actions label { min-width: 180px; font-size: 14px; }
-.desk input, .desk select, .desk button { min-height: 40px; font-size: 14px; }
-.order header { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
-.order { padding: 8px 0 16px; }
-table { width: 100%; border-collapse: collapse; margin: 16px 0; }
-th, td { text-align: left; border-bottom: 1px solid var(--line, #dedbd5); padding: 12px 10px; font-size: 14px; }
-td input { width: 96px; }
-td small { display: block; color: #54645c; font-size: 13px; margin-top: 4px; line-height: 1.45; }
-.invoice { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: center; margin-top: 12px; font-size: 14px; }
-@media (max-width: 900px) {
-  .split { grid-template-columns: 1fr; }
-  .order-list { max-height: 280px; }
+.desk { font-size: 15px; line-height: 1.55; min-width: 0; max-width: 100%; }
+.desk .card { padding: 16px; background: white; border: 1px solid #e1e6df; border-radius: 8px; }
+.alert { padding: 12px 16px; background: #fae8e1; color: #842b16; border-radius: 6px; margin-bottom: 12px; }
+.success { padding: 12px 16px; background: #e5efdd; color: #2d4a1e; border-radius: 6px; margin-bottom: 12px; }
+.workspace-grid { display: grid; grid-template-columns: 280px 1fr; gap: 16px; min-height: calc(100vh - 180px); }
+.order-list { display: flex; flex-direction: column; gap: 8px; position: sticky; top: 16px; max-height: calc(100vh - 200px); }
+.order-list h3 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+.filter-row { font-size: 14px; margin-bottom: 8px; }
+.filter-row select { width: 100%; margin-top: 4px; }
+.order-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+.order-row { display: flex; gap: 6px; align-items: stretch; }
+.pick-mark { display: flex; align-items: center; padding: 0 4px; }
+.pick-mark input { width: 18px; height: 18px; margin: 0; cursor: pointer; }
+.order-pick { flex: 1; display: grid; gap: 4px; text-align: left; padding: 10px 12px; border: 1px solid #d5ddd6; background: #fff; color: #1b2421; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+.order-pick:hover { border-color: #3d6b4f; background: #f9faf8; }
+.order-pick.current { border-color: #0f6e5c; background: #f4f8f2; box-shadow: 0 0 0 2px rgba(15, 110, 92, 0.1); }
+.order-pick strong { font-size: 15px; font-weight: 600; color: #1b2421; }
+.order-pick span { font-size: 14px; color: #3d4a44; }
+.order-pick small { font-size: 13px; color: #6d7c72; margin-top: 2px; }
+.detail-panel { display: flex; flex-direction: column; min-height: 600px; }
+.section-tabs { display: flex; gap: 4px; padding: 8px; background: white; border: 1px solid #e1e6df; border-radius: 8px 8px 0 0; border-bottom: none; flex-wrap: wrap; }
+.section-tabs button { padding: 10px 16px; border: none; background: transparent; color: #3d4a44; font-size: 14px; font-weight: 500; border-radius: 6px; cursor: pointer; transition: all 0.2s; white-space: nowrap; }
+.section-tabs button:hover { background: #f5f6f2; }
+.section-tabs button.active { background: #0f6e5c; color: white; }
+.section-content { flex: 1; }
+.section-card { border-radius: 0 0 8px 8px; overflow-y: auto; max-height: calc(100vh - 280px); }
+.order-detail h2 { font-size: 24px; margin: 0; }
+.order-detail h3 { font-size: 18px; font-weight: 600; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 2px solid #e1e6df; }
+.order-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #e1e6df; }
+.company-name { font-size: 16px; color: #6d7c72; margin: 6px 0 0; }
+.status-badges { display: flex; gap: 8px; flex-wrap: wrap; }
+.badge { display: inline-block; padding: 6px 12px; background: #f5f6f2; color: #3d4a44; border-radius: 6px; font-size: 13px; font-weight: 500; }
+.order-meta { display: grid; gap: 8px; margin-bottom: 20px; font-size: 15px; }
+.order-meta p { margin: 0; }
+.table-scroll { overflow-x: auto; margin: 12px 0; }
+.table-scroll table { width: 100%; min-width: 600px; border-collapse: collapse; }
+th, td { text-align: left; border-bottom: 1px solid #e1e6df; padding: 12px 10px; font-size: 14px; vertical-align: top; }
+th { background: #f9faf8; font-weight: 600; color: #1b2421; }
+td strong { font-weight: 600; }
+td small { display: block; color: #6d7c72; font-size: 13px; margin-top: 4px; line-height: 1.45; }
+td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radius: 4px; font-size: 14px; }
+.provider-section, .adjustment-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #e1e6df; }
+.form-row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 12px; }
+.form-row label { flex: 1; min-width: 180px; font-size: 14px; }
+.form-row button { flex-shrink: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-top: 12px; }
+.actions label { min-width: 200px; font-size: 14px; }
+.desk input, .desk select, .desk textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d5ddd6; border-radius: 6px; font-size: 14px; font-family: inherit; }
+.desk button { min-height: 40px; padding: 10px 18px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+.desk button:hover:not(:disabled) { background: #0d5a4a; border-color: #0d5a4a; }
+.desk button.secondary { background: white; color: #3d4a44; border-color: #d5ddd6; }
+.desk button.secondary:hover:not(:disabled) { background: #f5f6f2; border-color: #c5d0c8; }
+.desk button:disabled { opacity: 0.5; cursor: not-allowed; }
+.desk label { display: block; font-size: 14px; font-weight: 500; color: #1b2421; }
+.desk label input, .desk label select, .desk label textarea { margin-top: 6px; }
+.hint { color: #6d7c72; font-size: 14px; line-height: 1.6; margin: 8px 0; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 16px; }
+.form-grid button { grid-column: 1 / -1; justify-self: start; }
+.invoice { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px; background: #f9faf8; border-radius: 6px; margin-top: 8px; font-size: 14px; }
+.invoice label { margin: 0; display: flex; align-items: center; gap: 8px; }
+.provider-list, .template-list { display: grid; gap: 12px; margin-top: 16px; }
+.provider-card, .template-card { padding: 16px; background: #f9faf8; border: 1px solid #e1e6df; border-radius: 6px; }
+.provider-card h4, .template-card h4 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+.status-active { color: #0f6e5c; font-size: 13px; font-weight: 500; }
+.status-inactive { color: #8a3b2c; font-size: 13px; font-weight: 500; }
+.provider-badge { padding: 4px 8px; background: #e1e6df; color: #3d4a44; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.edit-form { display: grid; gap: 12px; }
+.checkbox-label { display: flex; align-items: center; gap: 8px; font-weight: normal; }
+.checkbox-label input { width: auto; margin: 0; }
+.button-group { display: flex; gap: 8px; }
+.template-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid #e1e6df; }
+.template-form h4 { font-size: 16px; margin: 16px 0 8px; }
+.mapping-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.mapping-controls select, .mapping-controls input { flex: 1; }
+.mappings-list { display: grid; gap: 6px; margin: 12px 0; padding: 12px; background: #f9faf8; border-radius: 6px; }
+.mapping-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; background: white; border-radius: 4px; }
+.link-button { background: none; border: none; color: #0f6e5c; padding: 4px 8px; min-height: auto; text-decoration: underline; cursor: pointer; }
+.mapping-display { display: grid; gap: 4px; margin-top: 8px; font-size: 13px; }
+.batch-actions { display: flex; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
+.notification-item, .rebate-item { padding: 12px; background: #f9faf8; border-radius: 6px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+@media (max-width: 1199px) {
+  .workspace-grid { grid-template-columns: 1fr; }
+  .order-list { position: static; max-height: 320px; }
+  .section-card { max-height: none; }
 }
-.alert { color: #8a3b2c; }
+@media (max-width: 390px) {
+  .workspace-grid { gap: 12px; }
+  .desk .card { padding: 12px; }
+  .order-list { max-height: 240px; }
+  .section-tabs { padding: 6px; gap: 2px; }
+  .section-tabs button { padding: 8px 12px; font-size: 13px; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-row, .actions, .batch-actions { flex-direction: column; align-items: stretch; }
+  .form-row button, .actions button { width: 100%; }
+}
 </style>
