@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory() as folder:
     price_req['lines'][0]['options'] = {
         'colour': 'Golden Oak 61',
         'louver_size': '89mm',
-        'fitting': 'Standard',
+        'fitting': 'In Fit',
         'frame': 'L-frame',
         'control_rod': 'Centre',
         'opening_style': 'Bi-fold',
@@ -113,6 +113,17 @@ with tempfile.TemporaryDirectory() as folder:
     assert price_resp.status_code == 200, f'Test 1b failed: {price_resp.status_code} - {price_resp.text}'
     price_data = price_resp.json()
     print(f'✓ Test 1b: DELUXE colour + fitting + all 11 fields -> 200 (price={price_data["total"]})')
+
+    for fitting in ('In Fit', 'Out Fit', 'Make Size'):
+        price_req['lines'][0]['options']['fitting'] = fitting
+        response = portal.post('/api/portal/price', json=price_req)
+        assert response.status_code == 200, response.text
+    price_req['lines'][0]['options']['fitting'] = 'ZZZ-garbage'
+    response = portal.post('/api/portal/price', json=price_req)
+    assert response.status_code == 422, response.text
+    response = portal.post('/api/portal/orders', json=price_req)
+    assert response.status_code == 422, response.text
+    print('PASS Deluxe fitting: all three workbook values accepted; garbage rejected by price and order endpoints')
     
     # Test 1c: Basswood (control - should still work)
     basswood = next((p for p in catalog if p.get('source_code') == 'Shutters_Basswood'), None)
@@ -418,7 +429,7 @@ with tempfile.TemporaryDirectory() as folder:
                 'options': {
                     'colour': 'Golden Oak 61',
                     'louver_size': '89mm',
-                    'fitting': 'Standard'
+                    'fitting': 'In Fit'
                 }
             }]
         }

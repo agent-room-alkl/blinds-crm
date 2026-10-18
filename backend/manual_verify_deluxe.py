@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory() as folder:
     price_req['lines'][0]['options'] = {
         'colour': 'Golden Oak 61',
         'louver_size': '89mm',
-        'fitting': 'Standard',
+        'fitting': 'In Fit',
         'frame': 'L-frame',
         'control_rod': 'Centre',
         'opening_style': 'Bi-fold',

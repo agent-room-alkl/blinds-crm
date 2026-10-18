@@ -231,7 +231,7 @@ with tempfile.TemporaryDirectory() as folder:
             'height_mm': 1500,
             'quantity': 2,
             'panel_count': 2,
-            'options': {'colour': 'Golden Oak 61', 'louver_size': '89mm', 'fitting': 'Standard'}
+            'options': {'colour': 'Golden Oak 61', 'louver_size': '89mm', 'fitting': 'In Fit'}
         }]
     }
     

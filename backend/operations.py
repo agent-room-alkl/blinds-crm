@@ -40,7 +40,7 @@ DELUXE_SCHEMA = [
         'label_en': 'Frame',
         'choices': [],
         'required': False,
-        'type': 'select'
+        'type': 'text'
     },
     {
         'key': 'louver_size',
@@ -56,7 +56,7 @@ DELUXE_SCHEMA = [
         'label_en': 'Control rod',
         'choices': [],
         'required': False,
-        'type': 'select'
+        'type': 'text'
     },
     {
         'key': 'opening_style',
@@ -102,7 +102,7 @@ DELUXE_SCHEMA = [
         'key': 'fitting',
         'label_zh': '安装尺寸类型',
         'label_en': 'Fitting',
-        'choices': [],
+        'choices': ['In Fit', 'Out Fit', 'Make Size'],
         'required': False,
         'type': 'select'
     },
@@ -407,7 +407,7 @@ def register(app, s):
                 # Create or update the rule to use the canonical DELUXE_SCHEMA
                 # This ensures product schema and rule schema stay in sync
                 # Also fixes any existing rules that were created with the 2-field minimal schema
-                if not existing_deluxe or len(existing_deluxe.get('schema', [])) != 11:
+                if not existing_deluxe or existing_deluxe.get('schema') != DELUXE_SCHEMA:
                     rules['VERA_Ashwood_provisional'] = {
                         **basswood_rule,
                         'source_code': 'VERA_Ashwood_provisional',
