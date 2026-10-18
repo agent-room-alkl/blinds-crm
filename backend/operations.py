@@ -508,14 +508,21 @@ def register(app, s):
                 if not old: next_id+=1
                 brand,material=brands.get(code,(code.replace('_',' '),code.split('_')[-1]))
                 warranty={'Shutters_PVC_Eco':5,'Shutters_PVC':20,'Shutters_Pinewood':5,'Shutters_Basswood':10}.get(code)
+                
+                # T-12: Deactivate blind products (roller/venetian/vertical/exterior)
+                # Keep 4 shutter series + Ashwood active, hide 18+ blind products
+                is_blind = rule['kind'] == 'blind'
+                published = not is_blind  # Blinds hidden, shutters visible
+                orderable = rule['status'] == 'configured' and not is_blind
+                
                 p={**(old or {}),'id':pid,'source_code':code,'name_zh':brand,'name_en':brand,
                    'material_zh':material,'material_en':material,'category':'shutters' if rule['kind']=='shutter' else 'blinds',
-                   'sample':False,'published':True,'portal_only':code not in brands,
+                   'sample':False,'published':published,'portal_only':code not in brands,
                    'scope':'website_and_template' if code in brands else 'template_only',
                    'description_zh':'按客户现用模板配置，规格与价格由服务端规则计算。',
                    'description_en':'Configured from the current order workbook. Pricing is calculated by server rules.',
                    'image_urls':(old or {}).get('image_urls',[]),'configuration_schema':rule['schema'],
-                   'orderable':rule['status']=='configured','rule_version':manifest['version']}
+                   'orderable':orderable,'rule_version':manifest['version']}
                 if warranty:
                     p.update(warranty_years=warranty,content_source='https://verashading.com/products')
                 c.execute('INSERT INTO products(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(pid,s.dump(p)))

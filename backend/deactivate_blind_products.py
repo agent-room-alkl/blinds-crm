@@ -1,19 +1,23 @@
 """Migration: Deactivate/reactivate roller/venetian/vertical/exterior blind products.
 
-NOTE: As of the latest seed, these 18 products are ALREADY inactive (published=False, 
-orderable=False) when the database is initialized. This script exists only for manual 
-reactivation or for databases that were initialized before this change.
+NOTE: As of the latest implementation, blind products from the Excel template import 
+are ALREADY inactive (published=False, orderable=False) when created. This script 
+exists for manual reactivation or for toggling the state.
 
-The 18 inactive products (IDs 10-27):
-- Roller blinds (6): IDs 10-15 (Blockout, Translucent, Sheer, Dual, Zebra, Waterproof)
-- Venetian blinds (6): IDs 16-21 (Alu 25mm, Alu 50mm, Wood Grain, Bamboo, Wood, Faux Wood)
-- Vertical blinds (3): IDs 22-24 (89mm, 127mm, PVC)
-- Exterior blinds (3): IDs 25-27 (Aluminium, Canvas, Shade Mesh)
+The 18+ inactive blind products (from Excel template, various IDs):
+Examples include:
+- Roller blinds: Roller_Blinds_BO_VIBE, Roller_Blinds_BO_LeReve, Roller_Blinds_BO_Skye, 
+  Roller_Blinds_BO_Karma, Roller_Blinds_BO_Mantra, Roller_Blinds_Sunscreen, 
+  Roller_Blinds_LF_LeReve, Roller_Blinds_LF_Skye, Roller_Blinds_LF_Mantra
+- Venetian blinds: Venetian_Blinds_PVC, Venetian_Blinds_Wood, Venetian_Blinds_Aluminium_25mm, 
+  Venetian_Blinds_Aluminium_50mm
+- Vertical blinds: Vertical_Blinds_VIBE_89mm, Vertical_Blinds_VIBE_100mm, Vertical_Blinds_Karma_89mm
+- Exterior blinds: Exterior_Blinds_Mesh, Exterior_Blinds_ClearPVC
 
 To REACTIVATE these products (undo the deactivation):
     python backend/deactivate_blind_products.py --undo
 
-To manually DEACTIVATE (if needed on an old database):
+To manually DEACTIVATE (if needed):
     python backend/deactivate_blind_products.py
 
 Order history for these products is preserved regardless of their active/inactive state.
@@ -29,14 +33,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from service import db, dump
 
 
-# Product IDs to deactivate (18 roller/venetian/vertical/exterior products)
-# These are placeholder IDs - adjust based on actual product IDs in the database
-BLIND_PRODUCT_CATEGORIES = ['roller', 'venetian', 'vertical', 'exterior']
-BLIND_PRODUCT_KEYWORDS = ['Roller', 'Venetian', 'Vertical', 'Exterior', 'Roman']
-
-
 def deactivate_products(undo=False):
-    """Deactivate or reactivate blind products."""
+    """Deactivate or reactivate blind products imported from Excel template."""
     action = "Reactivating" if undo else "Deactivating"
     new_status = True if undo else False
     
@@ -51,54 +49,49 @@ def deactivate_products(undo=False):
             pid = row['id']
             d = json.loads(row['data'])
             
-            # Skip sample products and shutter products
+            # Target products with category='blinds' from template import
+            # These are the roller/venetian/vertical/exterior products
+            if d.get('category') != 'blinds':
+                continue
+            
+            # Skip sample products
             if d.get('sample', False):
                 continue
-            if d.get('category') == 'shutters':
+            
+            # Check if this is a template-imported blind by having a source_code
+            if not d.get('source_code'):
                 continue
             
-            # Check if this is a blind product to deactivate
-            should_modify = False
+            # This is a blind product from template import
+            old_published = d.get('published', True)
+            old_orderable = d.get('orderable', True)
             
-            # Check by category
-            if d.get('category') in BLIND_PRODUCT_CATEGORIES:
-                should_modify = True
+            d['published'] = new_status
+            d['orderable'] = new_status
             
-            # Check by name keywords
-            name_en = d.get('name_en', '')
-            name_zh = d.get('name_zh', '')
-            if any(keyword in name_en or keyword in name_zh for keyword in BLIND_PRODUCT_KEYWORDS):
-                should_modify = True
-            
-            if should_modify:
-                old_published = d.get('published', True)
-                old_orderable = d.get('orderable', True)
-                
-                d['published'] = new_status
-                d['orderable'] = new_status
-                
-                c.execute('UPDATE products SET data=? WHERE id=?', (dump(d), pid))
-                modified.append({
-                    'id': pid,
-                    'name_en': name_en,
-                    'name_zh': name_zh,
-                    'category': d.get('category', 'unknown'),
-                    'old_published': old_published,
-                    'old_orderable': old_orderable,
-                    'new_published': new_status,
-                    'new_orderable': new_status
-                })
+            c.execute('UPDATE products SET data=? WHERE id=?', (dump(d), pid))
+            modified.append({
+                'id': pid,
+                'source_code': d.get('source_code', 'N/A'),
+                'name_en': d.get('name_en', 'N/A'),
+                'name_zh': d.get('name_zh', 'N/A'),
+                'category': d.get('category', 'unknown'),
+                'old_published': old_published,
+                'old_orderable': old_orderable,
+                'new_published': new_status,
+                'new_orderable': new_status
+            })
         
         if not modified:
             print(f"No blind products found to {action.lower()}")
             return
         
         print(f"\n{action} {len(modified)} blind products:")
-        print(f"{'ID':<6} {'Name (EN)':<40} {'Category':<15} {'Status'}")
-        print("-" * 80)
+        print(f"{'ID':<6} {'Source Code':<35} {'Name (EN)':<40} {'Status'}")
+        print("-" * 100)
         for p in modified:
             status = f"{p['old_published']}/{p['old_orderable']} → {p['new_published']}/{p['new_orderable']}"
-            print(f"{p['id']:<6} {p['name_en']:<40} {p['category']:<15} {status}")
+            print(f"{p['id']:<6} {p['source_code']:<35} {p['name_en']:<40} {status}")
         
         print(f"\n✓ Successfully {action.lower()} {len(modified)} products")
         print("\nTo undo this change, run:")

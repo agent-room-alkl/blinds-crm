@@ -64,7 +64,18 @@ with tempfile.TemporaryDirectory() as folder:
     assert all(p.get('category') != 'aluminium' or p.get('sample', False) for p in public_products), 'No aluminium shutters in public'
     assert all(p.get('category') not in ('roller', 'venetian', 'vertical', 'exterior') for p in public_products), 'No inactive blinds in public'
     
-    assert len(after)==24 and all('matrix' not in str(p.get('price_rule',{})) for p in after if p.get('source_code','').startswith('Shutters'))
+    # Verify admin can see all products including inactive blinds
+    admin_products = staff.get('/api/admin/products').json()
+    inactive_blinds = [p for p in admin_products if p.get('category') == 'blinds' and not p.get('published', True)]
+    # Should have 18+ blind products from template (23 total - 4 shutters - Shutters_Aluminium = 18)
+    assert len(inactive_blinds) >= 18, f'Expected at least 18 inactive blind products, got {len(inactive_blinds)}'
+    print(f'\n✓ Admin list shows {len(inactive_blinds)} inactive blind products:')
+    for p in sorted(inactive_blinds, key=lambda x: x.get('source_code', '')):
+        print(f"  {p.get('source_code', 'N/A'):35s} - {p.get('name_en', 'N/A'):40s} (published={p.get('published')}, orderable={p.get('orderable')})")
+    
+    # Portal catalog only shows published products (so 5 shutters + Ashwood, not the 18 inactive blinds)
+    assert len(after) == 6, f'Expected 6 published products in portal catalog (5 series + Ashwood), got {len(after)}'
+    assert all('matrix' not in str(p.get('price_rule',{})) for p in after if p.get('source_code','').startswith('Shutters'))
     assert all('rate_per_m2' not in (p.get('price_rule') or {}) and 'matrix' not in (p.get('price_rule') or {}) for p in after)
     p=next(p for p in after if p['source_code']=='Shutters_PVC')
     body=dict(project_name='TEST project',site_address='Site',submission_key='test-project',installation_required=True,

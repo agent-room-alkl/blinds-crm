@@ -67,36 +67,6 @@ def init_db(connection=None,seed_admin=True,seed_catalog=True):
             {'id':3,'name_zh':'复合百叶（示例）','name_en':'Composite Blinds (Sample)','material_zh':'复合材料','material_en':'Composite','description_zh':'简洁耐用的示例系列，实际选项待确认。','description_en':'A simple sample collection. Actual options await confirmation.','category':'composite','sample':True}
         ] if seed_catalog else []):
             c.execute('INSERT OR IGNORE INTO products VALUES(?,?)',(p['id'],dump(p)))
-        
-        # Seed 18 inactive roller/venetian/vertical/exterior blind products (T-12)
-        # These products are marked published=False and orderable=False to hide them from catalog
-        # Order history for these products (if any exists) remains untouched
-        inactive_blinds = [
-            # Roller blinds (6 products)
-            {'id':10,'name_zh':'卷帘 - 遮光','name_en':'Roller Blind - Blockout','material_zh':'聚酯纤维','material_en':'Polyester','category':'roller','published':False,'orderable':False,'sample':False,'source_code':'Roller_Blockout'},
-            {'id':11,'name_zh':'卷帘 - 半透光','name_en':'Roller Blind - Translucent','material_zh':'聚酯纤维','material_en':'Polyester','category':'roller','published':False,'orderable':False,'sample':False,'source_code':'Roller_Translucent'},
-            {'id':12,'name_zh':'卷帘 - 透光','name_en':'Roller Blind - Sheer','material_zh':'聚酯纤维','material_en':'Polyester','category':'roller','published':False,'orderable':False,'sample':False,'source_code':'Roller_Sheer'},
-            {'id':13,'name_zh':'卷帘 - 双层','name_en':'Roller Blind - Dual','material_zh':'聚酯纤维','material_en':'Polyester','category':'roller','published':False,'orderable':False,'sample':False,'source_code':'Roller_Dual'},
-            {'id':14,'name_zh':'卷帘 - 斑马','name_en':'Roller Blind - Zebra','material_zh':'聚酯纤维','material_en':'Polyester','category':'roller','published':False,'orderable':False,'sample':False,'source_code':'Roller_Zebra'},
-            {'id':15,'name_zh':'卷帘 - 防水','name_en':'Roller Blind - Waterproof','material_zh':'PVC','material_en':'PVC','category':'roller','published':False,'orderable':False,'sample':False,'source_code':'Roller_Waterproof'},
-            # Venetian blinds (6 products)
-            {'id':16,'name_zh':'威尼斯百叶 - 25mm','name_en':'Venetian Blind - 25mm','material_zh':'铝合金','material_en':'Aluminium','category':'venetian','published':False,'orderable':False,'sample':False,'source_code':'Venetian_Alu_25mm'},
-            {'id':17,'name_zh':'威尼斯百叶 - 50mm','name_en':'Venetian Blind - 50mm','material_zh':'铝合金','material_en':'Aluminium','category':'venetian','published':False,'orderable':False,'sample':False,'source_code':'Venetian_Alu_50mm'},
-            {'id':18,'name_zh':'威尼斯百叶 - 木纹','name_en':'Venetian Blind - Wood Grain','material_zh':'铝合金','material_en':'Aluminium','category':'venetian','published':False,'orderable':False,'sample':False,'source_code':'Venetian_WoodGrain'},
-            {'id':19,'name_zh':'威尼斯百叶 - 竹编','name_en':'Venetian Blind - Bamboo','material_zh':'竹','material_en':'Bamboo','category':'venetian','published':False,'orderable':False,'sample':False,'source_code':'Venetian_Bamboo'},
-            {'id':20,'name_zh':'威尼斯百叶 - 木质','name_en':'Venetian Blind - Wood','material_zh':'木材','material_en':'Wood','category':'venetian','published':False,'orderable':False,'sample':False,'source_code':'Venetian_Wood'},
-            {'id':21,'name_zh':'威尼斯百叶 - 仿木','name_en':'Venetian Blind - Faux Wood','material_zh':'PVC','material_en':'PVC','category':'venetian','published':False,'orderable':False,'sample':False,'source_code':'Venetian_FauxWood'},
-            # Vertical blinds (3 products)
-            {'id':22,'name_zh':'垂直百叶 - 89mm','name_en':'Vertical Blind - 89mm','material_zh':'聚酯纤维','material_en':'Polyester','category':'vertical','published':False,'orderable':False,'sample':False,'source_code':'Vertical_89mm'},
-            {'id':23,'name_zh':'垂直百叶 - 127mm','name_en':'Vertical Blind - 127mm','material_zh':'聚酯纤维','material_en':'Polyester','category':'vertical','published':False,'orderable':False,'sample':False,'source_code':'Vertical_127mm'},
-            {'id':24,'name_zh':'垂直百叶 - PVC','name_en':'Vertical Blind - PVC','material_zh':'PVC','material_en':'PVC','category':'vertical','published':False,'orderable':False,'sample':False,'source_code':'Vertical_PVC'},
-            # Exterior blinds (3 products)
-            {'id':25,'name_zh':'户外百叶 - 铝制','name_en':'Exterior Blind - Aluminium','material_zh':'铝合金','material_en':'Aluminium','category':'exterior','published':False,'orderable':False,'sample':False,'source_code':'Exterior_Aluminium'},
-            {'id':26,'name_zh':'户外百叶 - 防水布','name_en':'Exterior Blind - Canvas','material_zh':'防水布','material_en':'Canvas','category':'exterior','published':False,'orderable':False,'sample':False,'source_code':'Exterior_Canvas'},
-            {'id':27,'name_zh':'户外百叶 - 遮阳网','name_en':'Exterior Blind - Shade Mesh','material_zh':'遮阳网','material_en':'Shade Mesh','category':'exterior','published':False,'orderable':False,'sample':False,'source_code':'Exterior_ShadeMesh'},
-        ]
-        for p in (inactive_blinds if seed_catalog else []):
-            c.execute('INSERT OR IGNORE INTO products VALUES(?,?)',(p['id'],dump(p)))
 
 if BACKEND=='sqlite' or os.getenv('VERA_AUTO_INIT')=='1':init_db()
 
