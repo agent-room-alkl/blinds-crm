@@ -623,6 +623,8 @@ def register(app, s):
             
             # Portal catalog allowlist: 5 website series + Aluminium (orderable after login)
             # Exclude all blinds regardless of published/orderable flags
+            # Order matches verashading.com homepage: Eco, Classic, Natural, Prime, Deluxe, then Aluminium
+            # Accept both VERA_Ashwood_provisional (current) and VERA_Ashwood_display (legacy, migrated at startup)
             PORTAL_ALLOWED_CODES = [
                 'Shutters_PVC_Eco',           # VERA Eco
                 'Shutters_PVC',                # VERA Classic
@@ -632,11 +634,43 @@ def register(app, s):
                 'VERA_Ashwood_display',        # VERA Deluxe (legacy, migrated at startup)
                 'Shutters_Aluminium'           # VERA Aluminium (login required)
             ]
-            orderable_products = [
-                {**p, 'price_rule': imported.get(p.get('source_code')) or prices.get(p['id'])}
-                for p in products
-                if p.get('source_code') in PORTAL_ALLOWED_CODES and p.get('category') != 'blinds'
-            ]
+            
+            # Build product dict for ordering - normalize old Ashwood code
+            product_map = {}
+            for p in products:
+                code = p.get('source_code')
+                if code in PORTAL_ALLOWED_CODES and p.get('category') != 'blinds':
+                    # Normalize old Ashwood display code to provisional for consistent handling
+                    if code == 'VERA_Ashwood_display':
+                        p = {**p, 'source_code': 'VERA_Ashwood_provisional'}
+                        code = 'VERA_Ashwood_provisional'
+                    product_map[code] = p
+            
+            # Return products in website order with price rules and affects_price metadata
+            orderable_products = []
+            ORDER = ['Shutters_PVC_Eco', 'Shutters_PVC', 'Shutters_Pinewood', 'Shutters_Basswood', 'VERA_Ashwood_provisional', 'Shutters_Aluminium']
+            for code in ORDER:
+                if code in product_map:
+                    p = product_map[code]
+                    # Check both new and old Ashwood codes for price rules
+                    price_rule = imported.get(code) or imported.get('VERA_Ashwood_display') or prices.get(p['id'])
+                    # Add affects_price metadata: only series, width, height, discount affect price
+                    # Color, frame, louver, control rod, opening, install method do not affect price
+                    if price_rule and isinstance(price_rule, dict):
+                        price_rule = {**price_rule, 'affects_price': {
+                            'product_id': True,
+                            'width_mm': True,
+                            'height_mm': True,
+                            'discount': True,
+                            'colour': False,
+                            'louver_size': False,
+                            'frame_type': False,
+                            'control_rod': False,
+                            'opening_style': False,
+                            'install_method': False,
+                        }}
+                    orderable_products.append({**p, 'price_rule': price_rule})
+            
             return {'products': orderable_products,
                     'pricing_status': 'configured' if prices or imported else 'rules_required'}
 
