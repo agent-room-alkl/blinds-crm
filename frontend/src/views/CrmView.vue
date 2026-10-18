@@ -7,6 +7,7 @@ import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
+import { FolderKanban, Users, BarChart3, Package, Settings } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -134,10 +135,24 @@ onMounted(() => {
   <main class="page crm" :class="{ 'is-signed': signed }">
     <aside v-if="signed" class="desk-rail">
       <div class="rail-brand">VERA</div>
-      <button v-for="item in nav" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
-        {{ item.label }}
+      <button type="button" :class="{ current: tab === 'projects' }" @click="openTab('projects')">
+        <FolderKanban :size="20" aria-hidden="true" />
+        {{ tx("项目订单", "Project orders") }}
+      </button>
+      <button type="button" :class="{ current: tab === 'customers' }" @click="openTab('customers')">
+        <Users :size="20" aria-hidden="true" />
+        {{ tx("客户资料", "Customers") }}
+      </button>
+      <button type="button" :class="{ current: tab === 'dashboard' }" @click="openTab('dashboard')">
+        <BarChart3 :size="20" aria-hidden="true" />
+        {{ tx("分析看板", "Dashboard") }}
+      </button>
+      <button type="button" :class="{ current: tab === 'products' }" @click="openTab('products')">
+        <Package :size="20" aria-hidden="true" />
+        {{ tx("产品目录", "Product catalogue") }}
       </button>
       <button v-if="me.role === 'admin'" type="button" :class="{ current: tab === 'users' }" @click="openTab('users')">
+        <Settings :size="20" aria-hidden="true" />
         {{ tx("系统设置", "Settings") }}
       </button>
       <div class="rail-bottom">
@@ -220,11 +235,13 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.crm { font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 32px 28px 48px; overflow-x: hidden; }
-.crm.is-signed { padding-left: 268px; }
-.desk-rail { position: fixed; inset: 0 auto 0 0; width: 236px; background: #1a2823; color: #e7eee9; padding: 28px 16px; display: flex; flex-direction: column; gap: 4px; }
-.rail-brand { font-size: 22px; letter-spacing: 0.16em; padding: 4px 12px 20px; }
-.desk-rail button { display: flex; align-items: center; min-height: 44px; border: 0; background: transparent; color: #e7eee9; padding: 10px 14px; text-align: left; font-size: 15px; border-radius: 6px; }
+.crm { font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow-x: hidden; }
+.crm.is-signed { padding-left: 252px; }
+.desk-rail { position: fixed; inset: 0 auto 0 0; width: 228px; background: #1a2823; color: #e7eee9; padding: 24px 12px; display: flex; flex-direction: column; gap: 4px; }
+.rail-brand { font-size: 22px; letter-spacing: 0.16em; padding: 4px 12px 16px; }
+.desk-rail button { display: flex; align-items: center; gap: 10px; min-height: 44px; border: 0; background: transparent; color: #e7eee9; padding: 10px 12px; text-align: left; font-size: 15px; border-radius: 6px; transition: background 0.2s; }
+.desk-rail button:hover { background: rgba(255,255,255,0.08); }
+.desk-rail button:focus-visible { outline: 2px solid #0f6e5c; outline-offset: 2px; }
 .desk-rail button.current { background: #0f6e5c; color: white; }
 .rail-bottom { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 16px 12px; border-top: 1px solid rgba(231, 238, 233, 0.16); }
 .user-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #8e9a94; color: #1a2823; font-size: 14px; }
@@ -258,5 +275,11 @@ th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1
   .password-form, .user-form { grid-template-columns: 1fr; }
   .crm-bar { flex-wrap: wrap; }
   .page-context { flex-basis: 100%; }
+}
+@media (max-width: 390px) {
+  .crm, .crm.is-signed { padding: 12px; }
+  .desk-rail { grid-template-columns: 1fr; gap: 2px; margin: -12px -12px 16px; }
+  .crm-bar { min-height: 60px; margin-bottom: 16px; }
+  .page-context h1 { font-size: 22px; }
 }
 </style>

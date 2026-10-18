@@ -28,6 +28,9 @@ def migrate(c):
     CREATE TABLE IF NOT EXISTS portal_profiles(customer_id INTEGER PRIMARY KEY REFERENCES customers(id), username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS portal_sessions(token_hash TEXT PRIMARY KEY,customer_id INTEGER REFERENCES customers(id),expires_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS operations_records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,customer_id INTEGER REFERENCES customers(id),data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS providers(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,contact_email TEXT,notes TEXT,active INTEGER DEFAULT 1,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS provider_templates(id INTEGER PRIMARY KEY AUTOINCREMENT,provider_id INTEGER REFERENCES providers(id),name TEXT NOT NULL,sheet_name TEXT NOT NULL,column_mappings TEXT NOT NULL,active INTEGER DEFAULT 1,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS order_providers(id INTEGER PRIMARY KEY AUTOINCREMENT,order_id TEXT NOT NULL,provider_id INTEGER REFERENCES providers(id),template_id INTEGER,is_preferred INTEGER DEFAULT 0,assigned_at TEXT NOT NULL);
     ''')
 
 
@@ -105,6 +108,27 @@ class Adjustments(Input):
     lines: list[LineAdjustment] = Field(max_length=200)
     note: str = Field(min_length=5,max_length=1000)
 
+class ProviderCreate(Input):
+    name: str = Field(min_length=1, max_length=200)
+    contact_email: str = Field(default='', max_length=200)
+    notes: str = Field(default='', max_length=2000)
+
+class ProviderEdit(Input):
+    name: str = Field(min_length=1, max_length=200)
+    contact_email: str = Field(default='', max_length=200)
+    notes: str = Field(default='', max_length=2000)
+    active: bool
+
+class ProviderTemplateCreate(Input):
+    provider_id: int
+    name: str = Field(min_length=1, max_length=200)
+    sheet_name: str = Field(min_length=1, max_length=100)
+    column_mappings: dict[str, str]  # field_name -> column_letter
+
+class OrderProviderAssignment(Input):
+    provider_id: int
+    template_id: int | None = None
+    is_preferred: bool = Field(default=False)
 
 class PriceRule(Input):
     # Explicit configuration after the real price sheet is supplied; never seeded.
@@ -611,8 +635,126 @@ def register(app, s):
             return enrich(c, d)
 
     @app.get('/api/operations/orders/{oid}/supplier-export')
-    def supplier_export(oid: str, actor=Depends(s.auth)):
-        raise HTTPException(409, 'Confirmed supplier Excel template and field mapping are required')
+    def supplier_export(oid: str, provider_id: int | None = None, allow_basic_fallback: bool = False, actor=Depends(s.auth)):
+        import json
+        from fastapi.responses import Response
+        import io, zipfile
+        from xml.etree import ElementTree as ET
+        from excel_rules import column
+        
+        with s.db() as c:
+            d=get(c,oid,'project')
+            if d['status']=='pending_review':
+                raise HTTPException(409,'Accept technical review before producing supplier documents')
+            
+            # Determine provider: explicit param or first assigned provider
+            template_id=None
+            if not provider_id:
+                assigned=c.execute('SELECT provider_id,template_id FROM order_providers WHERE order_id=? ORDER BY is_preferred DESC,assigned_at LIMIT 1',(oid,)).fetchone()
+                if assigned:
+                    provider_id=assigned['provider_id']
+                    template_id=assigned['template_id']
+            else:
+                # Provider_id provided, look up template
+                assigned=c.execute('SELECT template_id FROM order_providers WHERE order_id=? AND provider_id=?',(oid,provider_id)).fetchone()
+                template_id=assigned['template_id'] if assigned else None
+            
+            # Validate active provider if specified
+            if provider_id:
+                provider=c.execute('SELECT active,name FROM providers WHERE id=?',(provider_id,)).fetchone()
+                if not provider or not provider['active']:
+                    raise HTTPException(404,'Cannot export for inactive provider')
+                provider_name=provider['name']
+            else:
+                provider_name=None
+            
+            # If no provider or no template, check if basic fallback allowed
+            if not provider_id or not template_id:
+                if not allow_basic_fallback:
+                    raise HTTPException(422,'No provider template configured for this order. Use allow_basic_fallback=true for generic template.')
+                # Use basic fallback
+                from order_exports import export_project
+                raw=export_project(d,'production')
+                return Response(raw,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                               headers={'Content-Disposition':f'attachment; filename="vera-supplier-BASIC-NOT-VERIFIED.xlsx"',
+                                       'Cache-Control':'no-store'})
+            
+            # Load custom template
+            template=c.execute('SELECT * FROM provider_templates WHERE id=? AND provider_id=? AND active=1',
+                             (template_id,provider_id)).fetchone()
+            if not template:
+                if allow_basic_fallback:
+                    from order_exports import export_project
+                    raw=export_project(d,'production')
+                    return Response(raw,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                   headers={'Content-Disposition':f'attachment; filename="vera-supplier-BASIC-NOT-VERIFIED.xlsx"',
+                                           'Cache-Control':'no-store'})
+                raise HTTPException(422,'Provider template is inactive or deleted')
+            
+            # Generate custom template export
+            mappings=json.loads(template['column_mappings'])
+            sheet_name=template['sheet_name']
+            ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+            ET.register_namespace('',ns)
+            
+            # Build header row
+            columns=sorted(mappings.items(),key=lambda x:x[1])  # Sort by column letter
+            headers=[field for field,_ in columns]
+            
+            # Build data rows
+            rows=[headers]
+            for line in d['lines']:
+                row_data={}
+                for field,col_letter in mappings.items():
+                    if field=='order_id': row_data[field]=d['id']
+                    elif field=='project_name': row_data[field]=d['project_name']
+                    elif field=='company': row_data[field]=d['company']
+                    elif field=='contact_name': row_data[field]=d['contact_name']
+                    elif field=='company_address': row_data[field]=d['company_address']
+                    elif field=='site_address': row_data[field]=d['site_address']
+                    elif field=='phone': row_data[field]=d['phone']
+                    elif field=='email': row_data[field]=d['email']
+                    elif field=='window_name': row_data[field]=line['window_name']
+                    elif field=='product_id': row_data[field]=str(line['product_id'])
+                    elif field=='width_mm': row_data[field]=line['width_mm']
+                    elif field=='height_mm': row_data[field]=line['height_mm']
+                    elif field=='quantity': row_data[field]=line['quantity']
+                    elif field=='panel_count': row_data[field]=line.get('panel_count',1)
+                    elif field=='options': row_data[field]='; '.join(f"{k}: {v}" for k,v in line['options'].items())
+                    elif field=='arrived': row_data[field]=line['arrived']
+                    elif field=='delivered': row_data[field]=line['delivered']
+                rows.append([row_data.get(field,'') for field,_ in columns])
+            
+            # Create XLSX
+            sheet=ET.Element('{'+ns+'}worksheet')
+            data=ET.SubElement(sheet,'{'+ns+'}sheetData')
+            for r,values in enumerate(rows,1):
+                row=ET.SubElement(data,'{'+ns+'}row',{'r':str(r)})
+                for col_idx,v in enumerate(values,1):
+                    col_letter=column(col_idx)
+                    numeric=(r>1 and col_idx>1 and isinstance(v,(int,float)))
+                    cell=ET.SubElement(row,'{'+ns+'}c',{'r':col_letter+str(r),**({} if numeric else {'t':'inlineStr'})})
+                    if numeric:
+                        ET.SubElement(cell,'{'+ns+'}v').text=str(v)
+                    else:
+                        inline=ET.SubElement(cell,'{'+ns+'}is')
+                        ET.SubElement(inline,'{'+ns+'}t').text=str(v)
+            
+            package={
+                '[Content_Types].xml':'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+                '_rels/.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+                'xl/workbook.xml':f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets></workbook>',
+                'xl/_rels/workbook.xml.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+                'xl/worksheets/sheet1.xml':ET.tostring(sheet,encoding='utf-8')}
+            
+            out=io.BytesIO()
+            with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED) as z:
+                for name,content in package.items():
+                    z.writestr(name,content)
+            
+            filename=f"vera-{provider_name.replace(' ','-')}-{d['id']}.xlsx"
+            return Response(out.getvalue(),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                           headers={'Content-Disposition':f'attachment; filename="{filename}"','Cache-Control':'no-store'})
 
     def project_export(oid,kind):
         from fastapi.responses import Response
@@ -862,3 +1004,96 @@ def register(app, s):
                     put(c,'project',d,d['customer_id'])
                 put(c,'invoice',inv,inv['customer_id'])
             return inv
+
+    # Provider management
+    @app.get('/api/operations/providers')
+    def list_providers(actor=Depends(s.auth)):
+        with s.db() as c:
+            return [dict(row) for row in c.execute('SELECT * FROM providers ORDER BY name').fetchall()]
+
+    @app.post('/api/operations/providers')
+    def create_provider(body:ProviderCreate,actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            cursor=c.execute('INSERT INTO providers(name,contact_email,notes,created_at) VALUES(?,?,?,?)',
+                     (body.name,body.contact_email,body.notes,s.now()))
+            pid=cursor.lastrowid
+            return dict(c.execute('SELECT * FROM providers WHERE id=?',(pid,)).fetchone())
+
+    @app.post('/api/operations/providers/{pid}')
+    def update_provider(pid:int,body:ProviderEdit,actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            cursor=c.execute('UPDATE providers SET name=?,contact_email=?,notes=?,active=? WHERE id=?',
+                     (body.name,body.contact_email,body.notes,1 if body.active else 0,pid))
+            if cursor.rowcount==0:
+                raise HTTPException(404,'Provider not found')
+            return dict(c.execute('SELECT * FROM providers WHERE id=?',(pid,)).fetchone())
+
+    @app.get('/api/operations/provider-templates')
+    def list_provider_templates(provider_id:int|None=None,actor=Depends(s.auth)):
+        with s.db() as c:
+            if provider_id:
+                return [dict(row) for row in c.execute('SELECT * FROM provider_templates WHERE provider_id=? ORDER BY name',(provider_id,)).fetchall()]
+            return [dict(row) for row in c.execute('SELECT * FROM provider_templates ORDER BY provider_id,name').fetchall()]
+
+    @app.post('/api/operations/provider-templates')
+    def create_provider_template(body:ProviderTemplateCreate,actor=Depends(s.require_admin)):
+        import json
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            # Validate provider exists and is active
+            provider=c.execute('SELECT active FROM providers WHERE id=?',(body.provider_id,)).fetchone()
+            if not provider or not provider['active']:
+                raise HTTPException(404,'Active provider not found')
+            # Validate column mappings
+            if not body.column_mappings:
+                raise HTTPException(422,'Column mappings cannot be empty')
+            valid_fields={'order_id','project_name','company','contact_name','company_address','site_address','phone','email',
+                         'window_name','product_id','width_mm','height_mm','quantity','panel_count','options','arrived','delivered'}
+            for field in body.column_mappings:
+                if field not in valid_fields:
+                    raise HTTPException(422,f'Unknown field: {field}')
+            cursor=c.execute('INSERT INTO provider_templates(provider_id,name,sheet_name,column_mappings,created_at) VALUES(?,?,?,?,?)',
+                     (body.provider_id,body.name,body.sheet_name,json.dumps(body.column_mappings),s.now()))
+            tid=cursor.lastrowid
+            return dict(c.execute('SELECT * FROM provider_templates WHERE id=?',(tid,)).fetchone())
+
+    @app.post('/api/operations/orders/{oid}/assign-provider')
+    def assign_provider(oid:str,body:OrderProviderAssignment,actor=Depends(s.auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            # Validate order exists
+            d=get(c,oid,'project')
+            # Validate provider is active
+            provider=c.execute('SELECT active FROM providers WHERE id=?',(body.provider_id,)).fetchone()
+            if not provider or not provider['active']:
+                raise HTTPException(404,'Active provider not found')
+            # Validate template if provided
+            if body.template_id:
+                template=c.execute('SELECT * FROM provider_templates WHERE id=? AND provider_id=? AND active=1',
+                                 (body.template_id,body.provider_id)).fetchone()
+                if not template:
+                    raise HTTPException(404,'Active template not found for this provider')
+            # Check if already assigned
+            existing=c.execute('SELECT id FROM order_providers WHERE order_id=? AND provider_id=?',(oid,body.provider_id)).fetchone()
+            if existing:
+                c.execute('UPDATE order_providers SET template_id=?,is_preferred=? WHERE id=?',
+                         (body.template_id,1 if body.is_preferred else 0,existing['id']))
+                return {'order_id':oid,'provider_id':body.provider_id,'template_id':body.template_id,'updated':True}
+            c.execute('INSERT INTO order_providers(order_id,provider_id,template_id,is_preferred,assigned_at) VALUES(?,?,?,?,?)',
+                     (oid,body.provider_id,body.template_id,1 if body.is_preferred else 0,s.now()))
+            return {'order_id':oid,'provider_id':body.provider_id,'template_id':body.template_id,'assigned_at':s.now()}
+
+    @app.get('/api/operations/orders/{oid}/providers')
+    def list_order_providers(oid:str,actor=Depends(s.auth)):
+        with s.db() as c:
+            get(c,oid,'project')  # Validate order exists
+            return [dict(row) for row in c.execute('''
+                SELECT op.*,p.name as provider_name,p.active as provider_active,
+                       pt.name as template_name,pt.sheet_name
+                FROM order_providers op
+                JOIN providers p ON op.provider_id=p.id
+                LEFT JOIN provider_templates pt ON op.template_id=pt.id
+                WHERE op.order_id=? ORDER BY op.is_preferred DESC,op.assigned_at
+            ''',(oid,)).fetchall()]

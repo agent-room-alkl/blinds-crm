@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory() as folder:
     post(staff,f'operations/orders/{oid}/deposit-received')
     ordered = post(staff,f'operations/orders/{oid}/supplier-order',{'reference':'supplier-1'})
     assert sum(h['action']=='deposit_received' for h in ordered['history']) == 1
-    assert staff.get(f'/api/operations/orders/{oid}/supplier-export').status_code == 409
+    assert staff.get(f'/api/operations/orders/{oid}/supplier-export').status_code == 422,'Without template, should require explicit fallback flag'
     transit = post(staff,'operations/transit',{'order_ids':[oid,'not-found'],'operation_key':'transit-001'})
     assert [r['status'] for r in transit['results']] == ['success','failed']
     print('PASS review/deposit: submission does not invoice; acceptance invoices 60% ROUNDUP; separate receipt gate')
@@ -136,3 +136,93 @@ with tempfile.TemporaryDirectory() as folder:
     post(portal,'portal/logout')
     assert portal.get('/api/portal/orders').status_code == 401
     print('PASS frozen prices and logout. All operations requirements checks passed.')
+
+    # Provider management comprehensive tests
+    print('\n--- Provider management ---')
+    # Portal token must be rejected by operations endpoints
+    resp=other.get('/api/operations/providers')
+    assert resp.status_code==401,'Portal token must not access operations endpoints'
+    print('✓ Portal token rejected by operations/providers')
+    
+    # Create active provider
+    resp=staff.post('/api/operations/providers',json={'name':'Test Supplier','contact_email':'supplier@example.com','notes':'Test notes'})
+    assert resp.status_code==200,f'Create provider failed: {resp.text}'
+    pid=resp.json()['id']
+    print(f'✓ Created provider {pid}')
+    
+    # Create inactive provider
+    resp=staff.post('/api/operations/providers',json={'name':'Inactive Supplier','contact_email':'inactive@example.com','notes':'Inactive'})
+    inactive_pid=resp.json()['id']
+    staff.post(f'/api/operations/providers/{inactive_pid}',json={'name':'Inactive Supplier','contact_email':'inactive@example.com','notes':'Inactive','active':False})
+    print(f'✓ Created inactive provider {inactive_pid}')
+    
+    # List providers
+    resp=staff.get('/api/operations/providers')
+    assert resp.status_code==200
+    assert any(p['id']==pid for p in resp.json())
+    print('✓ Listed providers')
+    
+    # Create custom template with column mappings
+    mappings={'order_id':'A','window_name':'B','width_mm':'C','height_mm':'D','quantity':'E','arrived':'F'}
+    resp=staff.post('/api/operations/provider-templates',json={
+        'provider_id':pid,'name':'Custom Template','sheet_name':'OrderSheet','column_mappings':mappings})
+    assert resp.status_code==200,f'Create template failed: {resp.text}'
+    tid=resp.json()['id']
+    print(f'✓ Created custom template {tid}')
+    
+    # Assign provider with template to order
+    orders_list=staff.get('/api/operations/orders').json()
+    oid=orders_list[0]['id']
+    resp=staff.post(f'/api/operations/orders/{oid}/assign-provider',json={'provider_id':pid,'template_id':tid,'is_preferred':True})
+    assert resp.status_code==200
+    assert resp.json()['provider_id']==pid
+    print('✓ Assigned provider with custom template to order')
+    
+    # Cannot assign inactive provider
+    resp=staff.post(f'/api/operations/orders/{oid}/assign-provider',json={'provider_id':inactive_pid,'template_id':None})
+    assert resp.status_code==404,'Inactive provider should be rejected'
+    print('✓ Inactive provider assignment blocked')
+    
+    # Get order providers
+    resp=staff.get(f'/api/operations/orders/{oid}/providers')
+    assert resp.status_code==200
+    assert len(resp.json())>0
+    print('✓ Retrieved order providers')
+    
+    # Export with custom template and validate XLSX structure
+    import openpyxl,io
+    resp=staff.get(f'/api/operations/orders/{oid}/supplier-export')
+    assert resp.status_code==200,f'Custom template export failed: {resp.status_code} {resp.text}'
+    assert resp.headers['content-type']=='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    wb=openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert 'OrderSheet' in wb.sheetnames,'Custom sheet name must exist'
+    ws=wb['OrderSheet']
+    # Validate headers match mappings
+    assert ws['A1'].value=='order_id','Header A1 should be order_id'
+    assert ws['B1'].value=='window_name','Header B1 should be window_name'
+    assert ws['C1'].value=='width_mm','Header C1 should be width_mm'
+    # Validate data rows
+    assert ws['A2'].value is not None,'Order ID data in row 2'
+    assert ws['B2'].value is not None,'Window name data in row 2'
+    print('✓ Exported with custom template; validated XLSX structure (OrderSheet, mapped headers, data rows)')
+    
+    # Export for inactive provider should fail
+    resp=staff.get(f'/api/operations/orders/{oid}/supplier-export?provider_id={inactive_pid}')
+    assert resp.status_code==404,'Cannot export for inactive provider'
+    print('✓ Inactive provider export blocked')
+    
+    # Export without template but no fallback allowed should fail
+    oid2=orders_list[1]['id'] if len(orders_list)>1 else oid
+    resp=staff.get(f'/api/operations/orders/{oid2}/supplier-export')
+    assert resp.status_code==422,'Should require template or explicit fallback'
+    print('✓ Export without template requires explicit fallback flag')
+    
+    # Basic fallback with flag
+    resp=staff.get(f'/api/operations/orders/{oid2}/supplier-export?allow_basic_fallback=true')
+    assert resp.status_code==200,'Basic fallback with flag should work'
+    assert 'BASIC-NOT-VERIFIED' in resp.headers['content-disposition'],'Filename must indicate basic fallback'
+    wb2=openpyxl.load_workbook(io.BytesIO(resp.content))
+    assert 'Project' in wb2.sheetnames,'Basic fallback uses Project sheet'
+    print('✓ Basic fallback export with explicit flag; XLSX validated; filename clearly marked BASIC-NOT-VERIFIED')
+    
+    print('PASS provider management: portal token rejection, CRUD, templates, active/inactive handling, custom XLSX with mapped columns, basic fallback with clear labeling')
