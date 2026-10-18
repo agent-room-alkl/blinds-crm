@@ -654,20 +654,23 @@ def register(app, s):
                     p = product_map[code]
                     # Check both new and old Ashwood codes for price rules
                     price_rule = imported.get(code) or imported.get('VERA_Ashwood_display') or prices.get(p['id'])
-                    # Add affects_price metadata: only series, width, height, discount affect price
-                    # Color, frame, louver, control rod, opening, install method do not affect price
+                    # Add affects_price metadata: only series, width, height affect product price
+                    # Panel count only affects installation fee. All config options (colour, frame, louver, etc.) do NOT affect price
                     if price_rule and isinstance(price_rule, dict):
                         price_rule = {**price_rule, 'affects_price': {
                             'product_id': True,
                             'width_mm': True,
                             'height_mm': True,
-                            'discount': True,
+                            'panel_count': False,  # Only affects installation, not product price
                             'colour': False,
                             'louver_size': False,
                             'frame_type': False,
                             'control_rod': False,
                             'opening_style': False,
                             'install_method': False,
+                            'layout': False,
+                            'posts': False,
+                            'midrail': False,
                         }}
                     orderable_products.append({**p, 'price_rule': price_rule})
             

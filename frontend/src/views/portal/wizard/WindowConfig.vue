@@ -312,13 +312,19 @@ watch(
           <small>{{ priceError }}</small>
         </div>
         <div v-else-if="priceData && priceData.lines && priceData.lines[0]" class="price-display">
-          <strong class="price-amount">{{ priceData.currency }} {{ priceData.lines[0].amount || tx("待配置", "TBC") }}</strong>
+          <strong v-if="priceData.lines[0].amount && Number(priceData.lines[0].amount) > 0" class="price-amount">
+            {{ priceData.currency }} {{ priceData.lines[0].amount }}
+          </strong>
+          <div v-else class="price-error">
+            <p>{{ tx("价格计算错误", "Price calculation error") }}</p>
+            <small>{{ tx("价格为 0 可能表示配置超出范围或数据错误", "A price of 0 may indicate configuration out of range or data error") }}</small>
+          </div>
           <ul class="price-details">
             <li v-if="priceData.lines[0].pricing_status">{{ priceData.lines[0].pricing_status }}</li>
             <li v-if="priceData.subtotal">{{ tx("小计", "Subtotal") }}: {{ priceData.currency }} {{ priceData.subtotal }}</li>
             <li v-if="priceData.tax">GST: {{ priceData.currency }} {{ priceData.tax }}</li>
           </ul>
-          <p class="price-note">{{ tx("仅此窗预览，最终价格在提交时计算", "Preview for this window only. Final price calculated on submission.") }}</p>
+          <p class="price-note">{{ tx("仅此窗预览，最终价格在提交时计算。配置选项（颜色、框型、叶片等）不影响价格。", "Preview for this window only. Final price calculated on submission. Configuration options (colour, frame, louver, etc.) do not affect price.") }}</p>
         </div>
         <div v-else class="price-incomplete">
           <p>{{ tx("待完整配置", "Incomplete configuration") }}</p>
