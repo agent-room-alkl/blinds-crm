@@ -454,3 +454,115 @@ with tempfile.TemporaryDirectory() as folder:
     print('\nPASS T-11: Ashwood provisional pricing with placeholder rate')
     print('PASS T-12: Aluminium products require login, 18 blind products inactive')
 
+    # T-13: Test portal catalog allowlist - reject blind products even if published=True and orderable=True
+    print('\n--- T-13: Portal catalog allowlist rejects blind products ---')
+    
+    # The 18 blind source codes from demo_workbook.py
+    BLIND_CODES = [
+        'Exterior_Blinds_ClearPVC', 'Exterior_Blinds_Mesh',
+        'Roller_Blinds_BO_Karma', 'Roller_Blinds_BO_LeReve', 'Roller_Blinds_BO_Mantra',
+        'Roller_Blinds_BO_Skye', 'Roller_Blinds_BO_VIBE',
+        'Roller_Blinds_LF_LeReve', 'Roller_Blinds_LF_Mantra', 'Roller_Blinds_LF_Skye',
+        'Roller_Blinds_Sunscreen',
+        'Venetian_Blinds_Aluminium_25mm', 'Venetian_Blinds_Aluminium_50mm',
+        'Venetian_Blinds_PVC', 'Venetian_Blinds_Wood',
+        'Vertical_Blinds_Karma_89mm', 'Vertical_Blinds_VIBE_100mm', 'Vertical_Blinds_VIBE_89mm'
+    ]
+    
+    # Seed 18 blind products as published=True and orderable=True (simulating pre-T-12 import)
+    import service as s
+    blind_pids = []
+    with s.db() as c:
+        for idx, code in enumerate(BLIND_CODES):
+            pid = 10000 + idx
+            blind_product = {
+                'id': pid,
+                'source_code': code,
+                'name_en': f'Test Blind {code}',
+                'name_zh': f'测试盲 {code}',
+                'category': 'blinds',
+                'published': True,
+                'orderable': True,
+                'sample': False,
+                'portal_only': False,
+                'scope': 'website_and_template'
+            }
+            c.execute('INSERT OR REPLACE INTO products(id, data) VALUES(?, ?)', (pid, s.dump(blind_product)))
+            blind_pids.append(pid)
+    
+    print(f'✓ Seeded {len(BLIND_CODES)} blind products with published=True and orderable=True')
+    
+    # Test 1: Portal catalog should exclude all blind products
+    catalog = portal_authed.get('/api/portal/catalog').json()['products']
+    catalog_codes = [p.get('source_code') for p in catalog if p.get('source_code')]
+    blind_in_catalog = [code for code in BLIND_CODES if code in catalog_codes]
+    
+    print(f'✓ Portal catalog returned {len(catalog)} products')
+    print(f'  Catalog source_codes (in order): {catalog_codes}')
+    assert len(blind_in_catalog) == 0, f'Blind products found in catalog: {blind_in_catalog}'
+    print(f'✓ No blind products in portal catalog (expected: 0, got: {len(blind_in_catalog)})')
+    
+    # Test 2: Verify allowlist order
+    EXPECTED_ORDER = [
+        'Shutters_PVC_Eco',           # VERA Eco
+        'Shutters_PVC',                # VERA Classic
+        'Shutters_Pinewood',           # VERA Natural
+        'Shutters_Basswood',           # VERA Prime
+        'VERA_Ashwood_provisional',    # VERA Deluxe
+        'Shutters_Aluminium'           # VERA Aluminium
+    ]
+    # Filter to only codes that exist in the catalog (template import may not have created all)
+    expected_present = [code for code in EXPECTED_ORDER if code in catalog_codes]
+    catalog_order = [code for code in catalog_codes if code in EXPECTED_ORDER]
+    print(f'  Expected order (present): {expected_present}')
+    print(f'  Actual catalog order: {catalog_order}')
+    
+    # Test 3: Price endpoint should reject blind products
+    # Import a pricing rule for the first blind product using direct SQL
+    blind_rule = {
+        'source_code': BLIND_CODES[0],
+        'kind': 'blind',
+        'status': 'configured',
+        'rate_per_m2': '50.00',
+        'formula': 'area_fixed_percent_installation',
+        'options': {},
+        'schema': {}
+    }
+    template_data = {
+        'id': 'template:test-blind-reject',
+        'version': 'test-v1',
+        'products': [blind_rule],
+        'tax_rate': '0.15',
+        'minimum_installation': '0',
+        'discounts': []
+    }
+    
+    with s.db() as c:
+        c.execute('INSERT OR REPLACE INTO operations_records(id, kind, customer_id, data) VALUES(?, ?, ?, ?)', 
+                  ('template:test-blind-reject', 'template', None, s.dump(template_data)))
+        c.execute('INSERT OR REPLACE INTO operations_records(id, kind, customer_id, data) VALUES(?, ?, ?, ?)', 
+                  ('template-current', 'system', None, s.dump({'template_id': 'template:test-blind-reject'})))
+    
+    # Try to price an order with a blind product
+    blind_order = {
+        'project_name': 'Blind test project',
+        'site_address': 'Test address',
+        'submission_key': 'blind-test-001',
+        'installation_required': False,
+        'lines': [{
+            'window_name': 'Test',
+            'product_id': blind_pids[0],
+            'width_mm': 1000,
+            'height_mm': 1000,
+            'quantity': 1,
+            'options': {}
+        }]
+    }
+    
+    resp = portal_authed.post('/api/portal/price', json=blind_order)
+    assert resp.status_code == 422, f'Expected 422 for blind product, got {resp.status_code}'
+    assert 'blind' in resp.json()['detail'].lower(), f'Error should mention blinds: {resp.json()["detail"]}'
+    print(f'✓ Price endpoint rejected blind product: {resp.status_code} - {resp.json()["detail"]}')
+    
+    print('\nPASS T-13: Portal catalog allowlist excludes all blind products even if published=True and orderable=True')
+

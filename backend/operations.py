@@ -291,6 +291,11 @@ def register(app, s):
                 for n,line in enumerate(body.lines):
                     p = product_rows.get(line.product_id,{})
                     rule = rules.get(p.get('source_code'))
+                    
+                    # Portal catalog allowlist: reject blind products
+                    if p.get('category') == 'blinds':
+                        raise HTTPException(422, 'Blind products are not available for customer orders')
+                    
                     if not p.get('published') or not rule:
                         raise HTTPException(409,'No imported price rule for this product; display-only or mixed legacy product')
                     raw=line.model_dump(mode='json')
@@ -608,12 +613,20 @@ def register(app, s):
                         'version': template['version']
                     }
             
-            # Filter: only published products, exclude blind products (category='blinds' with orderable=False)
-            # Keep 5 website series + Shutters Aluminium (orderable after login)
+            # Portal catalog allowlist: 5 website series + Aluminium (orderable after login)
+            # Exclude all blinds regardless of published/orderable flags
+            PORTAL_ALLOWED_CODES = [
+                'Shutters_PVC_Eco',           # VERA Eco
+                'Shutters_PVC',                # VERA Classic
+                'Shutters_Pinewood',           # VERA Natural
+                'Shutters_Basswood',           # VERA Prime
+                'VERA_Ashwood_provisional',    # VERA Deluxe
+                'Shutters_Aluminium'           # VERA Aluminium (login required)
+            ]
             orderable_products = [
                 {**p, 'price_rule': imported.get(p.get('source_code')) or prices.get(p['id'])}
                 for p in products
-                if p['published'] and not (p.get('category') == 'blinds' and not p.get('orderable', True))
+                if p.get('source_code') in PORTAL_ALLOWED_CODES and p.get('category') != 'blinds'
             ]
             return {'products': orderable_products,
                     'pricing_status': 'configured' if prices or imported else 'rules_required'}
