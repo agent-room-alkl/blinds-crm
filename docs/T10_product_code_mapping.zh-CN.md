@@ -40,7 +40,7 @@
 | | 结论 | 证据 |
 |---|---|---|
 | **安装方式是共用配置** | ✅ 成立 | 命名区域 `Fitting = 'Product Listing'!$B$101:$D$101` = **In Fit / Out Fit / Make Size**，全部 23 个产品共用这一组，不区分品类 |
-| **尺寸是共用配置** | ✅ 成立 | `Order!B/C` 列的宽(mm)/drop(mm)对所有产品通用 |
+| **尺寸是共用配置** | ✅ 成立 | `Order!C` = Width(mm)、`Order!D` = Drop(mm)，对全部 23 个产品通用（`Order!B` 是 Window Location，不是尺寸）|
 | **18 个 blinds 是 5 个 shutters 的配置项** | ❌ 不成立 | 见下 |
 | **Shutters_Aluminium 是百叶窗家族的第 6 个** | ✅ 成立 | 同为 shutter、同样面积计价、同样有叶片尺寸与控制杆配置，只是官网没展示 |
 
@@ -91,23 +91,25 @@ Exterior_Blinds_ClearPVC_Price   = Pricing!$B$475:$G$478
 
 颜色数 = 该产品在 `Product Listing` 自己那一行的可选颜色/面料数量。
 
+**「官网系列」这一列是推断，不是工作簿里写的。** 工作簿只有 Excel 产品代码，没有任何一处写着「Shutters_PVC = VERA Classic」。对应关系是我按材质和质保年数与官网五个详情页逐项比对得出的（例如 Shutters_PVC 的 8 个漆色与 20 年质保对上 PVC Premium / VERA Classic）。证据强，但仍属推断，正式确认需要客户点头。
+
 | 行 | Excel 代码 | 官网系列 | 计价 | 价格区域 | 颜色/面料 | 配置槽 |
 |---|---|---|---|---|---|---|
-| 2 | Shutters_PVC | **VERA CLASSIC / PVC Premium** | 面积 | 面积费率 | 8 | C1 框型 / C2 叶片 / C4 控制杆 |
-| 3 | Shutters_PVC_Eco | **VERA ECO / PVC** | 面积 | 面积费率 | 1（仅 White 01） | C1 / C2 / C4 |
-| 4 | Shutters_Pinewood | **VERA NATURAL / Pinewood** | 面积 | 面积费率 | 8 | C1 / C2 / C4 |
-| 5 | Shutters_Basswood | **VERA PRIME / Basswood** | 面积 | 面积费率 | 18（8 色 + Golden Oak 61…Provence Blue 70） | C1 / C2 / C4 |
+| 2 | Shutters_PVC | VERA CLASSIC / PVC Premium（推断） | 面积 | `Pricing!A485:B489` | 8 | C1 框型 / C2 叶片 / C4 控制杆 |
+| 3 | Shutters_PVC_Eco | VERA ECO / PVC（推断） | 面积 | `Pricing!A485:B489` | 1（仅 White 01） | C1 / C2 / C4 |
+| 4 | Shutters_Pinewood | VERA NATURAL / Pinewood（推断） | 面积 | `Pricing!A485:B489` | 8 | C1 / C2 / C4 |
+| 5 | Shutters_Basswood | VERA PRIME / Basswood（推断） | 面积 | `Pricing!A485:B489` | 18（8 色 + Golden Oak 61…Provence Blue 70） | C1 / C2 / C4 |
 | — | *(无代码)* | **VERA DELUXE / Ashwood** | — | **模板中不存在** | — | — |
-| 6 | Shutters_Aluminium | 官网无，但**属百叶窗家族** | 面积 | 面积费率 | 5（Satin White/Gloss White/Surfmist/Matt Black/Monument） | C2 叶片 / C4 控制杆 |
+| 6 | Shutters_Aluminium | 官网无，但**属百叶窗家族** | 面积 | `Pricing!A485:B489` | 5（Satin White/Gloss White/Surfmist/Matt Black/Monument） | C2 叶片 / C4 控制杆 |
 | 7 | Roller_Blinds_BO_VIBE | 无 | 矩阵 | `Pricing!$B$4:$Z$32` | 26 | C1 支架 / C2 链条 / C4 底轨 |
-| 8 | Roller_Blinds_BO_LeReve | 无 | 矩阵 | `Pricing!$B$35:$Z$63` | 25 | 同上 |
-| 9 | Roller_Blinds_BO_Skye | 无 | 矩阵 | `Pricing!$B$66:$Z$94` | 25 | 同上 |
-| 10 | Roller_Blinds_BO_Karma | 无 | 矩阵 | `Pricing!$B$255:$Z$283` | 26 | 同上 |
-| 11 | Roller_Blinds_BO_Mantra | 无 | 矩阵 | `Pricing!$B$159:$Z$187` | 26 | 同上 |
-| 12 | Roller_Blinds_Sunscreen | 无 | 矩阵 | `Pricing!$B$221:$Z$249` | 26 | 同上 |
-| 13 | Roller_Blinds_LF_LeReve | 无 | 矩阵 | `Pricing!$B$97:$Z$125` | 26 | 同上 |
-| 14 | Roller_Blinds_LF_Skye | 无 | 矩阵 | `Pricing!$B$128:$Z$156` | 26 | 同上 |
-| 15 | Roller_Blinds_LF_Mantra | 无 | 矩阵 | `Pricing!$B$190:$Z$218` | 26 | 同上 |
+| 8 | Roller_Blinds_BO_LeReve | 无 | 矩阵 | `Pricing!$B$35:$Z$63` | 10 | 同上 |
+| 9 | Roller_Blinds_BO_Skye | 无 | 矩阵 | `Pricing!$B$66:$Z$94` | 9 | 同上 |
+| 10 | Roller_Blinds_BO_Karma | 无 | 矩阵 | `Pricing!$B$255:$Z$283` | 12 | 同上 |
+| 11 | Roller_Blinds_BO_Mantra | 无 | 矩阵 | `Pricing!$B$159:$Z$187` | 14 | 同上 |
+| 12 | Roller_Blinds_Sunscreen | 无 | 矩阵 | `Pricing!$B$221:$Z$249` | 17 | 同上 |
+| 13 | Roller_Blinds_LF_LeReve | 无 | 矩阵 | `Pricing!$B$97:$Z$125` | 10 | 同上 |
+| 14 | Roller_Blinds_LF_Skye | 无 | 矩阵 | `Pricing!$B$128:$Z$156` | 9 | 同上 |
+| 15 | Roller_Blinds_LF_Mantra | 无 | 矩阵 | `Pricing!$B$190:$Z$218` | 14 | 同上 |
 | 16 | Venetian_Blinds_PVC | 无 | 矩阵 | `Pricing!$B$286:$V$302` | 2 | C2 叶片 50mm |
 | 17 | Venetian_Blinds_Wood | 无 | 矩阵 | `Pricing!$B$329:$V$345` | 2 | C2 叶片 |
 | 18 | Venetian_Blinds_Aluminium_25mm | 无 | 矩阵 | `Pricing!$B$348:$Z$369` | 2 | C2 叶片 25mm |
@@ -119,6 +121,29 @@ Exterior_Blinds_ClearPVC_Price   = Pricing!$B$475:$G$478
 | 24 | Exterior_Blinds_ClearPVC | 无 | 矩阵 | `Pricing!$B$475:$G$478` | 1（Clear） | — |
 
 **合计**：官网 5 系列 → 模板里只有 4 个有代码和价格；Ashwood 没有。另有 1 个同族百叶窗（铝）官网未展示。其余 18 个属四个不同品类。
+
+### 计价与尺寸的实际依据（复核后补正）
+
+以下为 Grok Bot 复核时指出、我重新从工作簿读取确认的内容。**本文只给单元格/区域引用，不抄录实际批发价数字** —— 仓库是公开的，价格属于客户商业信息。
+
+| 项 | 实际依据 |
+|---|---|
+| 尺寸列 | `Order!C` = Width(mm)，`Order!D` = Drop(mm)。`Order!B` 是 Window Location，不是尺寸 |
+| 面板数 | `Order!G` = Panel Q'ty |
+| 安装开关 | `Order!I4`；为 TRUE 时才计安装费，按面板数 × 费率 |
+| 面积公式 | `Order!V8` = `IF(E8="","",IF(ISNUMBER(SEARCH("Shutters",E8)),MAX(ROUNDUP(C8*D8/1000000,2),0.5),1))` |
+| 面积最小值 | **0.5 ㎡**，由上式的 `MAX(...,0.5)` 保证；且只对名称含 "Shutters" 的产品走面积计价 |
+| 五个 shutters 的 ㎡ 费率 | `Pricing!A485:B489`（A 列产品代码，B 列费率；五行分别对应 PVC / PVC_Eco / Pinewood / Basswood / Aluminium）|
+| blinds 取价方式 | 宽高各自向上取到 `*_w` / `*_h` 命名区域里的下一档；**超过最大一档时 IFERROR 返回 0**，不是报错 |
+
+最后一条值得单独强调：**超出最大尺寸档位时工作簿算出来是 0，不是拒绝**。系统侧必须把这种情况当作错误拒掉，不能把 0 当成真实价格放行。
+
+### 两处命名对不上的地方（复核后补）
+
+安装费表 `Pricing!A500:A513` 里有两行跟产品代码对不上：
+
+- `Pricing!A507` = `Vertical_Blinds_Karma_100mm` —— **这个产品代码在 `Product Listing` A2:A24 里不存在**（那里只有 `Vertical_Blinds_Karma_89mm`）。是孤立行，来源待客户确认。
+- `Pricing!A509` = `Exterior_Blinds_Clear` —— 产品代码是 `Exterior_Blinds_ClearPVC`，两者不一致。这就是之前记录的 ClearPVC 安装别名对不上，系统因此拒绝给该产品出安装报价。
 
 ### 关于安装方式（这次特别要求核对的）
 
