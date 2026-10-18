@@ -1045,20 +1045,6 @@ async function loadOrderProviders(orderId: string) {
   --fw-emphasis: 600;
   font-size: var(--fs-body); line-height: var(--lh-body); min-width: 0; max-width: 100%;
 }
-.desk select {
-  -webkit-appearance: none;
-  appearance: none;
-  line-height: var(--lh-body);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%2352615c' d='M4 6l4 4 4-4z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 30px;
-}
-.desk select:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.desk option { line-height: var(--lh-body); }
 .desk .card { padding: 16px; background: white; border: 1px solid #e1e6df; border-radius: 8px; }
 .alert { padding: 12px 16px; background: #fae8e1; color: #842b16; border-radius: 6px; margin-bottom: 12px; }
 .success { padding: 12px 16px; background: #e5efdd; color: #2d4a1e; border-radius: 6px; margin-bottom: 12px; }
@@ -1112,6 +1098,20 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .actions label { min-width: 200px; font-size: var(--fs-body); line-height: var(--lh-body); }
 .desk input, .desk textarea, .desk button { line-height: var(--lh-body); }
 .desk input, .desk select, .desk textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d5ddd6; border-radius: 6px; font-size: var(--fs-body); font-family: inherit; min-width: 0; max-width: 100%; min-height: 44px; height: auto; }
+.desk select {
+  -webkit-appearance: none;
+  appearance: none;
+  line-height: var(--lh-body);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%2352615c' d='M4 6l4 4 4-4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.desk select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.desk option { line-height: var(--lh-body); }
 .desk button { min-height: 44px; padding: 10px 18px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; border-radius: 6px; font-size: var(--fs-body); font-weight: var(--fw-body); cursor: pointer; transition: all 0.2s; }
 .desk button:hover:not(:disabled) { background: #0d5a4a; border-color: #0d5a4a; }
 .desk button.secondary { background: white; color: #3d4a44; border-color: #d5ddd6; }
@@ -1221,7 +1221,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .actions { gap: 8px; }
 .desk .form-row { gap: 12px; }
 .desk label { font-size: var(--fs-body); line-height: var(--lh-body); }
-.desk input, .desk select, .desk textarea { background: #fff; min-height: 44px; border-color: #cdd9d1; border-radius: 7px; }
+.desk input, .desk select, .desk textarea { background-color: #fff; min-height: 44px; border-color: #cdd9d1; border-radius: 7px; }
 .desk .provider-card, .desk .template-card { background: #f8faf9; padding: 18px; border-radius: 10px; }
 @media (max-width: 1000px) { .workspace-grid { grid-template-columns: minmax(0,1fr); } .order-scroll { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 600px) { .order-scroll { display: flex; } .desk .card { padding: 16px; } .desk .section-tabs { gap: 3px; } .desk .section-tabs button { padding: 11px 10px; font-size: var(--fs-meta); line-height: var(--lh-meta); min-height: 44px; font-weight: var(--fw-body); } }
