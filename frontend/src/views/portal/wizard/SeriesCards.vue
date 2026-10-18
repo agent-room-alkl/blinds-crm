@@ -221,7 +221,7 @@ function proceed() {
 
 .step-intro h2 {
   font-family: var(--font-display);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 600;
   margin: 12px 0 16px;
   letter-spacing: 0.01em;
@@ -372,7 +372,7 @@ function proceed() {
   background: var(--cord);
   color: white;
   border-radius: 50%;
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
 }
 

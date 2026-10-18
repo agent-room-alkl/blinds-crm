@@ -2,6 +2,7 @@
 import os
 import json
 import tempfile
+from pathlib import Path
 
 with tempfile.TemporaryDirectory() as folder:
     os.environ['VERA_DB_BACKEND'] = 'sqlite'
@@ -22,7 +23,7 @@ with tempfile.TemporaryDirectory() as folder:
     staff.headers['Authorization'] = 'Bearer ' + r.json()['token']
     
     # Load the real legacy row from the owner's backup DB
-    with open('/home/ubuntu/.cursor/projects/workspace/uploads/legacy_ashwood_row_id27_3a22.json') as f:
+    with (Path(__file__).parent / 'fixtures' / 'legacy_ashwood_row_id27.json').open(encoding='utf-8') as f:
         legacy_row = json.load(f)
     
     print(f'✓ Loaded real legacy row id={legacy_row["id"]}:')
@@ -217,8 +218,7 @@ with tempfile.TemporaryDirectory() as folder:
     print(f'✓ Portal catalog includes Deluxe with 11 fields and 61-70 colours')
     
     # Test pricing with Deluxe
-    # The demo template has empty options for shutters, so we need to provide an empty dict
-    # (The colour field is in configuration_schema for display, but not in pricing options)
+    # Deluxe uses the same required fields for display and pricing validation.
     price_order = {
         'project_name': 'Deluxe Test Order',
         'site_address': 'Test Site',
@@ -231,7 +231,7 @@ with tempfile.TemporaryDirectory() as folder:
             'height_mm': 1500,
             'quantity': 2,
             'panel_count': 2,
-            'options': {}  # Demo template has no pricing options
+            'options': {'colour': 'Golden Oak 61', 'louver_size': '89mm', 'fitting': 'Standard'}
         }]
     }
     

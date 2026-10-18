@@ -229,7 +229,7 @@ function nextStep() {
 
 .step-intro h2 {
   font-family: var(--font-display);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 600;
   margin: 12px 0 16px;
   letter-spacing: 0.01em;
@@ -261,7 +261,7 @@ function nextStep() {
 }
 
 .empty-state p {
-  font-size: 16px;
+  font-size: 15px;
   color: rgba(27, 36, 33, 0.6);
   margin-bottom: 24px;
 }
@@ -365,7 +365,7 @@ function nextStep() {
   border: 1px solid var(--line);
   border-radius: 4px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 15px;
   transition: all 0.2s;
 }
 

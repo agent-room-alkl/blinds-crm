@@ -92,7 +92,9 @@ const COLOR_MAP: Record<string, string[]> = {
   ],
 };
 
-const LOUVER_SIZES = ["63", "76", "89", "114"];
+const LOUVER_SIZES = computed(() => currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'louver_size')?.choices || []);
+const structureFields = computed(() => (currentProduct.value?.configuration_schema || []).filter((f: any) => !['colour', 'louver_size', 'fitting'].includes(f.key)));
+const fittingChoices = computed(() => currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'fitting')?.choices || []);
 
 const availableColors = computed(() => {
   const sourceCode = currentProduct.value?.source_code;
@@ -117,10 +119,11 @@ function markConfigured() {
     w.quantity > 0 &&
     w.panel_count > 0 &&
     w.options.colour &&
-    w.options.louver_size
+    w.options.louver_size &&
+    (currentProduct.value?.configuration_schema || []).every((f: any) => !f.required || Boolean(w.options[f.key]))
   );
 
-  updateWindow({ configured: isValid });
+  if (w.configured !== isValid) updateWindow({ configured: isValid });
 }
 
 watch(currentWindow, markConfigured, { deep: true });
@@ -159,7 +162,7 @@ watch(
       const result = await portalRequest<any>("price", {
         project_name: "Preview",
         site_address: "Preview",
-        submission_key: "preview",
+        submission_key: "window-preview",
         installation_required: false,
         lines: [
           {
@@ -187,7 +190,7 @@ watch(
       }
     }
   },
-  { deep: true }
+  { deep: true, immediate: true }
 );
 </script>
 
@@ -268,7 +271,7 @@ watch(
                 :class="{ selected: currentWindow.options.louver_size === size }"
                 @click="updateWindow({ options: { ...currentWindow.options, louver_size: size } })"
               >
-                {{ size }}mm
+                {{ size }}
               </button>
             </div>
           </label>
@@ -276,17 +279,13 @@ watch(
 
         <div class="form-group">
           <h3>{{ tx("结构（不影响价格）", "Structure (no price impact)") }}</h3>
-          <label>
-            {{ tx("框型", "Frame Type") }}
-            <input v-model="currentWindow.options.frame_type" type="text" :placeholder="tx('如：L/Z', 'e.g. L/Z')" />
-          </label>
-          <label>
-            {{ tx("控制杆", "Control Rod") }}
-            <input v-model="currentWindow.options.control_rod" type="text" />
-          </label>
-          <label>
-            {{ tx("开启方式", "Opening Style") }}
-            <input v-model="currentWindow.options.opening_style" type="text" :placeholder="tx('如：Hinged', 'e.g. Hinged')" />
+          <label v-for="field in structureFields" :key="field.key">
+            {{ locale === 'zh' ? field.label_zh : field.label_en }} {{ field.required ? '*' : '' }}
+            <select v-if="field.choices?.length" v-model="currentWindow.options[field.key]" :required="field.required">
+              <option value="">{{ tx('选择', 'Choose') }}</option>
+              <option v-for="choice in field.choices" :key="choice" :value="choice">{{ choice }}</option>
+            </select>
+            <input v-else v-model="currentWindow.options[field.key]" type="text" :required="field.required" />
           </label>
         </div>
 
@@ -294,12 +293,11 @@ watch(
           <h3>{{ tx("安装", "Installation") }}</h3>
           <label>
             {{ tx("安装方式", "Install Method") }}
-            <select v-model="currentWindow.options.install_method">
+            <select v-if="fittingChoices.length" v-model="currentWindow.options.fitting">
               <option value="">{{ tx("选择", "Choose") }}</option>
-              <option value="In Fit">In Fit</option>
-              <option value="Out Fit">Out Fit</option>
-              <option value="Make Size">Make Size</option>
+              <option v-for="choice in fittingChoices" :key="choice" :value="choice">{{ choice }}</option>
             </select>
+            <input v-else v-model="currentWindow.options.fitting" type="text" />
           </label>
         </div>
       </div>
@@ -336,7 +334,7 @@ watch(
       <button type="button" class="secondary" @click="prevWindow">
         {{ currentIndex === 0 ? tx("上一步", "Previous") : tx("上一扇", "Previous Window") }}
       </button>
-      <button type="button" class="primary" @click="nextWindow">
+      <button type="button" class="primary" :disabled="!currentWindow?.configured || pricing || !priceData || Boolean(priceError)" @click="nextWindow">
         {{ currentIndex === modelValue.length - 1 ? tx("完成，下一步", "Done, Next") : tx("保存并下一扇", "Save & Next") }}
       </button>
     </div>
@@ -354,7 +352,7 @@ watch(
 
 .step-intro h2 {
   font-family: var(--font-display);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 600;
   margin: 12px 0 16px;
   letter-spacing: 0.01em;
@@ -392,7 +390,7 @@ watch(
 
 .form-group h3 {
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 600;
   margin: 0 0 16px;
   letter-spacing: 0.01em;

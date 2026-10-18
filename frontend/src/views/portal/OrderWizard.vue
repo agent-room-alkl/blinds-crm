@@ -210,6 +210,7 @@ if (portalSession.token) {
 }
 
 .step-btn {
+  color: var(--ink, #1b2421);
   display: flex;
   align-items: center;
   gap: 8px;

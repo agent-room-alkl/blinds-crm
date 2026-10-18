@@ -1,0 +1,20 @@
+{
+  "category": "shutters",
+  "configuration_schema": [],
+  "content_source": "https://verashading.com/products",
+  "description_en": "Website collection. Ordering awaits a confirmed product rule in the order workbook.",
+  "description_zh": "官网展示系列。现用订单模板尚无此产品定价，待核对后开通订购。",
+  "id": 27,
+  "image_urls": [],
+  "material_en": "Ashwood",
+  "material_zh": "Ashwood",
+  "name_en": "VERA Deluxe",
+  "name_zh": "VERA Deluxe",
+  "orderable": false,
+  "portal_only": false,
+  "published": true,
+  "sample": false,
+  "scope": "website_only",
+  "source_code": "VERA_Ashwood_display",
+  "warranty_years": 10
+}

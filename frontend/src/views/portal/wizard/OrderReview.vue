@@ -61,9 +61,9 @@ function getProductName(productId: number) {
         <h3>{{ tx("订单信息", "Order Information") }}</h3>
         <dl>
           <dt>{{ tx("订单名称", "Order Name") }}</dt>
-          <dd>{{ draft.project_name }}</dd>
+          <dd><input v-model="draft.project_name" :aria-label="tx('订单名称', 'Order Name')" required /></dd>
           <dt>{{ tx("施工地址", "Site Address") }}</dt>
-          <dd>{{ draft.site_address }}</dd>
+          <dd><input v-model="draft.site_address" :aria-label="tx('施工地址', 'Site Address')" required /></dd>
           <dt>{{ tx("需要安装", "Installation Required") }}</dt>
           <dd>{{ draft.installation_required ? tx("是", "Yes") : tx("否", "No") }}</dd>
         </dl>
@@ -77,7 +77,7 @@ function getProductName(productId: number) {
             <p>{{ getProductName(window.product_id) }}</p>
             <p>{{ window.width_mm }} × {{ window.height_mm }} mm · {{ tx("数量", "Qty") }} {{ window.quantity }} · {{ window.panel_count }} {{ tx("扇", "panels") }}</p>
             <p v-if="window.options.colour"><strong>{{ tx("颜色", "Colour") }}:</strong> {{ window.options.colour }}</p>
-            <p v-if="window.options.louver_size"><strong>{{ tx("叶片", "Louver") }}:</strong> {{ window.options.louver_size }}mm</p>
+            <p v-if="window.options.louver_size"><strong>{{ tx("叶片", "Louver") }}:</strong> {{ window.options.louver_size }}</p>
           </div>
         </div>
       </div>
@@ -124,7 +124,7 @@ function getProductName(productId: number) {
 
 .step-intro h2 {
   font-family: var(--font-display);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 600;
   margin: 12px 0 16px;
   letter-spacing: 0.01em;
@@ -201,7 +201,7 @@ function getProductName(productId: number) {
 
 .window-item strong {
   display: block;
-  font-size: 16px;
+  font-size: 15px;
   margin-bottom: 8px;
   color: var(--cord);
 }
