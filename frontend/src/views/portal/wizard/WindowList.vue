@@ -303,8 +303,8 @@ function nextStep() {
 
 .window-table input {
   width: 100%;
-  min-height: 36px;
-  padding: 6px 10px;
+  min-height: 44px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 4px;
   font-size: 14px;
@@ -358,9 +358,9 @@ function nextStep() {
 }
 
 .icon-btn {
-  min-width: 32px;
-  min-height: 32px;
-  padding: 4px 8px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 10px;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -451,8 +451,8 @@ button.secondary:hover {
 }
 
 .undo-toast button {
-  min-height: 36px;
-  padding: 8px 20px;
+  min-height: 44px;
+  padding: 10px 20px;
   background: white;
   color: var(--ink);
   border: none;

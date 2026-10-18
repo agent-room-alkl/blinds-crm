@@ -78,7 +78,10 @@ const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 }
 
 .help-card a {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 0;
   margin-top: 12px;
   color: var(--cord);
   text-decoration: none;

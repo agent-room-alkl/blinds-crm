@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { computed, reactive, ref, watch, onMounted } from "vue";
+import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { portalRequest, portalSession } from "../../portal-api";
 import SeriesCards from "./wizard/SeriesCards.vue";
@@ -11,6 +11,7 @@ import OrderReview from "./wizard/OrderReview.vue";
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const router = useRouter();
+const route = useRoute();
 
 const step = ref(1);
 const saving = ref(false);
@@ -56,10 +57,30 @@ async function loadCatalog() {
       Object.assign(draft, parsed);
       lastSaved.value = new Date(parsed.saved_at || Date.now()).toLocaleTimeString();
     }
+    // Sync step from URL query param
+    const urlStep = parseInt(String(route.query.step || "1"));
+    if (urlStep >= 1 && urlStep <= 4) {
+      step.value = urlStep;
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   }
 }
+
+// Watch route changes to update step
+watch(() => route.query.step, (newStep) => {
+  const num = parseInt(String(newStep || "1"));
+  if (num >= 1 && num <= 4) {
+    step.value = num;
+  }
+});
+
+// Watch step changes to update URL
+watch(step, (newStep) => {
+  if (parseInt(String(route.query.step || "1")) !== newStep) {
+    router.replace({ query: { ...route.query, step: String(newStep) } });
+  }
+});
 
 function saveDraft() {
   const data = { ...draft, saved_at: Date.now() };
@@ -73,7 +94,7 @@ watch(draft, () => {
 
 function goToStep(num: number) {
   if (num <= step.value || canProgress(num - 1)) {
-    step.value = num;
+    router.push({ query: { step: String(num) } });
   }
 }
 
@@ -86,13 +107,13 @@ function canProgress(fromStep: number): boolean {
 
 function nextStep() {
   if (step.value < 4 && canProgress(step.value)) {
-    step.value++;
+    router.push({ query: { step: String(step.value + 1) } });
   }
 }
 
 function prevStep() {
   if (step.value > 1) {
-    step.value--;
+    router.push({ query: { step: String(step.value - 1) } });
   }
 }
 

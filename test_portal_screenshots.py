@@ -166,36 +166,77 @@ def main():
             
             # Step 1: Series selection
             print("Capturing wizard steps...")
-            page.goto(f"{FRONTEND_URL}/portal/order/new")
-            page.wait_for_timeout(2000)
+            page.goto(f"{FRONTEND_URL}/portal/order/new?step=1")
+            page.wait_for_timeout(1500)
             capture_screenshots(page, "01_wizard_series", viewport, measurements)
             
-            # Click first series to proceed (if exists)
+            # Capture Deluxe provisional badge specifically (if visible)
             try:
-                page.click('button:has-text("选系列")', timeout=2000)
+                deluxe_card = page.locator('text=Deluxe').locator('..')
+                if deluxe_card.count() > 0:
+                    capture_screenshots(page, "01b_deluxe_provisional", viewport, measurements)
             except:
-                pass
-            page.wait_for_timeout(500)
+                print("  ⚠ Could not capture Deluxe provisional badge")
             
-            # Step 2: Window list (may be empty initially)
+            # Select first series (Eco, Classic, Natural, etc.)
             try:
-                page.goto(f"{FRONTEND_URL}/portal/order/new?step=2")
+                page.click('button.series-card', timeout=3000)
                 page.wait_for_timeout(1000)
             except:
-                pass
+                print("  ⚠ Could not click series card")
+            
+            # Step 2: Window list
+            page.goto(f"{FRONTEND_URL}/portal/order/new?step=2")
+            page.wait_for_timeout(1000)
             capture_screenshots(page, "02_wizard_windows", viewport, measurements)
             
-            # Add a window if button exists
+            # Add a window
             try:
                 page.click('button:has-text("添加")', timeout=2000)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(1000)
+            except:
+                try:
+                    page.click('button:has-text("Add Window")', timeout=2000)
+                    page.wait_for_timeout(1000)
+                except:
+                    print("  ⚠ Could not add window")
+            
+            # Step 3: Window config - fill in valid data
+            page.goto(f"{FRONTEND_URL}/portal/order/new?step=3")
+            page.wait_for_timeout(1500)
+            
+            # Fill window name
+            try:
+                page.fill('input[type="text"]', 'Test Window')
             except:
                 pass
             
-            # Step 3: Window config
-            page.goto(f"{FRONTEND_URL}/portal/order/new?step=3")
-            page.wait_for_timeout(1000)
+            # Fill dimensions (valid size)
+            try:
+                width_input = page.locator('input[type="number"]').first
+                width_input.fill('1200')
+                page.wait_for_timeout(500)
+                
+                height_input = page.locator('input[type="number"]').nth(1)
+                height_input.fill('1500')
+                page.wait_for_timeout(1500)  # Wait for debounced price preview
+            except Exception as e:
+                print(f"  ⚠ Could not fill dimensions: {e}")
+            
             capture_screenshots(page, "03_wizard_config", viewport, measurements)
+            
+            # Capture zero-price/error state if we can create it
+            try:
+                # Try setting oversize dimensions
+                page.goto(f"{FRONTEND_URL}/portal/order/new?step=3")
+                page.wait_for_timeout(1000)
+                page.locator('input[type="number"]').first.fill('5000')
+                page.wait_for_timeout(500)
+                page.locator('input[type="number"]').nth(1).fill('5000')
+                page.wait_for_timeout(1500)
+                capture_screenshots(page, "03b_wizard_config_oversize", viewport, measurements)
+            except:
+                print("  ⚠ Could not capture oversize error state")
             
             # Step 4: Review
             page.goto(f"{FRONTEND_URL}/portal/order/new?step=4")
