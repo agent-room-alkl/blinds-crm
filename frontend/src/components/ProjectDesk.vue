@@ -296,20 +296,31 @@ function allocationLabel(id?: string) {
   const invoice = id ? invoices.value.find((item) => item.id === id) : undefined;
   return invoice ? invoiceLabel(invoice) : tx('（发票不可用）', '(invoice unavailable)');
 }
-const previewCard = ref<HTMLElement | null>(null);
-function closePreview() { mailPreview.value = null; }
-function onPreviewKey(event: KeyboardEvent) { if (event.key === 'Escape') closePreview(); }
+const previewDialog = ref<HTMLDialogElement | null>(null);
+// A native modal <dialog> traps Tab inside, makes the page behind inert, handles Escape and
+// returns focus to the button that opened it when it closes.
+function closePreview() {
+  if (previewDialog.value?.open) previewDialog.value.close();
+  mailPreview.value = null;
+}
+function onDialogClosed() { document.body.style.overflow = ''; mailPreview.value = null; }
+function onDialogClick(event: MouseEvent) {
+  const box = previewDialog.value?.getBoundingClientRect();
+  if (box && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) closePreview();
+}
+function forwardEscape(event: Event) {
+  // The email is shown in a same-origin iframe without scripts; forward Escape so it still closes the dialog.
+  const doc = (event.target as HTMLIFrameElement).contentDocument;
+  doc?.addEventListener('keydown', (key) => { if (key.key === 'Escape') closePreview(); });
+}
 watch(mailPreview, async (value) => {
-  document.body.style.overflow = value ? 'hidden' : '';
-  if (value) {
-    window.addEventListener('keydown', onPreviewKey);
-    await nextTick();
-    previewCard.value?.focus();
-  } else {
-    window.removeEventListener('keydown', onPreviewKey);
-  }
+  await nextTick();
+  const dialog = previewDialog.value;
+  if (!dialog) return;
+  if (value && !dialog.open) { document.body.style.overflow = 'hidden'; dialog.showModal(); }
+  if (!value && dialog.open) dialog.close();
 });
-onBeforeUnmount(() => { window.removeEventListener('keydown', onPreviewKey); document.body.style.overflow = ''; });
+onBeforeUnmount(() => { document.body.style.overflow = ''; });
 async function openInvoicePdf() {
   const chosen = invoices.value.find((invoice) => invoicePick.value.includes(invoice.id));
   if (!chosen) return;
@@ -1213,8 +1224,8 @@ async function loadOrderProviders(orderId: string) {
       </div>
     </div>
     <Teleport to="body">
-      <div v-if="mailPreview" class="mail-modal" @click.self="closePreview">
-        <section ref="previewCard" class="mail-modal-card" role="dialog" aria-modal="true" :aria-label="tx('邮件预览','Email preview')" tabindex="-1">
+      <dialog ref="previewDialog" class="mail-dialog" :aria-label="tx('邮件预览','Email preview')" @close="onDialogClosed" @click="onDialogClick">
+        <section v-if="mailPreview" class="mail-modal-card">
           <header class="mail-modal-head">
             <div>
               <p class="mail-eyebrow">{{ tx('邮件预览 · 尚未发送', 'EMAIL PREVIEW · NOT SENT') }}</p>
@@ -1228,13 +1239,13 @@ async function loadOrderProviders(orderId: string) {
             <div><dt>{{ tx('发信通道','Delivery') }}</dt><dd :class="mailPreview.delivery_enabled ? 'ok' : 'warn'">{{ mailPreview.delivery_enabled ? tx('已启用','Enabled') : tx('未启用：点发送只会记录，不会真正发出','Not enabled: sending only records it') }}</dd></div>
             <div><dt>{{ tx('附件','Attachment') }}</dt><dd>{{ mailPreview.attachment }}</dd></div>
           </dl>
-          <iframe class="mail-frame" :title="tx('邮件正文预览','Email body preview')" sandbox="" :srcdoc="mailPreview.html"></iframe>
+          <iframe class="mail-frame" :title="tx('邮件正文预览','Email body preview')" sandbox="allow-same-origin" :srcdoc="mailPreview.html" @load="forwardEscape"></iframe>
           <footer class="mail-modal-foot">
             <button type="button" class="mail-btn primary" @click="openInvoicePdf">{{ tx('打开 PDF 附件','Open PDF attachment') }}</button>
             <button type="button" class="mail-btn" @click="closePreview">{{ tx('关闭','Close') }}</button>
           </footer>
         </section>
-      </div>
+      </dialog>
     </Teleport>
   </section>
 </template>
@@ -1550,8 +1561,10 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .pricing-basis p{margin:0}
 .pricing-basis span{color:#53655d;font-size:12px}
 
-.mail-modal { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 24px; background: rgba(16, 28, 22, .55); }
-.mail-modal-card { display: flex; flex-direction: column; width: min(900px, 100%); max-height: 100%; background: #f7f9f8; border-radius: 18px; box-shadow: 0 30px 80px rgba(16, 28, 22, .35); overflow: hidden; outline: none; }
+.mail-dialog { padding: 0; border: 0; background: transparent; max-width: none; max-height: none; width: min(900px, calc(100% - 48px)); height: min(860px, calc(100% - 48px)); overflow: visible; color: inherit; }
+.mail-dialog:not([open]) { display: none; }
+.mail-dialog::backdrop { background: rgba(16, 28, 22, .55); }
+.mail-modal-card { display: flex; flex-direction: column; width: 100%; height: 100%; background: #f7f9f8; border-radius: 18px; box-shadow: 0 30px 80px rgba(16, 28, 22, .35); overflow: hidden; outline: none; }
 .mail-modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 22px 28px 14px; background: #fff; border-bottom: 1px solid #e1e8e3; }
 .mail-modal-head h2 { margin: 0; font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
 .mail-eyebrow { margin: 0 0 4px; font-size: 11px; letter-spacing: .12em; color: #64766b; }
@@ -1567,7 +1580,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .mail-btn { min-height: 44px; padding: 0 22px; border-radius: 999px; border: 1px solid #cddbd1; background: #fff; color: #1b2421; cursor: pointer; font: inherit; }
 .mail-btn.primary { background: #0f6e5c; border-color: #0f6e5c; color: #fff; font-weight: 600; }
 @media (max-width: 700px) {
-  .mail-modal { padding: 0; }
+  .mail-dialog { width: 100%; height: 100%; max-height: 100%; }
   .mail-modal-card { width: 100%; height: 100%; border-radius: 0; }
   .mail-modal-head, .mail-meta, .mail-modal-foot { padding-left: 16px; padding-right: 16px; }
   .mail-meta { grid-template-columns: minmax(0, 1fr); }
