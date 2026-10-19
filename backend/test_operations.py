@@ -155,6 +155,30 @@ with tempfile.TemporaryDirectory() as folder:
         assert send.call_count == 0
     pdf = staff.get(f"/api/operations/invoices/{invoice['id']}/pdf")
     assert pdf.status_code == 200 and pdf.headers['content-type'] == 'application/pdf' and pdf.content.startswith(b'%PDF')
+    # The balance invoice shows the arithmetic, not just a sentence: order total - deposit paid = balance, then rebate, then amount due.
+    for expected in ('Order total: NZD 500.00', 'Deposit paid: NZD 300.00', 'Balance: NZD 200.00', 'Rebate applied: -NZD 50.00', 'Amount due: NZD 150.00'):
+        assert expected in preview['body'], expected
+    assert 'Deposit paid' in preview['html'] and 'Rebate applied' in preview['html']
+    import base64, re, zlib
+
+    def pdf_text(raw):
+        """Decode every page stream (ASCII85 + Flate) so the test sees what is really printed, not the model."""
+        out = b''
+        for match in re.finditer(rb'stream\r?\n(.*?)endstream', raw, re.S):
+            data = match.group(1).strip()
+            try:
+                data = zlib.decompress(base64.a85decode(data[:-2] if data.endswith(b'~>') else data))
+            except Exception:
+                try:
+                    data = zlib.decompress(data)
+                except Exception:
+                    pass
+            out += data
+        return out
+    printed = pdf_text(pdf.content)
+    for expected in (b'Amount due', b'150.00', b'Deposit paid'.upper(), b'300.00'):
+        assert expected in printed, expected
+    assert b'<b>' not in printed and b'&lt;' not in printed and b'&amp;' not in printed, 'markup leaked into the PDF'
     assert portal.get(f"/api/operations/invoices/{invoice['id']}/mail-preview").status_code == 401
     assert portal.get(f"/api/operations/invoices/{invoice['id']}/pdf").status_code == 401
     assert staff.get('/api/operations/invoices/missing/mail-preview').status_code == 404

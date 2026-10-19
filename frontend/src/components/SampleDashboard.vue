@@ -7,58 +7,65 @@ const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const nzd = (value: number) => new Intl.NumberFormat("en-NZ", { style: "currency", currency: "NZD", maximumFractionDigits: 0 }).format(value);
 const pct = (value: number, digits = 1) => `${(value * 100).toFixed(digits)}%`;
 
-// ---- One sample dataset. Every number on this page is derived from it. ----
+// ---- One sample dataset. Every number on this page is derived from ORDERS and BATCHES. ----
 const SERIES = [
-  { id: "A", zh: "系列 A（主力款）", en: "Series A (core)", units: 440 },
-  { id: "B", zh: "系列 B", en: "Series B", units: 62 },
-  { id: "C", zh: "系列 C", en: "Series C", units: 24 },
-  { id: "D", zh: "系列 D", en: "Series D", units: 14 },
-  { id: "E", zh: "系列 E", en: "Series E", units: 10 },
+  { id: "A", zh: "系列 A（主力款）", en: "Series A (core)" },
+  { id: "B", zh: "系列 B", en: "Series B" },
+  { id: "C", zh: "系列 C", en: "Series C" },
+  { id: "D", zh: "系列 D", en: "Series D" },
+  { id: "E", zh: "系列 E", en: "Series E" },
 ];
-// Shipments: freight is shared by units, duty by declared (purchase) value, purchase cost converted at that batch's rate.
+// Pipeline stages in order. An order's `status` is one of these keys.
+const STAGES = [
+  { key: "review", zh: "待审核", en: "Awaiting review" },
+  { key: "deposit", zh: "待收定金", en: "Deposit outstanding" },
+  { key: "supplier", zh: "待向供应商下单", en: "To order from supplier" },
+  { key: "transit", zh: "在途", en: "In transit" },
+  { key: "arrived", zh: "已到货待交付", en: "Arrived, not delivered" },
+  { key: "delivered", zh: "已交付待开尾款", en: "Delivered, balance open" },
+] as const;
+// Shipments: freight is shared by windows, duty by declared (purchase) value, purchase cost converted at that batch's rate.
 const BATCHES = [
   { id: 1, label: "Batch 1", freight: 1800, duty: 1350, fx: 0.215 },
   { id: 2, label: "Batch 2", freight: 2100, duty: 1500, fx: 0.223 },
 ];
-const ORDERS = [
-  { id: "V0000101", customer: "Harbour Interiors", series: "A", units: 18, revenue: 9400, purchaseCny: 26790, batch: 1, rebate: 78 },
-  { id: "V0000102", customer: "Kauri Blinds Ltd", series: "A", units: 24, revenue: 12600, purchaseCny: 35910, batch: 1, rebate: 153 },
-  { id: "V0000103", customer: "Southern Shade Co", series: "B", units: 6, revenue: 4300, purchaseCny: 12255, batch: 1, rebate: 0 },
-  { id: "V0000104", customer: "Harbour Interiors", series: "A", units: 12, revenue: 6300, purchaseCny: 17955, batch: 1, rebate: 53 },
-  { id: "V0000105", customer: "Kauri Blinds Ltd", series: "A", units: 30, revenue: 15400, purchaseCny: 43890, batch: 2, rebate: 186 },
-  { id: "V0000106", customer: "Westgate Windows", series: "A", units: 21, revenue: 10900, purchaseCny: 31065, batch: 2, rebate: 90 },
-  { id: "V0000107", customer: "Southern Shade Co", series: "C", units: 8, revenue: 6800, purchaseCny: 19380, batch: 2, rebate: 0 },
-  { id: "V0000108", customer: "Westgate Windows", series: "B", units: 9, revenue: 5600, purchaseCny: 15960, batch: 2, rebate: 45 },
+// Orders without a batch have not been bought from the supplier yet, so they have no cost figures.
+type Sample = { id: string; customer: string; series: string; units: number; revenue: number; purchaseCny: number; batch: number | null; rebate: number; status: (typeof STAGES)[number]["key"] };
+const ORDERS: Sample[] = [
+  { id: "V0000101", customer: "Harbour Interiors", series: "A", units: 18, revenue: 9400, purchaseCny: 26790, batch: 1, rebate: 78, status: "delivered" },
+  { id: "V0000102", customer: "Kauri Blinds Ltd", series: "A", units: 24, revenue: 12600, purchaseCny: 35910, batch: 1, rebate: 153, status: "delivered" },
+  { id: "V0000103", customer: "Southern Shade Co", series: "B", units: 6, revenue: 4300, purchaseCny: 12255, batch: 1, rebate: 0, status: "delivered" },
+  { id: "V0000104", customer: "Harbour Interiors", series: "A", units: 12, revenue: 6300, purchaseCny: 17955, batch: 1, rebate: 53, status: "delivered" },
+  { id: "V0000105", customer: "Kauri Blinds Ltd", series: "A", units: 30, revenue: 15400, purchaseCny: 43890, batch: 2, rebate: 186, status: "arrived" },
+  { id: "V0000106", customer: "Westgate Windows", series: "A", units: 21, revenue: 10900, purchaseCny: 31065, batch: 2, rebate: 90, status: "arrived" },
+  { id: "V0000107", customer: "Southern Shade Co", series: "C", units: 8, revenue: 6800, purchaseCny: 19380, batch: 2, rebate: 0, status: "transit" },
+  { id: "V0000108", customer: "Westgate Windows", series: "B", units: 9, revenue: 5600, purchaseCny: 15960, batch: 2, rebate: 45, status: "transit" },
+  { id: "V0000109", customer: "Westgate Windows", series: "D", units: 3, revenue: 2100, purchaseCny: 0, batch: null, rebate: 0, status: "deposit" },
+  { id: "V0000110", customer: "Harbour Interiors", series: "E", units: 1, revenue: 900, purchaseCny: 0, batch: null, rebate: 0, status: "review" },
 ];
 // Illustrative tiers only. The real rebate rule has not been confirmed.
 const SAMPLE_TIERS = [
   { from: 10000, rate: 0.03 },
   { from: 5000, rate: 0.02 },
 ];
-const FUNNEL = [
-  { zh: "待审核", en: "Awaiting review", n: 4 },
-  { zh: "待收定金", en: "Deposit outstanding", n: 2 },
-  { zh: "待向供应商下单", en: "To order from supplier", n: 3 },
-  { zh: "在途", en: "In transit", n: 3 },
-  { zh: "已到货待交付", en: "Arrived, not delivered", n: 2 },
-  { zh: "已交付待开尾款", en: "Delivered, balance open", n: 6 },
-];
 
 // ---- Derived figures ----
-const seriesTotal = SERIES.reduce((sum, s) => sum + s.units, 0);
+const allUnits = ORDERS.reduce((sum, o) => sum + o.units, 0);
 const seriesShare = computed(() => {
   let offset = 0;
   return SERIES.map((s, i) => {
-    const share = s.units / seriesTotal;
-    const row = { ...s, share, dash: `${share * 100} ${100 - share * 100}`, offset: -offset, tone: i };
+    const units = ORDERS.filter((o) => o.series === s.id).reduce((sum, o) => sum + o.units, 0);
+    const share = units / allUnits;
+    const row = { ...s, units, share, dash: `${share * 100} ${100 - share * 100}`, offset: -offset, tone: i };
     offset += share * 100;
     return row;
   });
 });
 const top = computed(() => seriesShare.value[0]);
+const funnel = computed(() => STAGES.map((s) => ({ ...s, n: ORDERS.filter((o) => o.status === s.key).length })));
 
 const orders = computed(() =>
-  ORDERS.map((o) => {
+  ORDERS.filter((o) => o.batch !== null).map((o) => {
     const batch = BATCHES.find((b) => b.id === o.batch)!;
     const mates = ORDERS.filter((x) => x.batch === o.batch);
     const purchase = o.purchaseCny * batch.fx;
@@ -71,7 +78,7 @@ const orders = computed(() =>
 const totals = computed(() => {
   const revenue = orders.value.reduce((s, o) => s + o.revenue, 0);
   const profit = orders.value.reduce((s, o) => s + o.profit, 0);
-  return { revenue, profit, margin: profit / revenue, units: orders.value.reduce((s, o) => s + o.units, 0), count: orders.value.length };
+  return { revenue, profit, margin: profit / revenue, units: allUnits, count: ORDERS.length, costed: orders.value.length };
 });
 const best = computed(() => [...orders.value].sort((a, b) => b.margin - a.margin)[0]);
 const worst = computed(() => [...orders.value].sort((a, b) => a.margin - b.margin)[0]);
@@ -99,7 +106,7 @@ const customers = computed(() => {
     })
     .sort((a, b) => b.spend - a.spend);
 });
-const funnelMax = Math.max(...FUNNEL.map((f) => f.n));
+const funnelMax = computed(() => Math.max(...funnel.value.map((f) => f.n)));
 const stackParts = [
   { key: "purchase", zh: "采购成本", en: "Purchase" },
   { key: "freight", zh: "运费分摊", en: "Freight" },
@@ -121,8 +128,8 @@ const stackParts = [
     </header>
 
     <div class="kpis">
-      <article><span>{{ tx("订单", "Orders") }}</span><strong>{{ totals.count }}</strong><small>{{ totals.units }} {{ tx("扇窗", "windows") }}</small></article>
-      <article><span>{{ tx("销售额", "Revenue") }}</span><strong>{{ nzd(totals.revenue) }}</strong><small>{{ tx("不含税示例", "sample, ex-GST") }}</small></article>
+      <article><span>{{ tx("订单", "Orders") }}</span><strong>{{ totals.count }}</strong><small>{{ totals.units }} {{ tx("扇窗", "windows") }} · {{ tx(`${totals.costed} 单已核算成本`, `${totals.costed} with costs`) }}</small></article>
+      <article><span>{{ tx("已核算订单销售额", "Revenue (costed orders)") }}</span><strong>{{ nzd(totals.revenue) }}</strong><small>{{ tx("不含税示例", "sample, ex-GST") }}</small></article>
       <article class="accent"><span>{{ tx("利润", "Profit") }}</span><strong>{{ nzd(totals.profit) }}</strong><small>{{ tx("扣采购、运费、关税、返利后", "after purchase, freight, duty, rebate") }}</small></article>
       <article class="accent"><span>{{ tx("平均利润率", "Average margin") }}</span><strong>{{ pct(totals.margin) }}</strong><small>{{ tx(`${best.id} 最高 ${pct(best.margin)} · ${worst.id} 最低 ${pct(worst.margin)}`, `${best.id} best ${pct(best.margin)} · ${worst.id} lowest ${pct(worst.margin)}`) }}</small></article>
     </div>
@@ -147,16 +154,16 @@ const stackParts = [
 
       <section class="panel">
         <h3>{{ tx("订单状态漏斗", "Order pipeline") }}</h3>
-        <p class="lead">{{ tx("每个阶段现在停着多少单，一眼看出卡在哪。", "How many orders sit at each stage, so a bottleneck shows at a glance.") }}</p>
+        <p class="lead">{{ tx(`${totals.count} 单分别停在哪个阶段，一眼看出卡在哪。`, `Where the ${totals.count} orders sit, so a bottleneck shows at a glance.`) }}</p>
         <ul class="funnel">
-          <li v-for="(f, i) in FUNNEL" :key="f.en"><span class="fname">{{ tx(f.zh, f.en) }}</span><span class="fbar"><i :style="{ width: `${(f.n / funnelMax) * 100}%` }" :class="`step-${i}`"></i></span><b>{{ f.n }}</b></li>
+          <li v-for="(f, i) in funnel" :key="f.key"><span class="fname">{{ tx(f.zh, f.en) }}</span><span class="fbar"><i :style="{ width: `${(f.n / funnelMax) * 100}%` }" :class="`step-${i}`"></i></span><b>{{ f.n }}</b></li>
         </ul>
       </section>
     </div>
 
     <section class="panel">
       <h3>{{ tx("每个订单的利润", "Profit per order") }}</h3>
-      <p class="lead">{{ tx("运费按扇数、关税按申报价值分摊到订单；采购成本按该批次汇率折算。", "Freight is shared by windows and duty by declared value; purchase cost uses that shipment's exchange rate.") }}</p>
+      <p class="lead">{{ tx(`已向供应商下单的 ${totals.costed} 单：运费按扇数、关税按申报价值分摊，采购成本按该批次汇率折算。其余订单还没有成本。`, `The ${totals.costed} orders already bought from the supplier: freight shared by windows, duty by declared value, purchase cost at that shipment's rate. The rest have no cost yet.`) }}</p>
       <ul class="stack-legend"><li v-for="p in stackParts" :key="p.key"><i :class="`c-${p.key}`"></i>{{ tx(p.zh, p.en) }}</li></ul>
       <ul class="orders">
         <li v-for="o in orders" :key="o.id">
