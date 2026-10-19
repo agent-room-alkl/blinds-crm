@@ -163,8 +163,8 @@ const validFields = ["order_number", "order_id", "project_name", "company", "con
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
 const listPage = ref(0);
 const mobileListOpen = ref(false);
-const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.length / 5)));
-const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 5, (Math.min(listPage.value, pageCount.value - 1) + 1) * 5));
+const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.length / 6)));
+const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 6, (Math.min(listPage.value, pageCount.value - 1) + 1) * 6));
 const selectedId = ref(String(route.query.order || ''));
 const detailSection = ref("fulfilment");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
@@ -848,7 +848,7 @@ async function loadOrderProviders(orderId: string) {
         </div>
         <div v-if="pageCount > 1" class="list-pagination">
           <button type="button" :disabled="listPage <= 0" @click="listPage--" :aria-label="tx('上一页订单','Previous order page')">← {{ tx('上页','Previous') }}</button>
-          <span>{{ tx('第','Page') }} {{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }} {{ tx('页','') }} · {{ Math.min(visibleOrders.length, Math.min(listPage,pageCount-1)*5+1) }}–{{ Math.min(visibleOrders.length,(Math.min(listPage,pageCount-1)+1)*5) }} / {{ visibleOrders.length }}</span>
+          <span>{{ tx('第','Page') }} {{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }} {{ tx('页','') }} · {{ Math.min(visibleOrders.length, Math.min(listPage,pageCount-1)*6+1) }}–{{ Math.min(visibleOrders.length,(Math.min(listPage,pageCount-1)+1)*6) }} / {{ visibleOrders.length }}</span>
           <button type="button" :disabled="listPage >= pageCount - 1" @click="listPage++" :aria-label="tx('下一页订单','Next order page')">{{ tx('下页','Next') }} →</button>
         </div>
       </aside>
