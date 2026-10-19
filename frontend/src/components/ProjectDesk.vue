@@ -122,6 +122,7 @@ const busy = ref(false);
 const loaded = ref(false);
 const error = ref("");
 const notice = ref("");
+const fulfilError = ref("");
 const statusFilter = ref("");
 const picked = ref<string[]>([]);
 const invoicePick = ref<string[]>([]);
@@ -172,7 +173,7 @@ const productPage = ref(0);
 const productPageCount = computed(() => Math.max(1, Math.ceil((selectedOrder.value?.lines.length || 0) / 4)));
 const productPageLines = computed(() => selectedOrder.value?.lines.slice(Math.min(productPage.value, productPageCount.value - 1) * 4, (Math.min(productPage.value, productPageCount.value - 1) + 1) * 4) || []);
 watch(() => selectedOrder.value?.id, () => { productPage.value = 0; });
-watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[]});
+watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[];fulfilError.value=''});
 watch(()=>selectedOrder.value?.invoices?.map(i=>`${i.id}:${i.status}`).join('|'),()=>{
   if(props.workspace!=='projects') return;
   const drafts=selectedOrder.value?.invoices?.filter(i=>i.status==='draft') || [];
@@ -428,9 +429,12 @@ async function arriveSelected() {
 function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
   const lines = batchLines(order, kind);
   if (!lines.length) {
-    error.value = tx("先填写本批数量。", "Enter this batch’s quantities first.");
+    fulfilError.value = kind === 'arrival'
+      ? tx('请先在“本批到货”填写这次实际收到的数量（至少 1），再记录到货。', 'Enter the quantity actually received in “This arrival” (at least 1) before recording arrival.')
+      : tx('请先在“本批交付”填写这次实际交付的数量（至少 1），再记录交付。', 'Enter the quantity actually delivered in “This delivery” (at least 1) before recording delivery.');
     return;
   }
+  fulfilError.value = '';
   const signature = JSON.stringify({ order_id: order.id, kind, lines });
   const operationKey = stableKey(signature);
   return act(async () => {
@@ -899,11 +903,12 @@ async function loadOrderProviders(orderId: string) {
                     <td>{{ line.quantity }}</td>
                     <td>{{ line.arrived }}</td>
                     <td>{{ line.delivered }}</td>
-                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:arrival`]" type="number" min="0" step="1" /></td>
-                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:delivery`]" type="number" min="0" step="1" /></td>
+                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:arrival`]" type="number" min="0" step="1" @input="fulfilError=''" /></td>
+                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:delivery`]" type="number" min="0" step="1" @input="fulfilError=''" /></td>
                   </tr>
                 </tbody>
               </table></div>
+              <p class="fulfil-hint">{{ tx('本批到货/交付只填这次新增的实际数量；未发生就留空。','Enter only quantities actually received or delivered in this batch; leave the field empty if nothing happened.') }}</p>
               <div v-if="productPageCount > 1" class="list-pagination product-pagination" :aria-label="tx('产品明细分页','Product line pages')"><button type="button" :disabled="productPage === 0" @click="productPage--" :aria-label="tx('上一页产品明细','Previous product lines')">← {{ tx('上页','Previous') }}</button><span>{{ tx('产品','Lines') }} {{ productPage * 4 + 1 }}–{{ Math.min((productPage + 1) * 4, selectedOrder.lines.length) }} / {{ selectedOrder.lines.length }} · {{ productPage + 1 }} / {{ productPageCount }}</span><button type="button" :disabled="productPage >= productPageCount - 1" @click="productPage++" :aria-label="tx('下一页产品明细','Next product lines')">{{ tx('下页','Next') }} →</button></div>
 
               <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
@@ -912,6 +917,7 @@ async function loadOrderProviders(orderId: string) {
                 <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
                 <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
               </div>
+              <p v-if="fulfilError" class="fulfil-error" role="alert">{{ fulfilError }}</p>
 
 </div><div v-show="detailSection === 'supplier'">              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
               <div class="provider-section">
@@ -1409,6 +1415,8 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .order-identity span{color:#53655d}
 .product-pagination{margin:0 0 8px;padding:6px 0;gap:8px}
 .product-pagination span{white-space:nowrap}
+.fulfil-hint{margin:4px 0 8px;color:#53655d;font-size:12px}
+.fulfil-error{margin:8px 0 0;padding:10px 12px;border:1px solid #e3bdab;border-radius:7px;background:#fff4ef;color:#8a3218;font-size:13px}
 .pricing-basis{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;padding-bottom:8px;border-bottom:1px solid #e0e7e3}
 .desk .pricing-basis h3{margin:0;padding:0;border:0}
 .pricing-basis p{margin:0}
