@@ -101,6 +101,7 @@ interface PricingVersion {id:string;version:string;active:boolean;source?:string
 const pricingVersions = ref<PricingVersion[]>([]);
 const applicability = reactive<Record<string,number[]>>({});
 const financeCustomer = ref(String(route.query.customer || ''));
+const financePane = ref<'balance'|'rebates'|'notifications'>('balance');
 const customers = ref<{customer_id:number;company:string}[]>([]);
 const financeOrders = computed(()=>orders.value.filter(o=>!financeCustomer.value || String(o.customer_id)===financeCustomer.value));
 const financeInvoices = computed(()=>invoices.value.filter(i=>!financeCustomer.value || String(i.customer_id)===financeCustomer.value));
@@ -831,9 +832,9 @@ async function loadOrderProviders(orderId: string) {
         <div class="order-scroll">
           <div v-for="order in pageOrders" :key="order.id" class="order-row">
             <label class="pick-mark">
-              <input type="checkbox" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
+              <input type="checkbox" :aria-label="tx('批量选择订单','Select order for batch')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
             </label>
-            <button type="button" :aria-pressed="selectedOrder?.id === order.id" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
+            <button type="button" :title="order.project_name" :aria-pressed="selectedOrder?.id === order.id" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
               <strong>{{ order.project_name }}</strong>
               <span>{{ order.order_number }}</span>
               <span>{{ order.company }}</span>
@@ -955,10 +956,8 @@ async function loadOrderProviders(orderId: string) {
                     </tr>
                   </tbody>
                 </table></div>
-                <label>{{ tx("调整说明", "Adjustment note") }}<input v-model="adjustNote[selectedOrder.id]" /></label>
-                <button type="button" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存员工调整", "Save adjustment") }}</button>
+                <div class="review-footer"><label>{{ tx("调整说明（仅改价时填写）", "Adjustment note (only when changing price)") }}<input v-model="adjustNote[selectedOrder.id]" /></label><button type="button" class="secondary" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存调整", "Save adjustment") }}</button><button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx('确认接收并生成定金草稿','Accept and create deposit draft') }}</button></div>
               </div>
-              <div v-if="selectedOrder.status==='pending_review'" class="actions"><button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx('确认接收并生成定金草稿','Accept review and create deposit draft') }}</button></div>
 
 </div><div v-show="detailSection === 'invoices'">              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
                 <h3>{{ tx("发票", "Invoices") }}</h3>
@@ -1078,30 +1077,22 @@ async function loadOrderProviders(orderId: string) {
             </div>
           </section>
 
-          <section v-if="activeSection === 'settlement'" class="card section-card">
-            <h2>{{ tx('账款与返利','Accounts & rebates') }}</h2>
-            <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
-            <h3>{{ tx('订单选择（用于同公司结算/返利来源）','Orders for settlement / rebate sources') }}</h3><p>{{ tx('已选','Selected') }} {{ picked.length }}</p>
-            <div v-for="order in financeOrders" :key="order.id" class="finance-order"><label class="checkbox-label"><input type="checkbox" v-model="picked" :value="order.id" />{{ order.order_number }} · {{ order.company }} · {{ orderStatus(order.status) }}</label><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink></div><p v-if="!financeOrders.length">{{ tx('此客户暂无订单','No orders for this customer') }}</p>
-            <h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ customers.find(c=>c.customer_id===invoice.customer_id)?.company }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button>
-            <h2>{{ tx("同公司尾款", "Balance invoice") }}</h2>
-            <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的订单生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed orders of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
-            <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="3" /></label>
-            <button type="button" :disabled="busy" @click="settleSelected">{{ tx("生成尾款草稿", "Create balance") }}</button>
-
-            <h3>{{ tx("已确认返利", "Confirmed rebates") }}</h3>
-            <p class="hint">{{ tx("只记录已经确认的月度金额。没有阶梯公式，页面不算返点。同一订单不能重复计入。", "Record only a confirmed monthly amount. There is no tier formula, and this page does not calculate a rebate. An order cannot be counted twice.") }}</p>
-            <p v-if="rebateStatus">{{ tx('只记录已确认的月度返利，不自动套用阶梯公式。','Record confirmed monthly rebates only; no automatic tier calculation.') }}</p>
-            <div v-if="admin" class="form-grid">
-              <label>{{ tx("年月", "Month") }}<input v-model="rebateForm.month" placeholder="2026-10" /></label>
-              <label>{{ tx("金额", "Amount") }}<input v-model="rebateForm.amount" inputmode="decimal" /></label>
-              <label>{{ tx("确认依据", "Evidence") }}<input v-model="rebateForm.evidence" /></label>
-              <button type="button" :disabled="busy" @click="recordRebate">{{ tx("记入", "Record") }}</button>
+          <section v-if="activeSection === 'settlement'" class="card section-card finance-workspace">
+            <header class="finance-header"><h2>{{ tx('账款与返利','Accounts & rebates') }}</h2><label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label></header>
+            <div class="finance-grid">
+              <div class="finance-panel"><div class="finance-panel-head"><h3>{{ tx('来源订单','Source orders') }}</h3><span>{{ tx('已选','Selected') }} {{ picked.length }}</span></div><div class="finance-list">
+                <div v-for="order in financeOrders" :key="order.id" class="finance-order"><label class="checkbox-label"><input type="checkbox" v-model="picked" :value="order.id" /><span>{{ order.order_number }} · {{ orderStatus(order.status) }}</span></label><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink></div><p v-if="!financeOrders.length">{{ tx('此客户暂无订单','No orders for this customer') }}</p>
+              </div></div>
+              <div class="finance-panel"><div class="finance-panel-head"><h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><span>{{ financeInvoices.length }}</span></div><div class="finance-list">
+                <div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div>
+                <p v-if="!financeInvoices.length" class="hint">{{ tx('此客户暂无发票','No invoices for this customer') }}</p>
+              </div><div class="finance-panel-foot"><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button></div></div>
+              <div class="finance-panel finance-action-panel"><nav class="finance-pane-tabs" aria-label="Finance actions"><button type="button" :class="{active:financePane==='balance'}" @click="financePane='balance'">{{ tx('尾款','Balance') }}</button><button type="button" :class="{active:financePane==='rebates'}" @click="financePane='rebates'">{{ tx('返利','Rebates') }}</button><button type="button" :class="{active:financePane==='notifications'}" @click="financePane='notifications'">{{ tx('通知','Notices') }}</button></nav>
+                <div v-show="financePane==='balance'" class="finance-action-content"><h3>{{ tx('生成尾款草稿','Create balance draft') }}</h3><p class="hint">{{ tx('仅限同公司、同币种、全部交付且定金已收。金额扣除已保存定金。','Same company and currency, fully delivered with deposit received. Stored deposits are deducted.') }}</p><label>{{ tx('已确认的规则说明','Confirmed rule evidence') }}<textarea v-model="settlementEvidence" rows="2" /></label><button type="button" :disabled="busy || !picked.length" @click="settleSelected">{{ tx('生成尾款草稿','Create balance draft') }}</button></div>
+                <div v-show="financePane==='rebates'" class="finance-action-content"><h3>{{ tx('已确认返利','Confirmed rebates') }}</h3><p class="hint">{{ tx('只录入已确认月度金额；不自动推算返利。','Record only confirmed monthly amounts; rebate tiers are not inferred.') }}</p><div v-if="admin" class="form-grid"><label>{{ tx('年月','Month') }}<input v-model="rebateForm.month" placeholder="2026-10" /></label><label>{{ tx('金额','Amount') }}<input v-model="rebateForm.amount" inputmode="decimal" /></label><label class="finance-evidence">{{ tx('确认依据','Evidence') }}<input v-model="rebateForm.evidence" /></label><button type="button" :disabled="busy || !picked.length" @click="recordRebate">{{ tx('记入已确认返利','Record confirmed rebate') }}</button></div><div class="finance-list"><div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocation.invoice_id }} · {{ allocation.amount }}</p></div></div></div>
+                <div v-show="financePane==='notifications'" class="finance-action-content"><h3>{{ tx('通知记录','Notifications') }}</h3><div class="finance-list"><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ item.subject }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div></div></div>
+              </div>
             </div>
-            <div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item">
-              <span>{{ customers.find(c=>c.customer_id===credit.customer_id)?.company }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span><p>{{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocation.invoice_id }} · {{ allocation.amount }}</p>
-            </div>
-            <h3>{{ tx('通知记录','Notifications') }}</h3><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ item.subject }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div>
           </section>
         </div>
       </div>
@@ -1111,9 +1102,9 @@ async function loadOrderProviders(orderId: string) {
 
 <style scoped>
 .desk {
-  --fs-page-title: 20px; --lh-page-title: 1.35;
+  --fs-page-title: 18px; --lh-page-title: 1.35;
   --fs-title: 15px; --lh-title: 1.5;
-  --fs-heading: 14px; --lh-heading: 1.5;
+  --fs-heading: 13px; --lh-heading: 1.5;
   --fs-body: 13px; --lh-body: 1.55;
   --fs-meta: 12px; --lh-meta: 1.5;
   --fw-body: 400;
@@ -1339,6 +1330,64 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .order-pick{grid-template-columns:minmax(0,1fr);justify-content:stretch;justify-items:stretch;text-align:left;min-height:44px}
 .desk .order-pick>strong,.desk .order-pick>span,.desk .order-pick>small{display:block;width:100%;min-width:0;text-align:left}
 .desk .pick-mark{flex:0 0 44px;justify-content:center}
-.desk{--fs-body:14px;--fs-meta:13px;--fs-heading:14px;--fs-title:16px}.invoice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.invoice-actions a{min-height:44px;color:#17523a}.desk .invoice{padding:12px;margin:8px 0}.desk .invoice label{justify-content:flex-start;min-height:44px;gap:10px}.desk .invoice p{margin:4px 0}.desk .section-card h2{margin:0 0 12px}.desk .section-card h3{margin:16px 0 10px}.desk .detail-tabs{gap:6px}.desk .form-grid{gap:12px}.desk .form-grid button{justify-self:start}
+.invoice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.invoice-actions a{min-height:44px;color:#17523a}.desk .invoice{padding:12px;margin:8px 0}.desk .invoice label{justify-content:flex-start;min-height:44px;gap:10px}.desk .invoice p{margin:4px 0}.desk .section-card h2{margin:0 0 12px}.desk .section-card h3{margin:16px 0 10px}.desk .detail-tabs{gap:6px}.desk .form-grid{gap:12px}.desk .form-grid button{justify-self:start}
 .next-action{background:#eef5ef;border:1px solid #c8ddcd;border-radius:8px;padding:12px 14px;margin:12px 0;display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}.next-action strong{font-size:14px}.next-action p{margin:0;flex:1 1 260px;line-height:1.5}.provider-advanced{align-self:center}.provider-advanced summary{cursor:pointer;min-height:44px;display:flex;align-items:center;color:#17523a}.provider-advanced button{margin-top:8px}
+
+/* Dense, consistent task workspaces. Controls retain a 44px target. */
+.desk .card{padding:16px}
+@media(min-width:1001px){.desk:not(.global-workspace) .workspace-grid{grid-template-columns:285px minmax(0,1fr);gap:12px}.desk .order-list{max-height:calc(100vh - 174px);overflow:hidden}.desk .order-scroll{overflow-y:auto;min-height:0}}
+.desk .order-list{gap:6px}
+.desk .order-row{position:relative;display:block;min-width:0}
+.desk .pick-mark{position:absolute;z-index:2;left:2px;top:0;bottom:0;width:44px;min-width:44px;padding:0;display:flex;align-items:center;justify-content:center}
+.desk .pick-mark input{width:18px;height:18px;min-height:18px;flex:0 0 18px}
+.desk .order-pick{box-sizing:border-box;width:100%;min-height:76px;padding:6px 8px 6px 48px;display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-rows:auto auto auto;align-items:center;column-gap:8px;row-gap:1px}
+.desk .order-pick>strong,.desk .order-pick>span,.desk .order-pick>small{width:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.25}
+.desk .order-pick>strong{grid-column:1/-1;grid-row:1;font-size:13px}
+.desk .order-pick>span:first-of-type{grid-column:1;grid-row:2;font-variant-numeric:tabular-nums}
+.desk .order-pick>span:nth-of-type(2){grid-column:2;grid-row:2}
+.desk .order-pick>small{grid-column:1/-1;grid-row:3;margin:0;text-align:left;max-width:none}
+.desk .order-header{margin-bottom:8px;padding-bottom:8px}
+.desk .order-meta{margin-bottom:8px;padding:6px 0}
+.desk .next-action{margin:8px 0;padding:8px 10px}
+.desk .detail-tabs{margin:6px 0 10px;padding-bottom:6px}
+.desk .order-detail h3,.desk .section-card h3{margin:12px 0 6px;padding-bottom:4px}
+.desk .table-scroll{margin:6px 0}
+.desk th,.desk td{padding:6px 8px}
+.desk .adjustment-section{margin-top:8px;padding-top:8px}
+.desk .adjustment-section .table-scroll{max-height:min(205px,calc(100vh - 540px));overflow-y:auto}
+.desk .adjustment-section thead th{position:sticky;top:0;z-index:1}
+.review-footer{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin-top:8px}
+.review-footer label{flex:1 1 200px;min-width:200px}
+.review-footer button{flex:0 0 auto;white-space:nowrap}
+.desk .review-footer .secondary{background:#fff;color:#17523a;border-color:#c9d8ce}
+.finance-header{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:12px}
+.finance-header label{width:min(300px,100%)}
+.finance-grid{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.05fr) minmax(0,1.1fr);gap:10px;min-width:0}
+.finance-panel{height:min(594px,calc(100vh - 280px));min-height:360px;display:flex;flex-direction:column;min-width:0;border:1px solid #dce5df;border-radius:8px;background:#fff;overflow:hidden}
+.finance-panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #e4eae5}
+.desk .finance-panel-head h3{margin:0;padding:0;border:0;font-size:14px}
+.finance-panel-head span{color:#52635a;font-size:12px}
+.finance-list{flex:1;min-height:0;overflow-y:auto;padding:4px 10px;overflow-wrap:anywhere}
+.finance-panel-foot{padding:10px;border-top:1px solid #e4eae5}
+.finance-panel-foot button{width:100%}
+.finance-order{display:block;padding:8px 0;border-bottom:1px solid #e4eae5}
+.finance-order label{min-height:32px}
+.finance-order a{display:block;padding-left:28px;line-height:1.35}
+.desk .finance-panel .invoice{display:block;padding:8px;margin:6px 0}
+.finance-panel .invoice label{line-height:1.35}
+.finance-panel .invoice p{padding-left:28px}
+.finance-panel .invoice input:not([type=checkbox]){margin-top:6px}
+.finance-panel .invoice button{margin-top:6px}
+.finance-pane-tabs{display:flex;gap:4px;padding:8px;border-bottom:1px solid #e4eae5}
+.desk .finance-pane-tabs button{flex:1;min-width:0;padding:8px 4px;background:#f4f7f5;color:#315844;border-color:transparent}
+.desk .finance-pane-tabs button.active{background:#dcece2;color:#17462f;font-weight:600}
+.finance-action-content{flex:1;min-height:0;overflow-y:auto;padding:10px 12px}
+.desk .finance-action-content h3{margin:0 0 6px;padding:0;border:0;font-size:14px}
+.finance-action-content>.hint{margin:0 0 10px}
+.finance-action-content>button{margin-top:8px;width:100%}
+.finance-action-content .form-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.finance-action-content .finance-evidence,.finance-action-content .form-grid button{grid-column:1/-1}
+.finance-action-content .finance-list{padding:8px 0;overflow:visible}
+@media(max-width:1100px){.finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-action-panel{grid-column:1/-1;height:auto;min-height:280px}.finance-action-content{max-height:420px}}
+@media(max-width:700px){.finance-header{display:block}.finance-header label{display:block;margin-top:10px;width:100%}.finance-grid{display:block}.finance-panel{height:auto;min-height:0;margin-top:10px}.finance-list{max-height:none;overflow:visible}.finance-action-content{max-height:none;overflow:visible}.review-footer{display:grid;grid-template-columns:minmax(0,1fr)}.review-footer label,.review-footer button{width:100%;min-width:0}.desk .order-pick>small{max-width:125px}}
 </style>

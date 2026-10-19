@@ -9,7 +9,7 @@ import ProjectDesk from "../components/ProjectDesk.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
 import CrmGuide from "../components/CrmGuide.vue";
-import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen } from "lucide-vue-next";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen, Menu } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -28,6 +28,7 @@ const emailEnabled = ref(false);
 const demoEmailAddress = ref('');
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
+const mobileNavOpen = ref(false);
 const accountMenu = ref<HTMLDetailsElement>();
 function closeAccountMenu() { 
   if (accountMenu.value) {
@@ -152,6 +153,7 @@ async function logout() {
 }
 
 function openTab(key: string) {
+  mobileNavOpen.value = false;
   void router.push(`/crm/${key}`);
   window.scrollTo({ top: 0 });
 }
@@ -163,8 +165,9 @@ onMounted(() => {
 
 <template>
   <main class="page crm" :class="{ 'is-signed': signed }">
-    <aside v-if="signed" class="desk-rail">
+    <aside v-if="signed" class="desk-rail" :class="{'mobile-open':mobileNavOpen}">
       <div class="rail-brand">VERA</div>
+      <button type="button" class="rail-mobile-toggle" :aria-expanded="mobileNavOpen" @click="mobileNavOpen=!mobileNavOpen"><Menu :size="20" aria-hidden="true" />{{ tx('菜单','Menu') }} · {{ pageTitle }}</button>
       <button type="button" :class="{ current: tab === 'projects' }" @click="openTab('projects')">
         <FolderKanban :size="20" aria-hidden="true" />
         {{ tx("订单", "Orders") }}
@@ -364,8 +367,8 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 @media(max-width:390px) { .crm.is-signed { padding: 12px; } .desk-rail button { font-size: var(--fs-meta); line-height: var(--lh-meta); min-height: 44px; font-weight: var(--fw-body); } }
 .desk-rail>button{justify-content:flex-start;text-align:left}
 .desk-rail>button>svg{flex:0 0 20px;width:20px;height:20px}
-.demo-notice{padding:10px 14px;margin:0 0 16px;border:1px solid #c6dace;background:#edf5ef;color:#244f37;border-radius:6px;font-size:14px;line-height:1.5}
-.crm{--fs-body:14px;--fs-meta:13px;--fs-heading:14px;--fs-title:16px}
+.demo-notice{padding:8px 12px;margin:0 0 12px;border:1px solid #c6dace;background:#edf5ef;color:#244f37;border-radius:6px;font-size:13px;line-height:1.45}
+.crm{--fs-body:13px;--fs-meta:12px;--fs-heading:13px;--fs-title:15px}
 
 .crm .crm-bar { min-height: 44px; padding: 0 0 10px; margin-bottom: 16px; display: flex; align-items: center; flex-wrap: nowrap; }
 .crm .page-context { display: flex; align-items: center; gap: 9px; min-width: 0; margin-right: auto; flex-basis: auto; }
@@ -383,4 +386,6 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 .crm .account-dropdown button { width: 100%; display: block; text-align: left; background: white; color: #31483b; border: 0; border-radius: 6px; font-size: var(--fs-body); line-height: var(--lh-body); padding: 10px 10px; min-height: 44px; font-weight: var(--fw-body); }
 .crm .account-dropdown button:hover { background: #edf5f1; }
 @media(max-width:600px) { .crm .crm-bar { margin-bottom: 12px; } }
+.desk-rail .rail-mobile-toggle{display:none}
+@media(max-width:800px){.desk-rail .rail-mobile-toggle{display:flex;grid-column:1/-1}.desk-rail:not(.mobile-open)>button:not(.rail-mobile-toggle){display:none}.desk-rail{margin-bottom:10px!important}}
 </style>
