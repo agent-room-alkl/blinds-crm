@@ -1394,7 +1394,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .detail-navigation .next-action{flex:1;min-width:0;margin:0;padding:4px 8px;background:transparent;border:0;gap:4px 8px;font-size:12px}
 .detail-navigation .next-action strong{font-size:12px;white-space:nowrap}
 .detail-navigation .next-action p{flex:1 1 160px}
-.detail-navigation .next-action button{padding:6px 8px;min-height:36px}
+.detail-navigation .next-action button{padding:6px 8px;min-height:44px}
 .desk .order-pick>span:first-of-type{grid-column:1;white-space:nowrap}
 .desk .order-pick>span:nth-of-type(2){grid-column:2;white-space:nowrap}
 @media(min-width:1001px){.desk .order-list{margin-top:0}}
