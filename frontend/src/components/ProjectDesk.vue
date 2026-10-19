@@ -1395,7 +1395,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .finance-action-content .finance-list{padding:8px 0;overflow:visible}
 @media(max-width:1100px){.finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-action-panel{grid-column:1/-1;height:auto;min-height:280px}.finance-action-content{max-height:420px}}
 @media(max-width:700px){.finance-header{display:block}.finance-header label{display:block;margin-top:10px;width:100%}.finance-grid{display:block}.finance-panel{height:auto;min-height:0;margin-top:10px}.finance-list{max-height:none;overflow:visible}.finance-action-content{max-height:none;overflow:visible}.review-footer{display:grid;grid-template-columns:minmax(0,1fr)}.review-footer label,.review-footer button{width:100%;min-width:0}.desk .order-pick>small{max-width:125px}}
-.detail-navigation{display:flex;align-items:center;gap:8px;min-width:0;border-bottom:1px solid #e0e7e3;margin:4px 0 8px}
+.detail-navigation{display:flex;align-items:center;gap:8px;min-width:0;min-height:66px;border-bottom:1px solid #e0e7e3;margin:4px 0 8px}
 .desk .detail-navigation .detail-tabs{flex:0 0 auto;margin:0;padding:0;border:0}
 .desk .detail-navigation .next-action{flex:1;min-width:0;margin:4px 0;padding:6px 10px;background:#eef6fb;border:1px solid #c9e1ee;border-radius:7px;color:#244d60;gap:4px 8px;font-size:12px}
 .detail-navigation .next-action strong{font-size:12px;white-space:nowrap}
@@ -1404,12 +1404,12 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .order-pick>span:first-of-type{grid-column:1;white-space:nowrap}
 .desk .order-pick>span:nth-of-type(2){grid-column:2;white-space:nowrap}
 @media(min-width:1001px){.desk .order-list{margin-top:0}}
-@media(max-width:1250px){.detail-navigation{display:block}.desk .detail-navigation .next-action{margin:2px 0 6px}}
+@media(max-width:1250px){.detail-navigation{display:block;min-height:0}.desk .detail-navigation .next-action{margin:2px 0 6px}}
 .order-identity{display:flex;align-items:center;gap:8px;margin:4px 0 0;flex-wrap:wrap;font-size:12px;line-height:1.3}
 .order-identity span{color:#53655d}
 .product-pagination{margin:0 0 8px;padding:6px 0;gap:8px}
 .product-pagination span{white-space:nowrap}
-.pricing-basis{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px;padding-bottom:8px;border-bottom:1px solid #e0e7e3}
+.pricing-basis{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;padding-bottom:8px;border-bottom:1px solid #e0e7e3}
 .desk .pricing-basis h3{margin:0;padding:0;border:0}
 .pricing-basis p{margin:0}
 .pricing-basis span{color:#53655d;font-size:12px}
