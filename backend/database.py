@@ -20,6 +20,8 @@ class Row(dict):
 
 class Result:
     def __init__(self,cursor,insert_id=None):self.cursor=cursor;self.lastrowid=insert_id
+    @property
+    def rowcount(self):return self.cursor.rowcount
     def fetchone(self):
         r=self.cursor.fetchone();return Row(r) if r is not None else None
     def fetchall(self):return [Row(r) for r in self.cursor.fetchall()]
