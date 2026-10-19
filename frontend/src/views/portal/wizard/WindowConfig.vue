@@ -167,6 +167,17 @@ function nextWindow() {
   }
 }
 
+function addWindowLikeCurrent() {
+  validationAttempted.value = true;
+  if (missingFields.value.length || pricing.value || !priceData.value || priceError.value || !currentWindow.value) return;
+  const next: WindowDraft = { id: crypto.randomUUID(), window_name: '', product_id: currentWindow.value.product_id,
+    width_mm: '', height_mm: '', quantity: 1, panel_count: 1,
+    options: { ...currentWindow.value.options }, configured: false };
+  emit('update:modelValue', [...props.modelValue, next]);
+  currentIndex.value = props.modelValue.length;
+  validationAttempted.value = false;
+}
+
 function prevWindow() {
   if (currentIndex.value > 0) {
     currentIndex.value--;
@@ -377,6 +388,7 @@ watch(
         {{ currentIndex === modelValue.length - 1 ? tx("完成，下一步", "Done, Next") : tx("保存并下一扇", "Save & Next") }}
         </span>
       </button>
+      <button v-if="currentIndex === modelValue.length - 1" type="button" class="secondary" :disabled="pricing" @click="addWindowLikeCurrent">{{ tx('再加一扇（沿用系列和选项）','Add another (reuse series and options)') }}</button>
     </div>
   </div>
 </template>

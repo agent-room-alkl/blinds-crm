@@ -618,8 +618,11 @@ def register(app, s):
     def runtime(actor=Depends(s.auth)):
         from email_service import configuration
         state=configuration()[0]
+        with s.db() as c:
+            user=c.execute('SELECT role FROM users WHERE username=? AND active=1',(actor,)).fetchone()
+        is_admin=bool(user and user['role']=='admin')
         return {'email_mode':state['mode'],'email_delivery_enabled':state['delivery_enabled'] and state['configured'],
-                'demo_email_address':state['demo_recipient'] if state['mode']=='demo' else ''}
+                'demo_email_address':state['demo_recipient'] if state['mode']=='demo' and is_admin else ''}
 
     @app.get('/api/operations/settings')
     def settings(actor=Depends(s.require_admin)):

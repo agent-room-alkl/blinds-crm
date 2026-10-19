@@ -204,7 +204,7 @@ function proceed() {
 
     <div class="step-actions">
       <button type="button" class="primary" :disabled="modelValue === null" @click="proceed">
-        {{ tx("下一步 · 窗户列表", "Next · Windows") }}
+        {{ tx("开始配置第一扇窗", "Configure first window") }}
       </button>
     </div>
   </div>

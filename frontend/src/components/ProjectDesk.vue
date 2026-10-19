@@ -144,6 +144,18 @@ const templateForm = reactive({
 const mappingField = ref("");
 const mappingColumn = ref("");
 const orderProviderForm = reactive<Record<string, { provider_id: number; template_id: number }>>({});
+function defaultTemplateId(providerId:number):number {
+  return [...providerTemplates.value].filter(t=>t.provider_id===providerId && t.active)
+    .sort((a,b)=>(b.revision||1)-(a.revision||1)||b.id-a.id)[0]?.id || 0;
+}
+function chooseProvider(orderId:string, providerId:number) {
+  orderProviderForm[orderId]={provider_id:providerId,template_id:defaultTemplateId(providerId)};
+}
+function readySupplierExport(orderId:string) {
+  const form=orderProviderForm[orderId];
+  return !!form && providers.value.some(p=>p.id===form.provider_id && p.active) &&
+    providerTemplates.value.some(t=>t.id===form.template_id && t.provider_id===form.provider_id && t.active);
+}
 const activeSection = computed(() => (({pricing:'pricing',providers:'providers',finance:'settlement'} as Record<string,string>)[props.workspace] || 'operations'));
 const validFields = ["order_number", "order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
 
@@ -155,7 +167,32 @@ const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.va
 const selectedId = ref(String(route.query.order || ''));
 const detailSection = ref("fulfilment");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
-watch(()=>selectedOrder.value?.id,()=>{invoicePick.value=[]});
+watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[]});
+watch(()=>selectedOrder.value?.invoices?.map(i=>`${i.id}:${i.status}`).join('|'),()=>{
+  if(props.workspace!=='projects') return;
+  const drafts=selectedOrder.value?.invoices?.filter(i=>i.status==='draft') || [];
+  invoicePick.value=drafts.length===1?[drafts[0].id]:[];
+},{immediate:true});
+function nextOrderSection(order: ProjectOrder): string {
+  if (order.status === 'pending_review') return 'adjustment';
+  if (order.payment_status === 'deposit_unpaid') return 'invoices';
+  if (order.status === 'accepted') return 'supplier';
+  return 'fulfilment';
+}
+const nextOrderHint = computed(() => {
+  const order=selectedOrder.value;
+  if (!order) return '';
+  if (order.status==='pending_review') return tx('核对价格和配置，再确认接收。','Check price and configuration, then accept review.');
+  if (order.payment_status==='deposit_unpaid') return tx('定金发票已生成；核实到账后记录定金已收。','The deposit invoice is ready; record receipt only after funds are confirmed.');
+  if (order.status==='accepted') return tx('确认供应商并导出订单文件，再记录供应商参考号。','Confirm the supplier and export the order file, then record its reference.');
+  if (order.status==='supplier_ordered') return tx('供应商下单已记录；可将订单标为在途。','Supplier order recorded; mark it in transit when dispatched.');
+  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('按本批实际数量记录到货。','Record the actual quantities received in this batch.');
+  if (order.status==='arrived'||order.status==='partially_delivered') return tx('按本批实际数量记录交付。','Record the actual quantities delivered in this batch.');
+  return tx('订单已交付；在账款与返利中处理尾款。','Order delivered; complete the balance in Accounts & rebates.');
+});
+watch(()=>[selectedOrder.value?.id,selectedOrder.value?.status,selectedOrder.value?.payment_status],()=>{
+  if(selectedOrder.value) detailSection.value=nextOrderSection(selectedOrder.value);
+},{immediate:true});
 const editingProvider = ref<Provider | null>(null);
 const editProviderForm = reactive({
   name: "",
@@ -195,6 +232,12 @@ async function load() {
   providerTemplates.value = templateList;
   pricingVersions.value = versions;
   customers.value = companies;
+  if(props.workspace==='finance' && financeCustomer.value && !picked.value.length) {
+    const eligible=listed.filter(order=>String(order.customer_id)===financeCustomer.value &&
+      order.status==='delivered' && order.payment_status==='deposit_received' &&
+      !billed.some(invoice=>invoice.kind==='balance' && invoice.order_ids?.includes(order.id)));
+    if(eligible.length===1) picked.value=[eligible[0].id];
+  }
   for(const v of versions) applicability[v.id]=[...v.provider_ids];
   await refreshTemplate();
   rebateStatus.value = credits.calculation_status;
@@ -305,10 +348,27 @@ function transitSelected() {
   });
 }
 
+function transitOne(id:string) {
+  const signature=`transit:${id}`;
+  const operationKey=stableKey(signature);
+  return act(async()=>{
+    const result=await request<{results:{order_id:string;status:string;reason?:string}[]}>('operations/transit',
+      {order_ids:[id],operation_key:operationKey});
+    operationKeys.delete(signature);
+    const row=result.results[0];
+    notice.value=row ? `${orderLabel(id)}: ${row.status}${row.reason?` (${row.reason})`:''}` : tx('状态未更新','Status was not updated');
+  });
+}
+
 function batchLines(order: ProjectOrder, kind: "arrival" | "delivery") {
   return order.lines
     .map((line) => ({ line_id: line.id, quantity: Number(batch[`${order.id}:${line.id}:${kind}`] || 0) }))
     .filter((line) => line.quantity > 0);
+}
+
+function fillRemaining(order:ProjectOrder,kind:'arrival'|'delivery') {
+  for(const line of order.lines) batch[`${order.id}:${line.id}:${kind}`]=
+    kind==='arrival' ? Math.max(0,line.quantity-line.arrived) : Math.max(0,line.arrived-line.delivered);
 }
 
 function optionText(line: Line) {
@@ -448,6 +508,7 @@ function settleSelected() {
       `已生成尾款草稿 ${invoice.id}，金额 ${invoice.currency} ${invoice.amount}。部分到货或未收定金会被拒绝。发送仍是另一步。`,
       `Balance draft ${invoice.id} created for ${invoice.currency} ${invoice.amount}. Partial arrival or an unpaid deposit is refused. Sending stays a separate step.`,
     );
+    picked.value=[];
   });
 }
 
@@ -690,6 +751,9 @@ async function exportWithProvider(orderId: string, providerId?: number, allowFal
   error.value = "";
   notice.value = "";
   try {
+    if (!allowFallback && (!providerId || !readySupplierExport(orderId))) {
+      throw new Error(tx('请先选择已启用的供应商及其导出模板；也可下载未验证的基本草稿。','Select an active supplier and export template, or download the unverified basic draft.'));
+    }
     if (providerId && !allowFallback) {
       const form = orderProviderForm[orderId];
       await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: form.template_id || null, is_preferred: true });
@@ -733,8 +797,11 @@ async function loadOrderProviders(orderId: string) {
       const first = assigned[0];
       orderProviderForm[orderId] = {
         provider_id: first.provider_id,
-        template_id: first.template_id || 0,
+        template_id: first.template_id || defaultTemplateId(first.provider_id),
       };
+    } else {
+      const active=providers.value.filter(p=>p.active);
+      if (active.length===1) chooseProvider(orderId,active[0].id);
     }
   } catch (e) {
     console.error("Failed to load order providers:", e);
@@ -808,6 +875,7 @@ async function loadOrderProviders(orderId: string) {
                 <p><strong>{{ tx("总价", "Total") }}:</strong> {{ selectedOrder.total ? `${selectedOrder.currency || ""} ${selectedOrder.total}` : tx("待计价", "Unpriced") }}</p>
                 <p v-if="selectedOrder.supplier_reference"><strong>{{ tx("供应商参考", "Supplier ref") }}:</strong> {{ selectedOrder.supplier_reference }}</p>
               </div>
+              <div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered'" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div>
               <nav class="detail-tabs" aria-label="Project details">
                 <button type="button" :class="{active: detailSection === 'fulfilment'}" @click="detailSection = 'fulfilment'">{{ tx("明细与履约", "Lines & fulfilment") }}</button>
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
@@ -816,6 +884,7 @@ async function loadOrderProviders(orderId: string) {
                 <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
               </nav>
 <div v-show="detailSection === 'fulfilment'">              <h3>{{ tx("产品明细", "Product lines") }}</h3>
+              <div class="actions"><button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'arrival')">{{ tx('填入全部未到数量','Fill all remaining arrivals') }}</button><button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'delivery')">{{ tx('填入全部待交付数量','Fill all ready deliveries') }}</button></div>
               <div class="table-scroll"><table>
                 <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "Arrival") }}</th><th>{{ tx("本批交付", "Delivery") }}</th></tr></thead>
                 <tbody>
@@ -833,41 +902,43 @@ async function loadOrderProviders(orderId: string) {
                 </tbody>
               </table></div>
 
-              <h3>{{ tx("订单操作", "Order actions") }}</h3>
+              <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
               <div class="actions">
-                <button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx("确认接收", "Accept review") }}</button>
-                <button type="button" class="secondary" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx("定金已收", "Deposit received") }}</button>
-                <label>{{ tx("供应商参考号", "Supplier ref") }}<input v-model="supplierRef[selectedOrder.id]" /></label>
-                <button type="button" class="secondary" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx("记录下单", "Record order") }}</button>
-                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
-                <button type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
+                <button v-if="selectedOrder.status==='supplier_ordered'" type="button" class="secondary" :disabled="busy" @click="transitOne(selectedOrder.id)">{{ tx('标为在途','Mark in transit') }}</button>
+                <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
+                <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
               </div>
 
 </div><div v-show="detailSection === 'supplier'">              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
               <div class="provider-section">
                 <div class="form-row">
                   <label>{{ tx("选择供应商", "Select provider") }}
-                    <select v-model="orderProviderForm[selectedOrder.id].provider_id" @change="() => { orderProviderForm[selectedOrder.id].template_id = 0; }">
+                    <select :value="orderProviderForm[selectedOrder.id].provider_id" @change="chooseProvider(selectedOrder.id,Number(($event.target as HTMLSelectElement).value))">
                       <option :value="0">{{ tx("未分配", "Not assigned") }}</option>
                       <option v-for="p in providers.filter(p => p.active)" :key="p.id" :value="p.id">{{ p.name }}</option>
                     </select>
                   </label>
-                  <label v-if="orderProviderForm[selectedOrder.id].provider_id">{{ tx("选择模板", "Select template") }}
+                  <label v-if="orderProviderForm[selectedOrder.id].provider_id && providerTemplates.some(t=>t.provider_id===orderProviderForm[selectedOrder.id].provider_id && t.active)">{{ tx("选择模板", "Select template") }}
                     <select v-model="orderProviderForm[selectedOrder.id].template_id">
                       <option :value="0">{{ tx("默认", "Default") }}</option>
                       <option v-for="t in providerTemplates.filter(t => t.provider_id === orderProviderForm[selectedOrder.id].provider_id && t.active)" :key="t.id" :value="t.id">{{ t.name }}</option>
                     </select>
                   </label>
-                  <button type="button" :disabled="busy || !orderProviderForm[selectedOrder.id].provider_id" @click="assignProvider(selectedOrder.id)">{{ tx("分配供应商", "Assign provider") }}</button>
+                  <details class="provider-advanced"><summary>{{ tx('只保存分配，不导出','Save assignment only') }}</summary><button type="button" :disabled="busy || !orderProviderForm[selectedOrder.id].provider_id" @click="assignProvider(selectedOrder.id)">{{ tx("保存分配", "Save assignment") }}</button></details>
                   <RouterLink to="/crm/providers">{{ tx('管理共享供应商','Manage shared suppliers') }}</RouterLink>
                 </div>
+                <p class="hint" v-if="!providers.some(p=>p.active)">{{ tx('尚无已启用供应商；先在供应商页面确认并启用。','No active supplier yet. Confirm and activate one under Suppliers.') }}</p>
+                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providers.some(p=>p.id===orderProviderForm[selectedOrder.id].provider_id && p.active)">{{ tx('原供应商已停用，请重新选择已启用的供应商。','The assigned supplier is inactive; choose an active supplier.') }}</p>
+                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !orderProviderForm[selectedOrder.id].template_id">{{ tx('该供应商还没有可用输出模板；可先下载未验证的基本草稿。','This supplier has no active export template yet; use the unverified basic draft for review.') }}</p>
+                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].template_id && !readySupplierExport(selectedOrder.id)">{{ tx('原输出模板已停用，请选择当前有效版本。','The assigned export template is inactive; choose a current revision.') }}</p>
+                <p class="hint" v-else>{{ tx('已自动选择可用模板；下载时会同时保存本单供应商分配。','An available template is selected automatically; downloading also saves this order’s supplier assignment.') }}</p>
                 <div class="form-row">
-                  <button type="button" class="secondary" :disabled="busy" @click="exportWithProvider(selectedOrder.id, orderProviderForm[selectedOrder.id].provider_id || undefined, false)">{{ tx("导出供应商模板", "Export provider template") }}</button>
-                  <button type="button" class="secondary" :disabled="busy" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx("导出基本模板（未验证）", "Export basic (not verified)") }}</button>
-                  <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button>
-                  <button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job sheet") }}</button>
+                  <button v-if="readySupplierExport(selectedOrder.id)" type="button" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, orderProviderForm[selectedOrder.id].provider_id, false)">{{ tx("下载供应商订单 Excel（自动保存分配）", "Download supplier order Excel (saves assignment)") }}</button>
+                  <button v-else type="button" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx('下载订单 Excel 草稿（格式未验证）','Download draft order Excel (unverified format)') }}</button>
+                  <details class="provider-advanced"><summary>{{ tx('其他文件','Other files') }}</summary><div class="form-row"><button v-if="orderProviderForm[selectedOrder.id].template_id" type="button" class="secondary" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx("基本模板草稿", "Basic draft") }}</button><button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button><button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job sheet") }}</button></div></details>
                 </div>
               </div>
+              <div v-if="selectedOrder.status==='accepted' && selectedOrder.payment_status==='deposit_received'" class="actions"><label>{{ tx('供应商参考号','Supplier reference') }}<input v-model="supplierRef[selectedOrder.id]" /></label><button type="button" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx('记录供应商下单','Record supplier order') }}</button></div>
 
 </div><div v-show="detailSection === 'adjustment'">
               <h3>{{ tx('本单计价依据','Pricing applied to this order') }}</h3><p v-for="version in [...new Set(selectedOrder.lines.map(l=>l.rule_version).filter(Boolean))]" :key="version"><RouterLink :to="{path:'/crm/pricing',query:{version}}">{{ tx('定价版本','Pricing version') }} {{ version?.slice(0,12) }}</RouterLink></p><p v-if="selectedOrder.status !== 'pending_review'">{{ tx('审核后价格已冻结','Prices frozen after acceptance') }}</p>
@@ -887,6 +958,7 @@ async function loadOrderProviders(orderId: string) {
                 <label>{{ tx("调整说明", "Adjustment note") }}<input v-model="adjustNote[selectedOrder.id]" /></label>
                 <button type="button" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存员工调整", "Save adjustment") }}</button>
               </div>
+              <div v-if="selectedOrder.status==='pending_review'" class="actions"><button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx('确认接收并生成定金草稿','Accept review and create deposit draft') }}</button></div>
 
 </div><div v-show="detailSection === 'invoices'">              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
                 <h3>{{ tx("发票", "Invoices") }}</h3>
@@ -898,7 +970,7 @@ async function loadOrderProviders(orderId: string) {
                   </template>
                 </div>
               </div>
-<p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><div class="invoice-actions"><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选的本单发票','Send selected order invoices') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div></div>
+<div v-if="selectedOrder.status!=='pending_review' && selectedOrder.payment_status==='deposit_unpaid'" class="actions"><button type="button" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx('核实到账后记录定金已收','Record deposit after confirming receipt') }}</button></div><p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><div class="invoice-actions"><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选的本单发票','Send selected order invoices') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div></div>
               <div v-show="detailSection === 'history'"><h3>{{ tx('操作记录','Activity') }}</h3><p v-for="(item,index) in selectedOrder.history || []" :key="index">{{ item.created_at }} · {{ item.action }}<span v-if="item.template_id"> · {{ tx('导出模板','Export template') }} #{{ item.template_id }} · {{ item.template_revision ? 'v'+item.template_revision : tx('历史版本未标记','Historical revision unspecified') }}</span></p></div>
             </article>
           </section>
@@ -1245,6 +1317,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 @media(max-width:600px) {
   .mobile-project-picker { display: grid; gap: 10px; }
   .order-list:not(.mobile-expanded) .order-scroll, .order-list:not(.mobile-expanded) .list-pagination { display: none; }
+  .order-list:not(.mobile-expanded) .filter-row { display: none; }
   .order-list .filter-row { margin: 0; }
   .desk .mobile-project-picker button { justify-self: start; font-size: var(--fs-meta); line-height: var(--lh-meta); padding: 11px 10px; min-height: 44px; font-weight: var(--fw-body); }
 }
@@ -1267,4 +1340,5 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .order-pick>strong,.desk .order-pick>span,.desk .order-pick>small{display:block;width:100%;min-width:0;text-align:left}
 .desk .pick-mark{flex:0 0 44px;justify-content:center}
 .desk{--fs-body:14px;--fs-meta:13px;--fs-heading:14px;--fs-title:16px}.invoice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.invoice-actions a{min-height:44px;color:#17523a}.desk .invoice{padding:12px;margin:8px 0}.desk .invoice label{justify-content:flex-start;min-height:44px;gap:10px}.desk .invoice p{margin:4px 0}.desk .section-card h2{margin:0 0 12px}.desk .section-card h3{margin:16px 0 10px}.desk .detail-tabs{gap:6px}.desk .form-grid{gap:12px}.desk .form-grid button{justify-self:start}
+.next-action{background:#eef5ef;border:1px solid #c8ddcd;border-radius:8px;padding:12px 14px;margin:12px 0;display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}.next-action strong{font-size:14px}.next-action p{margin:0;flex:1 1 260px;line-height:1.5}.provider-advanced{align-self:center}.provider-advanced summary{cursor:pointer;min-height:44px;display:flex;align-items:center;color:#17523a}.provider-advanced button{margin-top:8px}
 </style>

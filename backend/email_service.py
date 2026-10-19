@@ -23,6 +23,8 @@ def configuration():
     if delivery_mode=='demo':
         ready=ready and bool(sandbox) and sender.casefold()==sandbox.casefold()
         sender=sandbox
+    elif delivery_mode=='live':
+        ready=ready and os.getenv('VERA_LIVE_EMAIL_APPROVED','').strip().lower()=='yes'
     elif delivery_mode!='live':ready=False
     return {'configured':ready,'sender':sender if ready else '',
             'mode':delivery_mode,'delivery_enabled':ready,'demo_recipient':sandbox},(host,port,mode,sender)

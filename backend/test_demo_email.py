@@ -16,6 +16,10 @@ with patch.dict(os.environ,{'VERA_EMAIL_MODE':'demo','SMTP_HOST':'smtp.example.i
         secure.assert_not_called()
 with patch.dict(os.environ,{},clear=True):
     assert configuration()[0]['mode']=='demo'
+with patch.dict(os.environ,{'VERA_EMAIL_MODE':'live','SMTP_HOST':'smtp.example.invalid','SMTP_FROM':'owner@example.invalid','VERA_LIVE_EMAIL_APPROVED':'no'}):
+    assert not configuration()[0]['configured']
+with patch.dict(os.environ,{'VERA_EMAIL_MODE':'live','SMTP_HOST':'smtp.example.invalid','SMTP_FROM':'owner@example.invalid','VERA_LIVE_EMAIL_APPROVED':'yes'}):
+    assert configuration()[0]['configured']
 for security in ('starttls','ssl'):
     env={'VERA_EMAIL_MODE':'demo','VERA_DEMO_EMAIL_ADDRESS':'owner@example.invalid','SMTP_FROM':'owner@example.invalid','SMTP_HOST':'smtp.example.invalid','SMTP_SECURITY':security}
     with patch.dict(os.environ,env),patch('email_service.smtplib.SMTP') as smtp,patch('email_service.smtplib.SMTP_SSL') as secure:
@@ -29,4 +33,4 @@ for security in ('starttls','ssl'):
         assert 'customer@example.invalid' not in str(message)
     with patch.dict(os.environ,{**env,'SMTP_FROM':'different@example.invalid'}):
         assert not configuration()[0]['configured']
-print('PASS demo defaults blocked; configured STARTTLS/SSL force identical sandbox From/To; mismatched sender refused')
+print('PASS demo defaults blocked; configured STARTTLS/SSL force identical sandbox From/To; mismatched sender refused; live requires second approval flag')

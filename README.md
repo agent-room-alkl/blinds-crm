@@ -25,6 +25,7 @@ New installation: `python backend/init_database.py`. Existing installation: `pyt
 Retired Support/History tables are not created by the app. Remove existing copies using `backend/cleanup_legacy.py`: default is a count-only dry run; `--apply --backup <private-new-file.json>` archives retired rows and drops the fixed legacy table set plus unlinked legacy customers. Current products, users, sessions, portal customers and operations are verified unchanged. Keep the archive private and take a provider snapshot for full rollback. Cleanup is never a cold-start action. No live database has been cleaned or deployed by preparing this PR.
 
 See [deployment](DEPLOYMENT.md), [API](backend/OPERATIONS.md) and [Excel automation](docs/CRM-excel-automation.zh-CN.md). Earlier source-review documents describe their original stage; this README and active API describe current behavior.
+The shortened customer and staff click paths are recorded in [workflow simplification](docs/WORKFLOW_SIMPLIFICATION.md).
 
 ## Current shared data
 

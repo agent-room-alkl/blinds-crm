@@ -47,6 +47,14 @@ const STEPS = [
   { num: 4, label_zh: "核对并提交", label_en: "Review" },
 ];
 
+function safeStep(requested:number) {
+  if (requested < 1 || requested > 4) return 1;
+  if (requested > 1 && draft.default_series === null) return 1;
+  if (requested > 2 && !draft.windows.length) return 2;
+  if (requested > 3 && !draft.windows.every(w=>w.configured)) return 3;
+  return requested;
+}
+
 async function loadCatalog() {
   try {
     const [result, account] = await Promise.all([
@@ -69,9 +77,7 @@ async function loadCatalog() {
     }
     // Sync step from URL query param
     const urlStep = parseInt(String(route.query.step || "1"));
-    if (urlStep >= 1 && urlStep <= 4) {
-      step.value = urlStep;
-    }
+    step.value = safeStep(urlStep);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   }
@@ -80,9 +86,7 @@ async function loadCatalog() {
 // Watch route changes to update step
 watch(() => route.query.step, (newStep) => {
   const num = parseInt(String(newStep || "1"));
-  if (num >= 1 && num <= 4) {
-    step.value = num;
-  }
+  step.value = safeStep(num);
 });
 
 // Watch step changes to update URL
@@ -120,6 +124,15 @@ function nextStep() {
   if (step.value < 4 && canProgress(step.value)) {
     router.push({ query: { step: String(step.value + 1) } });
   }
+}
+
+function startFirstWindow() {
+  if (draft.default_series === null) return;
+  if (!draft.windows.length) {
+    draft.windows.push({ id: crypto.randomUUID(), window_name: '', product_id: draft.default_series,
+      width_mm: '', height_mm: '', quantity: 1, panel_count: 1, options: {}, configured: false });
+  }
+  router.push({ query: { ...route.query, step: '3' } });
 }
 
 function prevStep() {
@@ -185,7 +198,7 @@ if (portalSession.token) {
     </div>
 
     <div class="wizard-body">
-      <SeriesCards v-if="step === 1" v-model="draft.default_series" :catalog="catalog" @next="nextStep" />
+      <SeriesCards v-if="step === 1" v-model="draft.default_series" :catalog="catalog" @next="startFirstWindow" />
       <WindowList v-else-if="step === 2" v-model="draft.windows" :catalog="catalog" :default-series="draft.default_series" @next="nextStep" @prev="prevStep" />
       <WindowConfig v-else-if="step === 3" v-model="draft.windows" :catalog="catalog" @next="nextStep" @prev="prevStep" />
       <OrderReview
