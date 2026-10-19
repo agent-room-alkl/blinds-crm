@@ -326,4 +326,5 @@ button.secondary:hover {
 
 .review-step>.step-intro>p{display:none}.review-step>.step-intro h2{margin:0}.review-step>.step-intro{margin-bottom:10px}.window-summary{gap:4px}
 .step-actions{margin-top:0}
+.review-sections{margin-bottom:8px}
 </style>
