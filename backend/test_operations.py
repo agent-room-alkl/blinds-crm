@@ -237,6 +237,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert ws_a['F1'].value=='arrived','Template A col F = arrived'
     assert ws_a['G1'].value is None,'Template A has only 6 columns'
     assert ws_a['A2'].value is not None,'Data row exists'
+    assert ws_a['A2'].value==next(o for o in staff.get('/api/operations/orders').json() if o['id']==oid1)['order_number']
+    assert len(ws_a['A2'].value)<=16
     print('✓ Provider A export: AlphaOrders sheet, 6 columns (order_id, window_name, width_mm, height_mm, quantity, arrived), data validated')
     
     # Export order 2 with Template B: validate BetaProduction sheet with 8 DIFFERENT columns
@@ -277,6 +279,8 @@ with tempfile.TemporaryDirectory() as folder:
     assert resp.status_code==200,'Basic fallback with flag should work'
     assert 'BASIC-NOT-VERIFIED' in resp.headers['content-disposition'],'Filename must indicate BASIC-NOT-VERIFIED'
     wb_basic=openpyxl.load_workbook(io.BytesIO(resp.content))
+    number3=next(o for o in staff.get('/api/operations/orders').json() if o['id']==oid3)['order_number']
+    assert number3 in wb_basic.active['B2'].value and oid3 not in wb_basic.active['B2'].value
     assert 'Project' in wb_basic.sheetnames,'Basic fallback uses Project sheet (different from both custom templates)'
     print('✓ Basic fallback: BASIC-NOT-VERIFIED filename, Project sheet (generic, not supplier-specific)')
     
@@ -293,7 +297,7 @@ with tempfile.TemporaryDirectory() as folder:
     sheet=openpyxl.load_workbook(io.BytesIO(response.content)).active
     assert sheet.title=='A & "B"'
     assert sheet['A1'].value is None and sheet['C1'].value=='order_id' and sheet['Z1'].value=='quantity' and sheet['AA1'].value=='window_name'
-    assert sheet['C2'].value==oid1 and isinstance(sheet['Z2'].value,int)
+    assert sheet['C2'].value==next(o for o in staff.get('/api/operations/orders').json() if o['id']==oid1)['order_number'] and isinstance(sheet['Z2'].value,int)
     print('PASS sparse C/Z/AA placement, numeric cells, XML names, invalid/duplicate/out-of-range columns')
 
     # T-11: Test provisional Ashwood/Deluxe pricing

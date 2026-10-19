@@ -10,6 +10,8 @@ Dataset: 19 unique customer companies and contacts from the supplied workbook In
 
 Readable order numbers use a shared database counter (V0000001 onward, maximum16 characters), allocated under the existing transaction lock. The one-time backfill assigned numbers to eight existing orders, including the subsequently submitted customer test order. It preserves internal IDs, idempotency keys, invoices and fulfilment references. Re-running backend/backfill_order_numbers.py is a dry run; --apply fills only missing numbers.
 
+Supplier workbook order_id columns now contain the readable business number; new mappings may use the explicit order_number field. Basic production/job sheets and downloaded filenames use that number too. API order_id/order_ids and database references continue to use the internal ID. This changes the displayed workbook reference, not the API identifier contract. Batch status messages show the same readable number.
+
 The workbook identifies Shutter Studio Ltd and VCG Group Ltd as payment/quotation issuers. It does not establish either as a factory supplier. They appear as two inactive candidates with that limitation in their notes. No confirmed manufacturer identity was invented.
 
 Catalogue is exactly VERA Eco, Classic, Natural, Prime and Deluxe. The latest owner instruction revokes the earlier login-only Aluminium exception. Import creates only website-series product rows; remaining workbook pricing rules stay in the private manifest for traceability. Deluxe remains explicitly provisional at the previously authorized placeholder rate until a commercial rule is supplied. Startup does not recreate discarded sample products. Customer drafts are scoped by customer id and reject obsolete product ids.

@@ -1056,7 +1056,7 @@ def register(app, s):
             for line in d['lines']:
                 row_data={}
                 for field,col_letter in mappings.items():
-                    if field=='order_id': row_data[field]=d['id']
+                    if field in ('order_id','order_number'): row_data[field]=d.get('order_number',d['id'])
                     elif field=='project_name': row_data[field]=d['project_name']
                     elif field=='company': row_data[field]=d['company']
                     elif field=='contact_name': row_data[field]=d['contact_name']
@@ -1418,7 +1418,7 @@ def register(app, s):
             # Validate column mappings
             if not body.column_mappings:
                 raise HTTPException(422,'Column mappings cannot be empty')
-            valid_fields={'order_id','project_name','company','contact_name','company_address','site_address','phone','email',
+            valid_fields={'order_id','order_number','project_name','company','contact_name','company_address','site_address','phone','email',
                          'window_name','product_id','width_mm','height_mm','quantity','panel_count','options','arrived','delivered'}
             for field in body.column_mappings:
                 if field not in valid_fields:

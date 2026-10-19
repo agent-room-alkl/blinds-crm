@@ -145,7 +145,7 @@ const mappingField = ref("");
 const mappingColumn = ref("");
 const orderProviderForm = reactive<Record<string, { provider_id: number; template_id: number }>>({});
 const activeSection = computed(() => (({pricing:'pricing',providers:'providers',finance:'settlement'} as Record<string,string>)[props.workspace] || 'operations'));
-const validFields = ["order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
+const validFields = ["order_number", "order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
 
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
 const listPage = ref(0);
@@ -211,6 +211,8 @@ async function load() {
     }
   }
 }
+
+function orderLabel(id:string) { return orders.value.find(o=>o.id===id)?.order_number || id.slice(-12); }
 
 function orderStatus(value: string) {
   const labels: Record<string, [string, string]> = {
@@ -294,7 +296,7 @@ function transitSelected() {
     });
     operationKeys.delete(signature);
     transitRows.value = result.results;
-    notice.value = result.results.map((row) => `${row.order_id}: ${row.status}${row.reason ? ` (${row.reason})` : ""}`).join("; ");
+    notice.value = result.results.map((row) => `${orderLabel(row.order_id)}: ${row.status}${row.reason ? ` (${row.reason})` : ""}`).join("; ");
   });
 }
 
@@ -349,7 +351,7 @@ async function arriveSelected() {
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   }
-  notice.value = arrivalRows.value.map((row) => `${row.order_id}: ${row.status} ${row.detail}`).join("; ");
+  notice.value = arrivalRows.value.map((row) => `${orderLabel(row.order_id)}: ${row.status} ${row.detail}`).join("; ");
   busy.value = false;
 }
 
@@ -565,7 +567,7 @@ async function downloadSheet(id: string, kind: "production-sheet" | "job-sheet")
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${kind}-draft-${id}.xlsx`;
+    link.download = `${kind}-draft-${orderLabel(id)}.xlsx`;
     link.click();
     URL.revokeObjectURL(url);
     notice.value = tx("已下载生产资料草稿。这还不是已验收的工厂收单格式。", "Downloaded a production draft. This is not a confirmed factory order format.");
