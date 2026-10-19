@@ -1,55 +1,213 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useI18n } from 'vue-i18n';
-defineProps<{demo:boolean;deliveryEnabled:boolean}>();
-const {locale}=useI18n();
-const tx=(zh:string,en:string)=>locale.value==='zh'?zh:en;
-const sections=computed(()=>[
-  {title:tx('1 · 客户与账号','1 · Customers & accounts'),path:'/crm/customers',steps:[
-    tx('在“客户资料”搜索并选择公司；资料、登录账号、订单、账款返利均属于同一个客户。','Search and select a company under Customers. Profile, portal account, orders and accounts belong to the same customer.'),
-    tx('管理员通过“新增客户并开通账号”创建公司和唯一门户账号。已有公司不要重复创建；邮箱缺失可待补，未知地址保留待补标记。','An admin creates a company and its single portal account together. Do not duplicate an existing company. Missing email/address details can remain marked incomplete.'),
-    tx('“登录账号”查看用户名；现有密码不显示。客户登录门户后，只能看本公司的订单和账款。','Portal account shows the username, never the existing password. Customer portal access is restricted to that company.') ]},
-  {title:tx('2 · 客户下单与价格','2 · Customer orders & pricing'),path:'/crm/projects',steps:[
-    tx('客户选系列后可直接配置第一扇窗；在配置页继续添加窗户，系统沿用系列和选项。窗户列表仍可用来批量查看与修改。Deluxe仍是暂定价格。','After choosing a series, configure the first window directly. Add further windows on the configuration page; series and options carry over. The window list remains available for review. Deluxe pricing remains provisional.'),
-    tx('尺寸单位为毫米；数量是同规格窗数量，扇数是每个窗的面板数。填完必填项并得到价格后进入下一扇。缺项会列明字段。','Dimensions are in millimetres. Quantity counts identical windows; panels are per window. Complete required fields and obtain a price before continuing. Missing fields are named.'),
-    tx('提交前核对订单名称、施工地址和每扇窗。提交后状态为待审核，尚未收款、未向供应商下单。','Check project name, site address and every window before submitting. A submitted order awaits review; no payment or supplier order is implied.') ]},
-  {title:tx('3 · 审核与定金','3 · Review & deposit'),path:'/crm/projects',steps:[
-    tx('选择订单后系统自动打开当前阶段，并显示建议下一步。待审核订单先在“计价与审核”核对价格版本和配置；有调整时保存说明。审核后价格冻结。','Selecting an order opens its current stage and shows the suggested next step. For a pending order, review price and configuration under Pricing & review; save any adjustment with a reason. Accepted prices are frozen.'),
-    tx('“确认接收”接受审核，并生成60%定金发票草稿（按既定规则向上取整到分）。这不代表定金已收，也不会直接发送发票邮件。','Accept review creates a 60% deposit invoice draft, rounded up to cents. It does not confirm receipt or automatically email the invoice.'),
-    tx('“定金已收”是独立的收款记录动作。演示中可走流程；正式业务必须先核实实际到账。系统不会扣款或转账。','Deposit received is a separate receipt record. The demo can exercise the workflow; real operations require verified funds. The system does not charge or transfer money.') ]},
-  {title:tx('4 · 供应商与采购导出','4 · Suppliers & purchasing'),path:'/crm/providers',steps:[
-    tx('“供应商”管理共享供应商及其专用Excel导出模板。当前由付款/报价抬头整理的候选方，不等于已经确认的工厂。','Suppliers manages shared suppliers and their Excel export templates. Candidates inferred from payment/quotation issuers are not confirmed manufacturers.'),
-    tx('订单会自动带出唯一已启用的供应商和其最新可用模板。到“供应商与导出”核对后点“下载供应商订单 Excel”，系统同时保存分配；收到供应商参考号后再记录下单。','An order preselects the sole active supplier and latest active template when available. Under Supplier & files, check them and download the Excel; the assignment is saved at the same time. Record the supplier order only after receiving its reference.'),
-    tx('导出模板修改要“基于此版创建新版本”，不覆盖旧版。基本模板和生产资料草稿未经工厂格式确认；导出不是发邮件。','Create a new export revision instead of overwriting an old one. Basic templates and production drafts are not factory-verified formats. Exporting downloads a file; it does not send email.') ]},
-  {title:tx('5 · 在途、到货与交付','5 · Transit, arrival & delivery'),path:'/crm/projects',steps:[
-    tx('订单列表勾选后出现批量工具条。批量标在途会逐单检查前置状态并返回结果。','Selecting orders reveals batch actions. Marking transit validates each order and reports its outcome.'),
-    tx('在“明细与履约”可一键填入全部未到或待交付数量；部分到货时直接填写本批实际数量再记录。到货不能超过订购，交付不能超过已到货。','In Lines & fulfilment, fill all outstanding arrivals or deliveries with one click, or enter actual quantities for a partial batch. Arrivals cannot exceed ordered quantities and deliveries cannot exceed arrivals.'),
-    tx('到货记录会生成通知记录；演示模式只允许发给管理员测试邮箱，服务未就绪时只记录未发送。部分到货不代表全部交付或可以直接开尾款。','Arrival creates a notification record. Demo mail can go only to the owner test mailbox; without mail service it is recorded as not sent. Partial arrival does not imply full delivery or balance-invoice eligibility.') ]},
-  {title:tx('6 · 发票、结算与返利','6 · Invoices, settlement & rebates'),path:'/crm/finance',steps:[
-    tx('订单页只显示本单发票，唯一草稿会自动勾选，发送仍需主动点击。跨订单结算、客户账本和返利在“账款与返利”；从订单进入会自动选中该公司，若只有一张符合条件的未结算订单也会自动勾选。','Order pages show their own invoices and preselect a sole draft; sending still needs a click. Cross-order settlement and rebates live under Accounts & rebates. Opening from an order selects its company and a sole eligible unsettled order.'),
-    tx('尾款草稿只接受同公司、同币种且已全部交付、定金已收的订单，并使用已保存的定金扣减。生成草稿、发送记录、确认收款是不同动作。','Balance drafts require fully delivered, deposit-received orders in one company and currency. Stored deposits are deducted. Draft creation, sending and receipt confirmation are distinct actions.'),
-    tx('返利只录入已确认的月度金额、来源订单和确认依据。查看已用/余额及抵扣记录；同一来源订单不能重复计算，未配置阶梯公式不会自动算返利。','Record confirmed monthly rebates with source orders and evidence. Track used/remaining amounts and allocations. Duplicate sources are blocked; no unconfirmed tier formula is calculated.') ]},
-  {title:tx('7 · 共享价表与历史追溯','7 · Shared pricing & history'),path:'/crm/pricing',steps:[
-    tx('“定价与模板”管理商业价格规则；“供应商”内的输出模板管理工作表与栏目格式，两者不要混用。','Pricing & templates manages commercial rules; supplier export templates manage worksheets and columns. They serve different purposes.'),
-    tx('价表版本显示引用订单和明确配置的适用供应商，点击短订单号可回到原单。启用新价表只影响后续计价，不改已审核订单。','Each pricing version lists actual order usage and explicitly configured supplier applicability. Click an order number to open it. Activation affects future pricing, not accepted orders.'),
-    tx('“操作记录”保存审核、采购和导出版本等事件。供应商停用后不能用于新操作；历史引用仍保留。','Activity retains review, purchasing and export-revision events. Inactive suppliers cannot be used for new operations; historical references remain.') ]},
-  {title:tx('8 · 产品、看板与系统设置','8 · Products, analytics & settings'),path:'/crm/products',steps:[
-    tx('产品目录按官网五个系列维护图片、名称与规格；修改展示资料不会改写已保存的订单价格。','Maintain images, names and specifications for the five website series. Catalogue edits do not rewrite saved order prices.'),
-    tx('分析看板目前明确标为示例数据，不能作为真实销售、收款或利润报告。','Analytics is currently labelled sample data and is not a real sales, receipts or profit report.'),
-    tx('系统设置由管理员管理内部用户和权限，并查看发件服务状态。演示邮件限定管理员本人收发；客户不会收到。','Admins manage staff access and view mail service status under Settings. Demo email is limited to the owner as sender and recipient; customers receive none.') ]},
+import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
+import { ClipboardCheck, Package, Percent, Receipt, ShoppingCart, Truck } from "lucide-vue-next";
+
+defineProps<{ demo: boolean; deliveryEnabled: boolean }>();
+const { locale } = useI18n();
+const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
+
+const steps = computed(() => [
+  {
+    icon: ShoppingCart,
+    name: tx("客户下单", "Customer order"),
+    hint: tx("门户配置并提交", "Configured in portal"),
+    path: "/crm/projects",
+    points: [
+      tx("客户在门户选系列，逐扇配置窗户（尺寸为毫米），价格随选项实时显示。", "The customer picks a series and configures each window (millimetres). The price updates as options change."),
+      tx("提交后订单状态是“待审核”：还没收款，也没向供应商下单。", "A submitted order is “awaiting review”: nothing is paid and nothing is ordered from the supplier yet."),
+    ],
+    note: tx("缺少必填项时页面会列出具体字段，补齐后才能进入下一扇窗。", "Missing required fields are listed by name; complete them to continue."),
+  },
+  {
+    icon: ClipboardCheck,
+    name: tx("审核与定金", "Review & deposit"),
+    hint: tx("确认接收 → 定金发票", "Accept → deposit invoice"),
+    path: "/crm/projects",
+    points: [
+      tx("选中订单，在“计价与审核”核对价格版本和配置（尺寸超限、扇数不对等技术问题在这里拦截）。", "Select the order and check price version and configuration under Pricing & review (out-of-spec sizes and wrong panel counts are caught here)."),
+      tx("点“确认接收”生成 60% 定金发票草稿（向上取整到分）。审核后价格冻结。", "Accepting creates a 60% deposit invoice draft, rounded up to the cent. Prices are frozen after review."),
+      tx("“定金已收”是单独的记录动作，核实到账后再点；发送发票也是单独一步。", "“Deposit received” is a separate record, clicked only after the money is confirmed; sending the invoice is another separate step."),
+    ],
+    note: tx("系统不会扣款或转账，只记录你确认的结果。", "The system never charges or transfers money; it only records what you confirm."),
+  },
+  {
+    icon: Truck,
+    name: tx("供应商下单", "Supplier order"),
+    hint: tx("导出 Excel · 记参考号", "Export Excel · log reference"),
+    path: "/crm/providers",
+    points: [
+      tx("到“供应商与导出”核对自动带出的供应商和模板，点“下载供应商订单 Excel”，分配同时被保存。", "Under Supplier & files, check the preselected supplier and template, then download the supplier Excel; the assignment is saved at the same time."),
+      tx("供应商回复订单号后，把它填进“供应商参考号”，再点“记录供应商下单”。", "When the supplier replies with an order number, enter it as the supplier reference and click Record supplier order."),
+    ],
+    note: tx("没有正式工厂模板时导出的只是通用草稿，需要人工核对；导出本身不会发邮件。", "Without a confirmed factory template the export is a generic draft to be checked by hand; exporting never sends email."),
+  },
+  {
+    icon: Package,
+    name: tx("在途·到货·交付", "Transit, arrival, delivery"),
+    hint: tx("按批次记录实际数量", "Record real batch quantities"),
+    path: "/crm/projects",
+    points: [
+      tx("供应商发货后，在订单列表勾选订单，批量标记“在途”。", "After the supplier ships, tick the orders in the list and mark them in transit in one action."),
+      tx("在“明细与履约”右侧填“本次到货/本次交付”的实际数量再记录；左边的“累计”是已记录总数，提交后右侧会清空。", "In Lines & fulfilment, enter the real “this batch” arrival or delivery quantity and record it. The cumulative columns on the left show what is already recorded; the inputs clear after submit."),
+      tx("到货会生成通知记录；到货不能超过订购，交付不能超过已到货。", "Arrival creates a notification record. Arrivals cannot exceed the order and deliveries cannot exceed arrivals."),
+    ],
+    note: tx("部分到货不等于已交付，也还不能开尾款。", "Partial arrival is not delivery and does not allow a balance invoice yet."),
+  },
+  {
+    icon: Receipt,
+    name: tx("尾款发票", "Balance invoice"),
+    hint: tx("合并多单 · 先出草稿", "Combine orders · draft first"),
+    path: "/crm/finance",
+    points: [
+      tx("在“账款与返利”勾选同一公司、同币种、已全部交付且定金已收的订单，点“生成尾款草稿”。", "Under Accounts & rebates, tick fully delivered, deposit-received orders of one company and currency, then click Create balance draft."),
+      tx("金额 = 订单总额 − 已存定金，再扣早于本月的已确认返利；“规则说明”按所选订单自动生成，可以修改。", "Amount = order total − stored deposit, then confirmed rebate balances from earlier months. The rule note is generated from the selected orders and can be edited."),
+      tx("草稿检查无误后再单独发送，收到款项后点“确认尾款收款”。", "Review the draft, send it as a separate step, and click Confirm balance receipt once the money has arrived."),
+    ],
+    note: tx("生成草稿不会发给客户。", "Creating the draft sends nothing to the customer."),
+  },
+  {
+    icon: Percent,
+    name: tx("返利", "Rebate"),
+    hint: tx("只录入已确认金额", "Confirmed amounts only"),
+    path: "/crm/finance",
+    points: [
+      tx("在“返利”页填年月、金额、来源订单和确认依据，记入后可在下个月的尾款里自动抵扣。", "On the Rebates tab enter the month, amount, source orders and evidence; it is then deducted automatically from later balance invoices."),
+      tx("同一来源订单不能重复计入；页面显示已用和余额。", "A source order cannot be counted twice; used and remaining amounts are shown."),
+    ],
+    note: tx("原始 Excel 里没有返利公式，所以系统不会自动算阶梯。需要的参数见 docs/REBATE-RULE-INPUTS.md。", "The source Excel has no rebate formula, so tiers are not calculated automatically. Required inputs are listed in docs/REBATE-RULE-INPUTS.md."),
+  },
 ]);
+
+const current = ref(0);
+const step = computed(() => steps.value[current.value]);
+const more = computed(() => [
+  { label: tx("客户资料", "Customers"), path: "/crm/customers" },
+  { label: tx("定价与模板", "Pricing & templates"), path: "/crm/pricing" },
+  { label: tx("产品目录", "Product catalogue"), path: "/crm/products" },
+  { label: tx("分析看板", "Dashboard"), path: "/crm/dashboard" },
+]);
+
+function move(delta: number) {
+  current.value = (current.value + delta + steps.value.length) % steps.value.length;
+  document.getElementById(`guide-step-${current.value}`)?.focus();
+}
 </script>
 
 <template>
   <section class="guide">
-    <header><h1>{{ tx('后台操作指南','CRM operating guide') }}</h1><p>{{ tx('按业务顺序使用；菜单中的资料与账本可以随时独立打开。','Follow the workflow below. Shared records and ledgers are also available independently from the menu.') }}</p></header>
-    <aside v-if="demo" class="guide-demo"><strong>{{ tx('当前为演示模式：客户不会收到邮件','Demo mode: customers receive no email') }}</strong><p>{{ deliveryEnabled ? tx('发件服务就绪时，演示邮件只从管理员测试邮箱发给同一邮箱。确认接收仍只产生发票草稿；发送是独立操作。','When mail is ready, demo messages go from the owner test mailbox to that same mailbox only. Accepting review still creates a draft; sending is separate.') : tx('发件服务尚未就绪。模拟发送与到货通知只保存“演示记录 · 未发送”，不会连接邮件服务器。确认接收只产生发票草稿。','Mail delivery is not ready. Simulated sends and arrival notifications are recorded as “Demo recorded · not sent” without contacting a mail server. Accepting review creates an invoice draft.') }}</p></aside>
-    <nav aria-label="Guide contents"><a v-for="(section,index) in sections" :key="section.title" :href="'#guide-'+index">{{ section.title }}</a></nav>
-    <article v-for="(section,index) in sections" :key="section.title" :id="'guide-'+index"><h2>{{ section.title }}</h2><ol><li v-for="step in section.steps" :key="step">{{ step }}</li></ol><RouterLink :to="section.path">{{ tx('打开对应模块','Open this workspace') }} →</RouterLink></article>
-    <article><h2>{{ tx('常见问题','Common questions') }}</h2><dl><dt>{{ tx('下一步没有进入？','Cannot continue?') }}</dt><dd>{{ tx('先看缺项提示和价格预览；必填配置、有效尺寸和价格都需要完成。','Check missing fields and the price preview. Required options, valid dimensions and a price must be ready.') }}</dd><dt>{{ tx('操作被拒绝？','An action was refused?') }}</dt><dd>{{ tx('核对订单状态、定金、供应商启用状态和本批数量。不要反复提交来绕过条件。','Check order state, deposit, supplier availability and batch quantities. Repeated submission does not bypass prerequisites.') }}</dd><dt>{{ tx('保存报错？','Save failed?') }}</dt><dd>{{ tx('保留已填内容，记录短订单号、所点按钮和错误提示后反馈；未显示成功前不要认为已经保存。','Keep entered values and report the readable order number, action and error. Treat it as saved only after success is shown.') }}</dd></dl></article>
+    <header>
+      <h1>{{ tx("后台操作指南", "CRM operating guide") }}</h1>
+      <p>{{ tx("按业务顺序走一遍：点流程图里的每一步，下面会说明具体怎么操作。", "Follow the workflow from left to right. Click a step to see exactly what to do.") }}</p>
+      <p v-if="demo" class="demo-note">
+        {{ tx("演示模式：客户不会收到邮件。", "Demo mode: customers receive no email.") }}
+        {{ deliveryEnabled ? tx("演示邮件只会发到管理员测试邮箱。", "Demo mail goes only to the owner test mailbox.") : tx("发信服务未就绪，发送只记录“未发送”。", "Mail service is not ready; sends are only recorded as not sent.") }}
+      </p>
+    </header>
+
+    <ol class="flow" :aria-label="tx('业务流程', 'Business workflow')">
+      <li v-for="(item, index) in steps" :key="item.name" :class="{ done: index < current, active: index === current }">
+        <button
+          :id="`guide-step-${index}`"
+          type="button"
+          :aria-pressed="index === current"
+          :aria-controls="'guide-detail'"
+          @click="current = index"
+          @keydown.right.prevent="move(1)"
+          @keydown.left.prevent="move(-1)"
+        >
+          <span class="badge"><component :is="item.icon" :size="22" aria-hidden="true" /></span>
+          <span class="num">{{ index + 1 }}</span>
+          <strong>{{ item.name }}</strong>
+          <small>{{ item.hint }}</small>
+        </button>
+      </li>
+    </ol>
+
+    <article id="guide-detail" class="detail" aria-live="polite">
+      <p class="eyebrow">{{ tx(`第 ${current + 1} 步 / 共 ${steps.length} 步`, `Step ${current + 1} of ${steps.length}`) }}</p>
+      <h2>{{ step.name }}</h2>
+      <ul>
+        <li v-for="point in step.points" :key="point">{{ point }}</li>
+      </ul>
+      <p class="note">{{ step.note }}</p>
+      <div class="actions">
+        <button type="button" class="ghost" :disabled="current === 0" @click="move(-1)">← {{ tx("上一步", "Previous") }}</button>
+        <RouterLink class="open" :to="step.path">{{ tx("打开对应模块", "Open this workspace") }} →</RouterLink>
+        <button type="button" class="ghost" :disabled="current === steps.length - 1" @click="move(1)">{{ tx("下一步", "Next") }} →</button>
+      </div>
+    </article>
+
+    <p class="more">
+      <span>{{ tx("其他模块：", "Also: ") }}</span>
+      <RouterLink v-for="item in more" :key="item.path" :to="item.path">{{ item.label }}</RouterLink>
+    </p>
+
+    <details class="faq">
+      <summary>{{ tx("常见问题", "Common questions") }}</summary>
+      <dl>
+        <dt>{{ tx("下一步没有进入？", "Cannot continue?") }}</dt>
+        <dd>{{ tx("先看缺项提示和价格预览；必填配置、有效尺寸和价格都要完成。", "Check the missing-field list and the price preview; required options, valid sizes and a price are needed.") }}</dd>
+        <dt>{{ tx("操作被拒绝？", "An action was refused?") }}</dt>
+        <dd>{{ tx("核对订单状态、定金、供应商是否启用和本批数量，不要反复提交。", "Check order state, deposit, supplier availability and batch quantities. Do not resubmit repeatedly.") }}</dd>
+        <dt>{{ tx("保存报错？", "Save failed?") }}</dt>
+        <dd>{{ tx("保留已填内容，记下订单号、按钮和错误提示再反馈；没看到成功提示就当作没保存。", "Keep what you entered and report the order number, button and message. Treat it as unsaved until success is shown.") }}</dd>
+      </dl>
+    </details>
   </section>
 </template>
 
 <style scoped>
-.guide{max-width:1100px;margin:0 auto;color:#203b30;font-size:14px;line-height:1.65}.guide h1{font-size:24px!important;line-height:1.3!important;margin:0 0 8px!important}.guide h2{font-size:18px;margin:0 0 12px}.guide p{margin:8px 0}.guide-demo,.guide article{background:white;border:1px solid #d4e1d8;border-radius:8px;padding:18px;margin-top:16px}.guide-demo{background:#edf6ef}.guide nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px;padding:12px 0}.guide a{color:#17523a;min-height:44px;text-decoration:underline}.guide li{padding:4px 0}.guide ol{padding-left:22px;margin:8px 0}.guide article{scroll-margin-top:16px}.guide dt{font-weight:600;margin-top:12px}.guide dd{margin:4px 0 8px}@media(max-width:700px){.guide nav{grid-template-columns:minmax(0,1fr)}.guide article,.guide-demo{padding:14px}}
+.guide { max-width: 1100px; margin: 0 auto; color: #203b30; font-size: 14px; line-height: 1.65; }
+.guide h1 { font-size: 24px !important; line-height: 1.3 !important; margin: 0 0 6px !important; }
+.guide header p { margin: 4px 0; color: #4d6256; }
+.demo-note { display: inline-block; margin-top: 8px !important; padding: 6px 12px; border-radius: 999px; background: #e6f1ea; color: #17523a !important; font-size: 13px; }
+
+.flow { list-style: none; margin: 22px 0 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
+.flow li { position: relative; padding: 0 6px; }
+.flow li:not(:last-child)::after { content: ""; position: absolute; top: 34px; left: calc(50% + 34px); right: calc(-50% + 34px); height: 2px; background: #cddbd1; }
+.flow li.done:not(:last-child)::after { background: #0f6e5c; }
+.flow button { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px 10px; background: transparent; border: 0; border-radius: 12px; color: inherit; cursor: pointer; text-align: center; min-height: 44px; }
+.flow button:hover .badge { border-color: #0f6e5c; }
+.flow button:focus-visible { outline: 3px solid #7fb7a3; outline-offset: 2px; }
+.badge { position: relative; z-index: 1; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; background: #fff; border: 2px solid #cddbd1; color: #4d6256; transition: all .15s; }
+.num { font-size: 11px; font-weight: 700; color: #7b8c81; letter-spacing: .06em; }
+.flow strong { font-size: 14px; line-height: 1.3; }
+.flow small { font-size: 12px; color: #64766b; line-height: 1.35; }
+.flow li.done .badge { background: #e6f1ea; border-color: #0f6e5c; color: #0f6e5c; }
+.flow li.active .badge { background: #0f6e5c; border-color: #0f6e5c; color: #fff; box-shadow: 0 0 0 6px rgba(15, 110, 92, .16); }
+.flow li.active strong { color: #0f6e5c; }
+
+.detail { margin-top: 14px; padding: 22px 24px; background: #fff; border: 1px solid #d4e1d8; border-radius: 14px; box-shadow: 0 8px 28px rgba(27, 36, 33, .06); }
+.eyebrow { margin: 0 0 2px; font-size: 12px; letter-spacing: .08em; color: #64766b; }
+.detail h2 { margin: 0 0 10px; font-size: 20px; }
+.detail ul { margin: 0; padding-left: 20px; }
+.detail li { padding: 4px 0; }
+.note { margin: 12px 0 0; padding: 10px 14px; border-left: 3px solid #0f6e5c; background: #f2f7f4; border-radius: 0 8px 8px 0; color: #34503f; }
+.actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.actions .open { display: inline-flex; align-items: center; min-height: 44px; padding: 0 20px; border-radius: 10px; background: #0f6e5c; color: #fff; text-decoration: none; font-weight: 600; }
+.actions .ghost { min-height: 44px; padding: 0 14px; background: transparent; border: 1px solid #cddbd1; border-radius: 10px; color: #203b30; cursor: pointer; }
+.actions .ghost:disabled { opacity: .4; cursor: default; }
+
+.more { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin: 16px 2px 0; color: #4d6256; }
+.more a { color: #17523a; min-height: 44px; display: inline-flex; align-items: center; text-decoration: underline; }
+.faq { margin-top: 8px; padding: 4px 18px; background: #fff; border: 1px solid #d4e1d8; border-radius: 12px; }
+.faq summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.faq dt { font-weight: 600; margin-top: 8px; }
+.faq dd { margin: 2px 0 8px; }
+
+@media (max-width: 800px) {
+  .flow { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .flow li { padding: 0; }
+  .flow li:not(:last-child)::after { top: 62px; bottom: -4px; left: 31px; right: auto; width: 2px; height: auto; }
+  .flow button { flex-direction: row; text-align: left; gap: 12px; padding: 6px 8px; }
+  .flow button strong, .flow button small { display: block; }
+  .flow button .num { display: none; }
+  .flow button .badge { flex: none; width: 48px; height: 48px; }
+  .flow button { display: grid; grid-template-columns: 48px minmax(0, 1fr); column-gap: 12px; align-items: center; justify-items: start; }
+  .flow button .badge { grid-row: 1 / span 2; }
+  .detail { padding: 16px; }
+  .actions { justify-content: center; }
+  .actions .open { order: -1; width: 100%; justify-content: center; }
+}
 </style>
