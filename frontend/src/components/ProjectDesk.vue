@@ -373,8 +373,13 @@ function batchLines(order: ProjectOrder, kind: "arrival" | "delivery") {
 }
 
 function fillRemaining(order:ProjectOrder,kind:'arrival'|'delivery') {
-  for(const line of order.lines) batch[`${order.id}:${line.id}:${kind}`]=
-    kind==='arrival' ? Math.max(0,line.quantity-line.arrived) : Math.max(0,line.arrived-line.delivered);
+  fulfilError.value='';
+  for(const line of order.lines) {
+    const key=`${order.id}:${line.id}:${kind}`;
+    const remaining=kind==='arrival' ? Math.max(0,line.quantity-line.arrived) : Math.max(0,line.arrived-line.delivered);
+    if(remaining>0) batch[key]=remaining;
+    else delete batch[key];
+  }
 }
 
 function optionText(line: Line) {
@@ -430,8 +435,8 @@ function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
   const lines = batchLines(order, kind);
   if (!lines.length) {
     fulfilError.value = kind === 'arrival'
-      ? tx('请先在“本批到货”填写这次实际收到的数量（至少 1），再记录到货。', 'Enter the quantity actually received in “This arrival” (at least 1) before recording arrival.')
-      : tx('请先在“本批交付”填写这次实际交付的数量（至少 1），再记录交付。', 'Enter the quantity actually delivered in “This delivery” (at least 1) before recording delivery.');
+      ? tx('请先在“本次到货”填写这次实际收到的数量（至少 1），再记录到货。', 'Enter the quantity actually received in “This arrival” (at least 1) before recording arrival.')
+      : tx('请先在“本次交付”填写这次实际交付的数量（至少 1），再记录交付。', 'Enter the quantity actually delivered in “This delivery” (at least 1) before recording delivery.');
     return;
   }
   fulfilError.value = '';
@@ -445,7 +450,7 @@ function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
       lines,
     });
     operationKeys.delete(signature);
-    for (const line of order.lines) batch[`${order.id}:${line.id}:${kind}`] = 0;
+    for (const line of order.lines) delete batch[`${order.id}:${line.id}:${kind}`];
     const mailed = result.notification ? mailStatus(result.notification.status) : "";
     notice.value = kind === "arrival"
       ? tx(`已记录本批到货。通知状态：${mailed || "无"}。收款状态不会被覆盖。`, `This arrival batch is recorded. Notification status: ${mailed || "none"}. Payment status is left unchanged.`)
@@ -893,7 +898,7 @@ async function loadOrderProviders(orderId: string) {
 <div v-show="detailSection === 'fulfilment'">              <h3>{{ tx('产品明细','Product lines') }}</h3>
               <div class="actions"><button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'arrival')">{{ tx('填入全部未到数量','Fill all remaining arrivals') }}</button><button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'delivery')">{{ tx('填入全部待交付数量','Fill all ready deliveries') }}</button></div>
               <div class="table-scroll"><table>
-                <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "Arrival") }}</th><th>{{ tx("本批交付", "Delivery") }}</th></tr></thead>
+                <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("累计到货", "Total arrived") }}</th><th>{{ tx("累计交付", "Total delivered") }}</th><th>{{ tx("本次到货", "This arrival") }}</th><th>{{ tx("本次交付", "This delivery") }}</th></tr></thead>
                 <tbody>
                   <tr v-for="line in productPageLines" :key="line.id">
                     <td>
@@ -908,7 +913,7 @@ async function loadOrderProviders(orderId: string) {
                   </tr>
                 </tbody>
               </table></div>
-              <p class="fulfil-hint">{{ tx('本批到货/交付只填这次新增的实际数量；未发生就留空。','Enter only quantities actually received or delivered in this batch; leave the field empty if nothing happened.') }}</p>
+              <p class="fulfil-hint">{{ tx('累计列显示已记录数量；右侧输入框只填本次新增的实际数量。提交成功后会清空输入框，累计数量会更新。','Totals show previously recorded quantities. Enter only this batch’s new quantities on the right; a successful submission clears the input and updates the totals.') }}</p>
               <div v-if="productPageCount > 1" class="list-pagination product-pagination" :aria-label="tx('产品明细分页','Product line pages')"><button type="button" :disabled="productPage === 0" @click="productPage--" :aria-label="tx('上一页产品明细','Previous product lines')">← {{ tx('上页','Previous') }}</button><span>{{ tx('产品','Lines') }} {{ productPage * 4 + 1 }}–{{ Math.min((productPage + 1) * 4, selectedOrder.lines.length) }} / {{ selectedOrder.lines.length }} · {{ productPage + 1 }} / {{ productPageCount }}</span><button type="button" :disabled="productPage >= productPageCount - 1" @click="productPage++" :aria-label="tx('下一页产品明细','Next product lines')">{{ tx('下页','Next') }} →</button></div>
 
               <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
