@@ -33,6 +33,7 @@ const currentIndex = ref(0);
 const pricing = ref(false);
 const priceData = ref<any>(null);
 const priceError = ref("");
+const validationAttempted = ref(false);
 
 const currentWindow = computed(() => props.modelValue[currentIndex.value]);
 const currentProduct = computed(() => {
@@ -97,9 +98,26 @@ const structureFields = computed(() => (currentProduct.value?.configuration_sche
 const fittingChoices = computed(() => currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'fitting')?.choices || []);
 
 const availableColors = computed(() => {
+  const choices = currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'colour')?.choices;
+  if (choices?.length) return choices;
   const sourceCode = currentProduct.value?.source_code;
   if (!sourceCode || !(sourceCode in COLOR_MAP)) return [];
   return COLOR_MAP[sourceCode];
+});
+
+const missingFields = computed(() => {
+  const w = currentWindow.value;
+  if (!w) return [tx('至少一扇窗', 'At least one window')];
+  const missing: string[] = [];
+  if (!w.window_name.trim()) missing.push(tx('窗户名称', 'Window name'));
+  if (!(Number(w.width_mm) > 0)) missing.push(tx('宽（毫米）', 'Width (mm)'));
+  if (!(Number(w.height_mm) > 0)) missing.push(tx('高（毫米）', 'Height (mm)'));
+  if (!(w.quantity > 0)) missing.push(tx('数量', 'Quantity'));
+  if (!(w.panel_count > 0)) missing.push(tx('扇数', 'Panels'));
+  for (const field of currentProduct.value?.configuration_schema || []) {
+    if ((field.required && !w.options[field.key]) || (w.options[field.key] && field.choices?.length && !field.choices.includes(w.options[field.key]))) missing.push(locale.value === 'zh' ? field.label_zh : field.label_en);
+  }
+  return missing;
 });
 
 function updateWindow(updates: Partial<WindowDraft>) {
@@ -111,6 +129,10 @@ function updateWindow(updates: Partial<WindowDraft>) {
 function markConfigured() {
   if (!currentWindow.value) return;
   const w = currentWindow.value;
+  if (!availableColors.value.includes(w.options.colour) && availableColors.value.length === 1) {
+    updateWindow({ options: { ...w.options, colour: availableColors.value[0] } });
+    return;
+  }
   const isValid = Boolean(
     w.window_name.trim() &&
     w.product_id &&
@@ -120,18 +142,27 @@ function markConfigured() {
     w.panel_count > 0 &&
     w.options.colour &&
     w.options.louver_size &&
-    (currentProduct.value?.configuration_schema || []).every((f: any) => !f.required || Boolean(w.options[f.key]))
+    missingFields.value.length === 0
   );
 
   if (w.configured !== isValid) updateWindow({ configured: isValid });
 }
 
-watch(currentWindow, markConfigured, { deep: true });
+watch(currentWindow, markConfigured, { deep: true, immediate: true });
 
 function nextWindow() {
+  validationAttempted.value = true;
+  if (missingFields.value.length || pricing.value || !priceData.value || priceError.value) return;
+  validationAttempted.value = false;
   if (currentIndex.value < props.modelValue.length - 1) {
     currentIndex.value++;
   } else {
+    const incomplete = props.modelValue.findIndex(w => !w.configured);
+    if (incomplete >= 0) {
+      currentIndex.value = incomplete;
+      validationAttempted.value = true;
+      return;
+    }
     emit("next");
   }
 }
@@ -150,6 +181,9 @@ watch(
   currentWindow,
   async () => {
     if (!currentWindow.value || !currentWindow.value.configured) {
+      ++priceTicket;
+      pricing.value = false;
+      priceError.value = "";
       priceData.value = null;
       return;
     }
@@ -222,22 +256,22 @@ watch(
           <div class="row">
             <label>
               <span class="price-indicator">$ {{ tx("影响价格", "Affects Price") }}</span>
-              {{ tx("宽（毫米）", "Width (mm)") }} *
+              <span class="field-label">{{ tx("宽（毫米）", "Width (mm)") }} *</span>
               <input v-model="currentWindow.width_mm" type="number" inputmode="decimal" min="1" required />
             </label>
             <label>
               <span class="price-indicator">$ {{ tx("影响价格", "Affects Price") }}</span>
-              {{ tx("高（毫米）", "Height (mm)") }} *
+              <span class="field-label">{{ tx("高（毫米）", "Height (mm)") }} *</span>
               <input v-model="currentWindow.height_mm" type="number" inputmode="decimal" min="1" required />
             </label>
           </div>
           <div class="row">
             <label>
-              {{ tx("数量", "Quantity") }} *
+              <span class="field-label">{{ tx("数量", "Quantity") }} *</span>
               <input v-model.number="currentWindow.quantity" type="number" min="1" required />
             </label>
             <label>
-              {{ tx("扇数", "Panels") }} *
+              <span class="field-label">{{ tx("扇数", "Panels") }} *</span>
               <input v-model.number="currentWindow.panel_count" type="number" min="1" required />
             </label>
           </div>
@@ -318,24 +352,30 @@ watch(
             <small>{{ tx("价格为 0 可能表示配置超出范围或数据错误", "A price of 0 may indicate configuration out of range or data error") }}</small>
           </div>
           <ul class="price-details">
-            <li v-if="priceData.lines[0].pricing_status">{{ priceData.lines[0].pricing_status }}</li>
+            <li v-if="priceData.lines[0].pricing_status">{{ priceData.lines[0].pricing_status === 'provisional' ? tx('暂定价 · 待确认', 'Provisional · pending confirmation') : tx('已配置价格', 'Configured price') }}</li>
             <li v-if="priceData.subtotal">{{ tx("小计", "Subtotal") }}: {{ priceData.currency }} {{ priceData.subtotal }}</li>
             <li v-if="priceData.tax">GST: {{ priceData.currency }} {{ priceData.tax }}</li>
           </ul>
           <p class="price-note">{{ tx("仅此窗预览，最终价格在提交时计算。配置选项（颜色、框型、叶片等）不影响价格。", "Preview for this window only. Final price calculated on submission. Configuration options (colour, frame, louver, etc.) do not affect price.") }}</p>
         </div>
         <div v-else class="price-incomplete">
-          <p>{{ tx("待完整配置", "Incomplete configuration") }}</p>
+          <p>{{ tx("请完成", "Complete") }}：{{ missingFields.join(locale === 'zh' ? '、' : ', ') }}</p>
         </div>
       </div>
     </div>
 
+    <p v-if="validationAttempted && missingFields.length" class="validation-notice" role="alert">{{ tx('请先完成以下必填项', 'Complete these required fields first') }}：{{ missingFields.join(locale === 'zh' ? '、' : ', ') }}</p>
+    <p v-else-if="validationAttempted && priceError" class="validation-notice" role="alert">{{ priceError }}</p>
+    <p v-else-if="validationAttempted && !priceData" class="validation-notice" role="alert">{{ tx('正在获取价格，请稍后重试。', 'Waiting for a price. Please try again shortly.') }}</p>
     <div class="step-actions">
       <button type="button" class="secondary" @click="prevWindow">
         {{ currentIndex === 0 ? tx("上一步", "Previous") : tx("上一扇", "Previous Window") }}
       </button>
-      <button type="button" class="primary" :disabled="!currentWindow?.configured || pricing || !priceData || Boolean(priceError)" @click="nextWindow">
+      <button type="button" class="primary" :disabled="pricing" @click="nextWindow">
+        <span v-if="pricing">{{ tx('计算中...', 'Calculating...') }}</span>
+        <span v-else>
         {{ currentIndex === modelValue.length - 1 ? tx("完成，下一步", "Done, Next") : tx("保存并下一扇", "Save & Next") }}
+        </span>
       </button>
     </div>
   </div>
@@ -664,6 +704,12 @@ button.secondary:hover {
 @media(min-width:701px) and (max-width:1279px){.config-layout{grid-template-columns:minmax(0,1fr) 220px}.config-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
 
 
-.color-btn,.louver-btn{color:var(--ink,#1b2421)}.color-btn.selected,.louver-btn.selected{color:var(--cord,#0f6e5c)}
+.color-btn,.louver-btn{color:var(--ink,#1b2421)}.color-btn.selected,.louver-btn.selected{background:var(--cord,#0f6e5c);color:#fff}
+.form-group .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;gap:8px}
+.form-group .row>label{display:flex;flex-direction:column;gap:4px;margin:0;min-width:0}
+.field-label{line-height:20px}
+.form-group .row input{height:44px;min-height:44px;box-sizing:border-box;margin:0;flex:none}
+.validation-notice{padding:10px 12px;color:#8c2f2f;background:#fff4ed;border:1px solid #edc6b5;border-radius:4px}
+@media(min-width:1280px){.form-group:nth-child(1),.form-group:nth-child(3){align-self:stretch}.form-group:nth-child(3){align-content:start}}
 @media(min-width:1280px){.form-group:nth-child(3){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px}.form-group:nth-child(3)>h3{grid-column:1/-1}.config-form{grid-template-rows:auto auto;gap:10px}.form-group:nth-child(2){align-self:start}.form-group:nth-child(4){align-self:start}}
 </style>
