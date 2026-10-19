@@ -1338,7 +1338,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 
 /* Dense, consistent task workspaces. Controls retain a 44px target. */
 .desk .card{padding:16px}
-@media(min-width:1001px){.desk:not(.global-workspace) .workspace-grid{grid-template-columns:285px minmax(0,1fr);gap:12px}.desk .order-list{max-height:calc(100vh - 174px);overflow:hidden}.desk .order-scroll{overflow-y:auto;min-height:0}}
+@media(min-width:1001px){.desk:not(.global-workspace) .workspace-grid{grid-template-columns:285px minmax(0,1fr);gap:12px}.desk .order-list{max-height:none;overflow:visible}.desk .order-scroll{overflow-y:visible;min-height:0}}
 .desk .order-list{gap:6px}
 .desk .order-row{position:relative;display:block;min-width:0}
 .desk .pick-mark{position:absolute;z-index:2;left:2px;top:0;bottom:0;width:44px;min-width:44px;padding:0;display:flex;align-items:center;justify-content:center}
