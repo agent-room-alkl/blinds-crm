@@ -2,6 +2,7 @@
 $env:VERA_DB_BACKEND='postgres'
 $env:VERA_AUTO_INIT='0'
 $env:VERA_STORAGE_BACKEND='local'
+$env:VERA_EMAIL_MODE='demo'
 $env:SMTP_HOST=''
 $env:SMTP_FROM=''
 $env:SMTP_USERNAME=''

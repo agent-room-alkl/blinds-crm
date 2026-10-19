@@ -5,7 +5,7 @@ import { request } from "../crm-api";
 const props = defineProps<{ locale: string }>();
 const tx = (zh: string, en: string) => (props.locale === "zh" ? zh : en);
 const notice = ref("");
-const settings = ref<{ email?: { configured?: boolean; sender?: string }; storage?: string; database?: string } | null>(null);
+const settings = ref<{ email?: { configured?: boolean; sender?: string; mode?:string }; storage?: string; database?: string } | null>(null);
 
 onMounted(async () => {
   try {
@@ -24,8 +24,8 @@ onMounted(async () => {
     <div v-else-if="settings" class="ops-grid">
       <article>
         <span>{{ tx("发件", "Outgoing mail") }}</span>
-        <h3>{{ settings.email?.configured ? tx("已配置", "Configured") : tx("未配置", "Not configured") }}</h3>
-        <p>{{ settings.email?.sender || tx("没有可显示的发件地址", "No sender address to show") }}</p>
+        <h3>{{ settings.email?.mode==='demo' ? (settings.email?.configured ? tx('演示发件就绪 · 仅自己','Demo mail ready · owner only') : tx('演示发件未就绪','Demo mail not ready')) : settings.email?.configured ? tx("已配置", "Configured") : tx("未配置", "Not configured") }}</h3>
+        <p>{{ settings.email?.mode==='demo' ? tx('客户不会收到邮件；发件人与收件人均限定为管理员测试邮箱。','Customers receive no email; sender and recipient are limited to the owner test mailbox.') : settings.email?.sender || tx("没有可显示的发件地址", "No sender address to show") }}</p>
       </article>
       <article>
         <span>{{ tx("存储", "Storage") }}</span>

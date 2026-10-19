@@ -561,3 +561,11 @@ textarea { min-height: 96px; }
   .page h1 { max-width: none; }
   .tone { min-height: 72px; }
 }
+
+/* CRM uses compact native controls; hit areas belong to their labels. */
+.frame-work input[type="checkbox"] { appearance:auto; width:18px!important; height:18px!important; min-width:18px!important; max-width:18px!important; min-height:18px!important; padding:0!important; margin:0!important; flex:0 0 18px!important; align-self:center; accent-color:#17523a; }
+.frame-work label:has(>input[type="checkbox"]) { display:inline-flex; align-items:center; gap:10px; min-height:44px; }
+.frame-work .crm h1 { font-size:24px; line-height:1.3; letter-spacing:0; max-width:none; }
+.frame-work .crm h2 { line-height:1.4; }
+.frame-work .crm p { line-height:1.55; }
+.frame-work .crm button { min-height:44px!important; }

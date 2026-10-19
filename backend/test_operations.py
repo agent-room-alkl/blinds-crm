@@ -828,3 +828,26 @@ with tempfile.TemporaryDirectory() as folder:
     assert any(o['id']==oid1 and o['template_id']==tid_a for o in provider['orders'])
     print('PASS resource ownership: pricing usage/supplier applicability, frozen activation, immutable export revisions and historical export audit')
 
+    with patch.dict(os.environ,{'VERA_EMAIL_MODE':'demo','VERA_DEMO_EMAIL_ADDRESS':'owner@example.invalid','SMTP_HOST':'smtp.example.invalid','SMTP_FROM':'demo@example.invalid'}), patch('email_service.smtplib.SMTP') as smtp, patch('email_service.smtplib.SMTP_SSL') as secure:
+        runtime=staff.get('/api/operations/runtime').json()
+        assert runtime['email_mode']=='demo' and runtime['email_delivery_enabled'] is False
+        result=post(staff,f'operations/invoices/deposit:{oid3}/send')
+        assert result['status']=='demo_suppressed'
+        notifications=staff.get('/api/operations/notifications').json()
+        assert any(n.get('invoice_id')=='deposit:'+oid3 and n['status']=='demo_suppressed' for n in notifications)
+        smtp.assert_not_called()
+        secure.assert_not_called()
+    print('PASS demo invoice action records suppressed notification and never opens either SMTP transport')
+    with patch.dict(os.environ,{'VERA_EMAIL_MODE':'demo','VERA_DEMO_EMAIL_ADDRESS':'owner@example.invalid','SMTP_HOST':'smtp.example.invalid','SMTP_FROM':'owner@example.invalid','SMTP_SECURITY':'starttls'}),patch('email_service.smtplib.SMTP') as smtp:
+        with s.db() as c:
+            c.execute('INSERT INTO operations_records VALUES(?,?,?,?)',('notification:sandbox-test','notification',a['customer_id'],s.dump({'id':'notification:sandbox-test','customer_id':a['customer_id'],'recipient':'customer@example.invalid','subject':'Demo only','body':'Test','status':'pending'})))
+        client=smtp.return_value.__enter__.return_value
+        client.send_message.return_value={}
+        delivered=post(staff,'operations/notifications/notification:sandbox-test/retry')
+        assert delivered['status']=='demo_sent' and delivered['delivered_to']=='owner@example.invalid'
+        message=client.send_message.call_args.args[0]
+        assert message['From']==message['To']=='owner@example.invalid'
+        post(staff,'operations/notifications/notification:sandbox-test/retry')
+        assert client.send_message.call_count==1
+    print('PASS configured demo API routes only to sandbox owner; repeated action does not send twice')
+

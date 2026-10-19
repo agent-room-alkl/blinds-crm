@@ -94,7 +94,7 @@ interface ProjectOrder {
   invoices?: Invoice[];
 }
 
-const props = withDefaults(defineProps<{ admin: boolean; workspace?: string }>(), { workspace: 'projects' });
+const props = withDefaults(defineProps<{ admin: boolean; workspace?: string; emailEnabled?: boolean; emailMode?: string }>(), { workspace: 'projects',emailEnabled:false,emailMode:'demo' });
 const route = useRoute();
 const templateStatus = ref("");
 interface PricingVersion {id:string;version:string;active:boolean;source?:string;imported_at?:string;products:string[];provider_ids:number[];applicability_confirmed:boolean;orders:{id:string;order_number?:string;project_name:string}[]}
@@ -198,11 +198,12 @@ async function load() {
   for(const v of versions) applicability[v.id]=[...v.provider_ids];
   await refreshTemplate();
   rebateStatus.value = credits.calculation_status;
+  const assignmentRequests:Promise<void>[]=[];
   for (const order of props.workspace === 'projects' ? orders.value : []) {
     supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
     if (!orderProviderForm[order.id]) {
       orderProviderForm[order.id] = { provider_id: 0, template_id: 0 };
-      await loadOrderProviders(order.id);
+      assignmentRequests.push(loadOrderProviders(order.id));
     }
     for (const line of order.lines) {
       batch[`${order.id}:${line.id}:discount`] = Number(line.discount ?? 0);
@@ -210,6 +211,7 @@ async function load() {
       batch[`${order.id}:${line.id}:installation_surcharge`] = Number(line.installation_surcharge ?? 0);
     }
   }
+  await Promise.all(assignmentRequests);
 }
 
 function orderLabel(id:string) { return orders.value.find(o=>o.id===id)?.order_number || id.slice(-12); }
@@ -227,6 +229,9 @@ function orderStatus(value: string) {
 
 function mailStatus(status: string) {
   const labels: Record<string, [string, string]> = {
+    demo_suppressed: ['演示记录 · 未发送', 'Demo recorded · not sent'],
+    demo_sent: ['演示邮件已发给自己', 'Demo email sent to owner'],
+    draft: ['草稿', 'Draft'],
     pending: ["待发送", "Pending"],
     sending: ["发送中，需核对邮箱", "Sending; check the mailbox"],
     sent: ["已发出", "Sent"],
@@ -893,7 +898,7 @@ async function loadOrderProviders(orderId: string) {
                   </template>
                 </div>
               </div>
-<p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ tx('发送勾选的本单发票','Send selected order invoices') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div>
+<p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><div class="invoice-actions"><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选的本单发票','Send selected order invoices') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div></div>
               <div v-show="detailSection === 'history'"><h3>{{ tx('操作记录','Activity') }}</h3><p v-for="(item,index) in selectedOrder.history || []" :key="index">{{ item.created_at }} · {{ item.action }}<span v-if="item.template_id"> · {{ tx('导出模板','Export template') }} #{{ item.template_id }} · {{ item.template_revision ? 'v'+item.template_revision : tx('历史版本未标记','Historical revision unspecified') }}</span></p></div>
             </article>
           </section>
@@ -1006,7 +1011,7 @@ async function loadOrderProviders(orderId: string) {
             <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
             <h3>{{ tx('订单选择（用于同公司结算/返利来源）','Orders for settlement / rebate sources') }}</h3><p>{{ tx('已选','Selected') }} {{ picked.length }}</p>
             <div v-for="order in financeOrders" :key="order.id" class="finance-order"><label class="checkbox-label"><input type="checkbox" v-model="picked" :value="order.id" />{{ order.order_number }} · {{ order.company }} · {{ orderStatus(order.status) }}</label><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink></div><p v-if="!financeOrders.length">{{ tx('此客户暂无订单','No orders for this customer') }}</p>
-            <h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ customers.find(c=>c.customer_id===invoice.customer_id)?.company }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ tx('发送勾选发票','Send selected invoices') }}</button>
+            <h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ customers.find(c=>c.customer_id===invoice.customer_id)?.company }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button>
             <h2>{{ tx("同公司尾款", "Balance invoice") }}</h2>
             <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的订单生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed orders of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
             <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="3" /></label>
@@ -1261,4 +1266,5 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .order-pick{grid-template-columns:minmax(0,1fr);justify-content:stretch;justify-items:stretch;text-align:left;min-height:44px}
 .desk .order-pick>strong,.desk .order-pick>span,.desk .order-pick>small{display:block;width:100%;min-width:0;text-align:left}
 .desk .pick-mark{flex:0 0 44px;justify-content:center}
+.desk{--fs-body:14px;--fs-meta:13px;--fs-heading:14px;--fs-title:16px}.invoice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.invoice-actions a{min-height:44px;color:#17523a}.desk .invoice{padding:12px;margin:8px 0}.desk .invoice label{justify-content:flex-start;min-height:44px;gap:10px}.desk .invoice p{margin:4px 0}.desk .section-card h2{margin:0 0 12px}.desk .section-card h3{margin:16px 0 10px}.desk .detail-tabs{gap:6px}.desk .form-grid{gap:12px}.desk .form-grid button{justify-self:start}
 </style>

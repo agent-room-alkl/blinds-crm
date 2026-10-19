@@ -8,7 +8,8 @@ import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
-import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet } from "lucide-vue-next";
+import CrmGuide from "../components/CrmGuide.vue";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -22,6 +23,9 @@ const router = useRouter();
 const tab = computed(() => String(route.params.section || 'projects'));
 const credentials = reactive({ username: "", password: "" });
 const products = ref<ApiProduct[]>([]);
+const emailMode = ref('demo');
+const emailEnabled = ref(false);
+const demoEmailAddress = ref('');
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
 const accountMenu = ref<HTMLDetailsElement>();
@@ -48,6 +52,7 @@ const nav = computed(() => [
   { key: "providers", label: tx("供应商", "Suppliers") },
   { key: "pricing", label: tx("定价与模板", "Pricing & templates") },
   { key: "finance", label: tx("账款与返利", "Accounts & rebates") },
+  { key: "help", label: tx("操作指南", "Operating guide") },
   { key: "dashboard", label: tx("分析看板", "Dashboard") },
   { key: "products", label: tx("产品目录", "Product catalogue") },
 ]);
@@ -68,12 +73,16 @@ async function act(fn: () => Promise<void>) {
 }
 
 async function load() {
-  const [catalogue, who] = await Promise.all([
+  const [catalogue, who, runtime] = await Promise.all([
     request<ApiProduct[]>("admin/products"),
     request<{ username: string; name: string; role: string }>("auth/me"),
+    request<{email_mode:string;email_delivery_enabled:boolean;demo_email_address:string}>('operations/runtime'),
   ]);
   products.value = catalogue;
   me.value = who;
+  emailMode.value = runtime.email_mode;
+  emailEnabled.value = runtime.email_delivery_enabled;
+  demoEmailAddress.value = runtime.demo_email_address || '';
   if (who.role === "admin") users.value = await request("users");
 }
 
@@ -175,6 +184,7 @@ onMounted(() => {
         <Package :size="20" aria-hidden="true" />
         {{ tx("产品目录", "Product catalogue") }}
       </button>
+      <button type="button" :class="{current:tab==='help'}" @click="openTab('help')"><BookOpen :size="20" aria-hidden="true" />{{ tx('操作指南','Operating guide') }}</button>
       <button v-if="me.role === 'admin'" type="button" :class="{ current: tab === 'users' }" @click="openTab('users')">
         <Settings :size="20" aria-hidden="true" />
         {{ tx("系统设置", "Settings") }}
@@ -214,13 +224,15 @@ onMounted(() => {
           </div>
         </details>
       </header>
+      <p v-if="emailMode==='demo'" class="demo-notice" role="status">{{ emailEnabled ? tx('演示模式 · 邮件只发送到管理员测试邮箱，不发送给客户。','Demo mode · Email goes only to the owner test mailbox, never to customers.') : tx('演示模式 · 发件服务未就绪；当前只记录通知，不会投递邮件给客户。','Demo mode · Mail delivery is not ready. Notifications are recorded without delivery to customers.') }}<span v-if="demoEmailAddress"> {{ tx('测试邮箱：','Test mailbox: ') }}{{ demoEmailAddress }}</span></p>
       <form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword">
         <label>{{ tx("当前密码", "Current password") }}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label>
         <label>{{ tx("新密码", "New password") }}<input v-model="passwordForm.next" type="password" autocomplete="new-password" minlength="8" required /></label>
         <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
-      <ProjectDesk v-if="['projects','providers','pricing','finance'].includes(tab)" :key="tab" :workspace="tab" :admin="me.role === 'admin'" />
+      <ProjectDesk v-if="['projects','providers','pricing','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
+      <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
       <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" />
       <SampleDashboard v-if="tab === 'dashboard'" />
       <ProductManager v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
@@ -352,6 +364,8 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 @media(max-width:390px) { .crm.is-signed { padding: 12px; } .desk-rail button { font-size: var(--fs-meta); line-height: var(--lh-meta); min-height: 44px; font-weight: var(--fw-body); } }
 .desk-rail>button{justify-content:flex-start;text-align:left}
 .desk-rail>button>svg{flex:0 0 20px;width:20px;height:20px}
+.demo-notice{padding:10px 14px;margin:0 0 16px;border:1px solid #c6dace;background:#edf5ef;color:#244f37;border-radius:6px;font-size:14px;line-height:1.5}
+.crm{--fs-body:14px;--fs-meta:13px;--fs-heading:14px;--fs-title:16px}
 
 .crm .crm-bar { min-height: 44px; padding: 0 0 10px; margin-bottom: 16px; display: flex; align-items: center; flex-wrap: nowrap; }
 .crm .page-context { display: flex; align-items: center; gap: 9px; min-width: 0; margin-right: auto; flex-basis: auto; }

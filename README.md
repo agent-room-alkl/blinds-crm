@@ -6,7 +6,7 @@ Vue 3 + TypeScript and FastAPI customer portal/project operations. `/portal` is 
 
 Use `./dev.ps1 backend` and `./dev.ps1 frontend` in separate PowerShell terminals. The pair connects the frontend to port 8002. Keep unrelated processes running if a port is occupied.
 
-The current local and online app share the configured PostgreSQL `vera` schema. `backend/start_current.ps1` starts the local API on port 8002 with SMTP disabled for simulated workflows. There is no active SQLite application database. Connection values load from ignored `.env` files. See [current dataset and migration](docs/CURRENT_DATABASE.md).
+The current local and online app share the configured PostgreSQL `vera` schema. `backend/start_current.ps1` starts the local API on port 8002 in demo email mode. Without SMTP configuration it records notifications without delivery. When SMTP is configured, demo mode forces sender and recipient to the same private owner test address; customer addresses are never used. There is no active SQLite application database. Connection values load from ignored `.env` files. See [current dataset and migration](docs/CURRENT_DATABASE.md).
 
 ## Workflow
 
@@ -37,6 +37,7 @@ The owner-approved shared dataset has 19 workbook customer companies, five websi
 - `python backend/test_core_api.py`: auth/users/settings, retired routes 404 and clean fresh schema.
 - `python backend/test_legacy_cleanup.py`: isolated dry run/archive/removal and current-data preservation.
 - `python backend/test_operations.py`: company isolation, 60%, batching, notification/invoice retries, receipts and settlement/rebate dedupe.
+- `python backend/test_demo_email.py`: default delivery block, self-only sender/recipient in both SMTP modes, and mismatch refusal.
 - `python backend/test_excel_rules.py`: invented price fixtures, formula engines, catalogue scope, private matrix hiding, exports, profiles and consumption. Optional `--source <local.xlsm>` checks local reference rows without publishing rates.
 - `python backend/test_products.py`: catalogue/media permissions, validation, privacy and galleries.
 - `npm run build` in `frontend`: TypeScript and production build.

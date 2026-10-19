@@ -15,11 +15,25 @@ def configuration():
     ready=bool(host and sender and mode in ('starttls','ssl') and 0<port<65536)
     try:address(sender)
     except ValueError:ready=False
-    return {'configured':ready,'sender':sender if ready else ''},(host,port,mode,sender)
+    delivery_mode=os.getenv('VERA_EMAIL_MODE','demo').strip().lower()
+    if delivery_mode not in ('demo','live','disabled'):delivery_mode='disabled'
+    sandbox=os.getenv('VERA_DEMO_EMAIL_ADDRESS','').strip()
+    try:address(sandbox)
+    except ValueError:sandbox=''
+    if delivery_mode=='demo':
+        ready=ready and bool(sandbox) and sender.casefold()==sandbox.casefold()
+        sender=sandbox
+    elif delivery_mode!='live':ready=False
+    return {'configured':ready,'sender':sender if ready else '',
+            'mode':delivery_mode,'delivery_enabled':ready,'demo_recipient':sandbox},(host,port,mode,sender)
 
 def send_email(recipient,subject,body,attachments=()):
     state,(host,port,mode,sender)=configuration()
     if not state['configured']:raise RuntimeError('Email delivery is not configured')
+    if state['mode']=='demo':
+        recipient=state['demo_recipient']
+        sender=recipient
+    elif state['mode']!='live':raise RuntimeError('Email delivery is disabled')
     address(recipient)
     if '\r' in subject or '\n' in subject:raise ValueError('Invalid email subject')
     message=EmailMessage();message['From']=sender;message['To']=recipient;message['Subject']=subject

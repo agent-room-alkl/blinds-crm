@@ -564,7 +564,12 @@ def register(app, s):
             d = get(c, nid, 'notification')
             if d['status'] != 'pending':
                 return d
-            if not configuration()[0]['configured']:
+            mail_state=configuration()[0]
+            if mail_state.get('mode')=='demo' and not mail_state['configured']:
+                d.update(status='demo_suppressed',error='Demo mode: email was not sent')
+                save(c,d)
+                return d
+            if not mail_state['configured']:
                 d.update(status='not_configured', error='SMTP is not configured')
                 save(c,d)
                 return d
@@ -572,7 +577,9 @@ def register(app, s):
             save(c,d)
         try:
             mid = send_email(d['recipient'], d['subject'], d['body'])
-            d.update(status='sent', message_id=mid, sent_at=s.now())
+            demo=mail_state.get('mode')=='demo'
+            d.update(status='demo_sent' if demo else 'sent', message_id=mid, sent_at=s.now())
+            if demo:d['delivered_to']=mail_state['demo_recipient']
         except Exception:
             # SMTP may have accepted the message before the connection failed.
             d.update(status='delivery_unknown', error='Check the sending mailbox before confirming a retry')
@@ -606,6 +613,13 @@ def register(app, s):
     def customers(actor=Depends(s.auth)):
         with s.db() as c:
             return [json.loads(r['data']) for r in c.execute('SELECT data FROM portal_profiles')]
+
+    @app.get('/api/operations/runtime')
+    def runtime(actor=Depends(s.auth)):
+        from email_service import configuration
+        state=configuration()[0]
+        return {'email_mode':state['mode'],'email_delivery_enabled':state['delivery_enabled'] and state['configured'],
+                'demo_email_address':state['demo_recipient'] if state['mode']=='demo' else ''}
 
     @app.get('/api/operations/settings')
     def settings(actor=Depends(s.require_admin)):
