@@ -350,6 +350,8 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 .crm-bar button.secondary { font-size: var(--fs-body); line-height: var(--lh-body); min-height: 44px; padding: 8px 12px; font-weight: var(--fw-body); }
 @media(max-width:800px) { .crm.is-signed { padding: 16px; } .desk-rail { width: auto; padding: 12px; gap: 4px; } .crm-bar { gap: 8px; } }
 @media(max-width:390px) { .crm.is-signed { padding: 12px; } .desk-rail button { font-size: var(--fs-meta); line-height: var(--lh-meta); min-height: 44px; font-weight: var(--fw-body); } }
+.desk-rail>button{justify-content:flex-start;text-align:left}
+.desk-rail>button>svg{flex:0 0 20px;width:20px;height:20px}
 
 .crm .crm-bar { min-height: 44px; padding: 0 0 10px; margin-bottom: 16px; display: flex; align-items: center; flex-wrap: nowrap; }
 .crm .page-context { display: flex; align-items: center; gap: 9px; min-width: 0; margin-right: auto; flex-basis: auto; }
