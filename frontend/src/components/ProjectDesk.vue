@@ -843,9 +843,9 @@ async function loadOrderProviders(orderId: string) {
           </div>
         </div>
         <div v-if="pageCount > 1" class="list-pagination">
-          <button type="button" :disabled="listPage <= 0" @click="listPage--" aria-label="Previous projects">←</button>
-          <span>{{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }}</span>
-          <button type="button" :disabled="listPage >= pageCount - 1" @click="listPage++" aria-label="Next projects">→</button>
+          <button type="button" :disabled="listPage <= 0" @click="listPage--" :aria-label="tx('上一页订单','Previous order page')">← {{ tx('上页','Previous') }}</button>
+          <span>{{ tx('第','Page') }} {{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }} {{ tx('页','') }} · {{ Math.min(visibleOrders.length, Math.min(listPage,pageCount-1)*5+1) }}–{{ Math.min(visibleOrders.length,(Math.min(listPage,pageCount-1)+1)*5) }} / {{ visibleOrders.length }}</span>
+          <button type="button" :disabled="listPage >= pageCount - 1" @click="listPage++" :aria-label="tx('下一页订单','Next order page')">{{ tx('下页','Next') }} →</button>
         </div>
       </aside>
 
@@ -876,17 +876,16 @@ async function loadOrderProviders(orderId: string) {
                 <p v-if="selectedOrder.supplier_reference"><strong>{{ tx("供应商参考", "Supplier ref") }}:</strong> {{ selectedOrder.supplier_reference }}</p>
               </div>
               <div class="detail-navigation"><nav class="detail-tabs" aria-label="Project details">
-                <button type="button" :class="{active: detailSection === 'lines'}" @click="detailSection = 'lines'">{{ tx("明细", "Lines") }}</button>
-                <button type="button" :class="{active: detailSection === 'fulfilment'}" @click="detailSection = 'fulfilment'">{{ tx("履约", "Fulfilment") }}</button>
+                <button type="button" :class="{active: detailSection === 'fulfilment'}" @click="detailSection = 'fulfilment'">{{ tx("明细与履约", "Lines & fulfilment") }}</button>
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
                 <button type="button" :class="{active: detailSection === 'adjustment'}" @click="detailSection = 'adjustment'">{{ tx("计价与审核", "Pricing & review") }}</button>
                 <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
                 <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
               </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered'" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
-<div v-show="detailSection === 'lines' || detailSection === 'fulfilment'">              <h3>{{ detailSection === 'lines' ? tx('产品明细','Product lines') : tx('履约数量','Fulfilment quantities') }}</h3>
-              <div v-if="detailSection === 'fulfilment'" class="actions"><button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'arrival')">{{ tx('填入全部未到数量','Fill all remaining arrivals') }}</button><button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'delivery')">{{ tx('填入全部待交付数量','Fill all ready deliveries') }}</button></div>
+<div v-show="detailSection === 'fulfilment'">              <h3>{{ tx('产品明细','Product lines') }}</h3>
+              <div class="actions"><button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'arrival')">{{ tx('填入全部未到数量','Fill all remaining arrivals') }}</button><button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'delivery')">{{ tx('填入全部待交付数量','Fill all ready deliveries') }}</button></div>
               <div class="table-scroll"><table>
-                <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th v-if="detailSection === 'fulfilment'">{{ tx("本批到货", "Arrival") }}</th><th v-if="detailSection === 'fulfilment'">{{ tx("本批交付", "Delivery") }}</th></tr></thead>
+                <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "Arrival") }}</th><th>{{ tx("本批交付", "Delivery") }}</th></tr></thead>
                 <tbody>
                   <tr v-for="line in selectedOrder.lines" :key="line.id">
                     <td>
@@ -896,14 +895,14 @@ async function loadOrderProviders(orderId: string) {
                     <td>{{ line.quantity }}</td>
                     <td>{{ line.arrived }}</td>
                     <td>{{ line.delivered }}</td>
-                    <td v-if="detailSection === 'fulfilment'"><input v-model.number="batch[`${selectedOrder.id}:${line.id}:arrival`]" type="number" min="0" step="1" /></td>
-                    <td v-if="detailSection === 'fulfilment'"><input v-model.number="batch[`${selectedOrder.id}:${line.id}:delivery`]" type="number" min="0" step="1" /></td>
+                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:arrival`]" type="number" min="0" step="1" /></td>
+                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:delivery`]" type="number" min="0" step="1" /></td>
                   </tr>
                 </tbody>
               </table></div>
 
-              <h3 v-if="detailSection === 'fulfilment' && (selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered))">{{ tx("履约操作", "Fulfilment actions") }}</h3>
-              <div v-if="detailSection === 'fulfilment'" class="actions">
+              <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
+              <div class="actions">
                 <button v-if="selectedOrder.status==='supplier_ordered'" type="button" class="secondary" :disabled="busy" @click="transitOne(selectedOrder.id)">{{ tx('标为在途','Mark in transit') }}</button>
                 <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
                 <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
