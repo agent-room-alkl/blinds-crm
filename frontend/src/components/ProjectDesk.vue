@@ -168,6 +168,10 @@ const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.va
 const selectedId = ref(String(route.query.order || ''));
 const detailSection = ref("fulfilment");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
+const productPage = ref(0);
+const productPageCount = computed(() => Math.max(1, Math.ceil((selectedOrder.value?.lines.length || 0) / 4)));
+const productPageLines = computed(() => selectedOrder.value?.lines.slice(Math.min(productPage.value, productPageCount.value - 1) * 4, (Math.min(productPage.value, productPageCount.value - 1) + 1) * 4) || []);
+watch(() => selectedOrder.value?.id, () => { productPage.value = 0; });
 watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[]});
 watch(()=>selectedOrder.value?.invoices?.map(i=>`${i.id}:${i.status}`).join('|'),()=>{
   if(props.workspace!=='projects') return;
@@ -887,7 +891,7 @@ async function loadOrderProviders(orderId: string) {
               <div class="table-scroll"><table>
                 <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("已到", "Arrived") }}</th><th>{{ tx("已交付", "Delivered") }}</th><th>{{ tx("本批到货", "Arrival") }}</th><th>{{ tx("本批交付", "Delivery") }}</th></tr></thead>
                 <tbody>
-                  <tr v-for="line in selectedOrder.lines" :key="line.id">
+                  <tr v-for="line in productPageLines" :key="line.id">
                     <td>
                       <strong>{{ line.window_name }}</strong>
                       <small>{{ tx("系列", "Series") }} {{ line.product_id || "—" }} · {{ line.width_mm || "—" }}×{{ line.height_mm || "—" }} mm<span v-if="optionText(line)"> · {{ optionText(line) }}</span></small>
@@ -900,6 +904,7 @@ async function loadOrderProviders(orderId: string) {
                   </tr>
                 </tbody>
               </table></div>
+              <div v-if="productPageCount > 1" class="list-pagination product-pagination" :aria-label="tx('产品明细分页','Product line pages')"><button type="button" :disabled="productPage === 0" @click="productPage--" :aria-label="tx('上一页产品明细','Previous product lines')">← {{ tx('上页','Previous') }}</button><span>{{ tx('产品','Lines') }} {{ productPage * 4 + 1 }}–{{ Math.min((productPage + 1) * 4, selectedOrder.lines.length) }} / {{ selectedOrder.lines.length }} · {{ productPage + 1 }} / {{ productPageCount }}</span><button type="button" :disabled="productPage >= productPageCount - 1" @click="productPage++" :aria-label="tx('下一页产品明细','Next product lines')">{{ tx('下页','Next') }} →</button></div>
 
               <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
               <div class="actions">
@@ -940,7 +945,7 @@ async function loadOrderProviders(orderId: string) {
               <div v-if="selectedOrder.status==='accepted' && selectedOrder.payment_status==='deposit_received'" class="actions"><label>{{ tx('供应商参考号','Supplier reference') }}<input v-model="supplierRef[selectedOrder.id]" /></label><button type="button" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx('记录供应商下单','Record supplier order') }}</button></div>
 
 </div><div v-show="detailSection === 'adjustment'">
-              <h3>{{ tx('本单计价依据','Pricing applied to this order') }}</h3><p v-for="version in [...new Set(selectedOrder.lines.map(l=>l.rule_version).filter(Boolean))]" :key="version"><RouterLink :to="{path:'/crm/pricing',query:{version}}">{{ tx('定价版本','Pricing version') }} {{ version?.slice(0,12) }}</RouterLink></p><p v-if="selectedOrder.status !== 'pending_review'">{{ tx('审核后价格已冻结','Prices frozen after acceptance') }}</p>
+              <div class="pricing-basis"><h3>{{ tx('本单计价依据','Pricing applied to this order') }}</h3><p v-for="version in [...new Set(selectedOrder.lines.map(l=>l.rule_version).filter(Boolean))]" :key="version"><RouterLink :to="{path:'/crm/pricing',query:{version}}">{{ tx('定价版本','Pricing version') }} {{ version?.slice(0,12) }}</RouterLink></p><span v-if="selectedOrder.status !== 'pending_review'">{{ tx('审核后价格已冻结','Prices frozen after acceptance') }}</span></div>
               <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
                 <h3>{{ tx("价格调整", "Price adjustment") }}</h3>
                 <div class="table-scroll"><table>
@@ -1400,4 +1405,10 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 @media(max-width:1250px){.detail-navigation{display:block}.desk .detail-navigation .next-action{margin:2px 0 6px}}
 .order-identity{display:flex;align-items:center;gap:8px;margin:4px 0 0;flex-wrap:wrap;font-size:12px;line-height:1.3}
 .order-identity span{color:#53655d}
+.product-pagination{margin:0 0 8px;padding:6px 0;gap:8px}
+.product-pagination span{white-space:nowrap}
+.pricing-basis{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px;padding-bottom:8px;border-bottom:1px solid #e0e7e3}
+.desk .pricing-basis h3{margin:0;padding:0;border:0}
+.pricing-basis p{margin:0}
+.pricing-basis span{color:#53655d;font-size:12px}
 </style>
