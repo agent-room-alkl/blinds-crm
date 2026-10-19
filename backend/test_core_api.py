@@ -1,5 +1,6 @@
 """Isolated current staff API/auth checks; retired routes must be absent."""
 import os,tempfile
+from unittest.mock import patch
 with tempfile.TemporaryDirectory() as folder:
     os.environ['VERA_DB_BACKEND']='postgres' if os.getenv('VERA_TEST_SCHEMA') else 'sqlite'
     os.environ['VERA_DB']=os.path.join(folder,'core.db');os.environ['VERA_STORAGE_BACKEND']='local'
@@ -19,6 +20,9 @@ with tempfile.TemporaryDirectory() as folder:
     staff=TestClient(app)
     staff.headers['Authorization']='Bearer '+staff.post('/api/auth/login',json={'username':'staff','password':'test-password'}).json()['token']
     assert staff.get('/api/operations/settings').status_code==403
+    with patch.dict(os.environ,{'VERA_EMAIL_MODE':'demo','VERA_DEMO_EMAIL_ADDRESS':'owner@example.invalid'}):
+        assert client.get('/api/operations/runtime').json()['demo_email_address']=='owner@example.invalid'
+        assert staff.get('/api/operations/runtime').json()['demo_email_address']==''
     for path in ('inquiries','quotes','orders','customers','workbench','quote-drafts','communications/unassigned','dashboard','integrations/status'):
         assert client.get('/api/'+path).status_code==404,path
     assert client.post('/api/inquiries',json={}).status_code==404

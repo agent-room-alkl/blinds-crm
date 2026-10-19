@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
 import ProductManager from "../components/ProductManager.vue";
@@ -7,6 +8,8 @@ import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
+import CrmGuide from "../components/CrmGuide.vue";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen, Menu } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -15,17 +18,41 @@ const signed = ref(!!session.token);
 const busy = ref(false);
 const error = ref("");
 const message = ref("");
-const tab = ref("projects");
+const route = useRoute();
+const router = useRouter();
+const tab = computed(() => String(route.params.section || 'projects'));
 const credentials = reactive({ username: "", password: "" });
 const products = ref<ApiProduct[]>([]);
+const emailMode = ref('demo');
+const emailEnabled = ref(false);
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
+const mobileNavOpen = ref(false);
+const accountMenu = ref<HTMLDetailsElement>();
+function closeAccountMenu() { 
+  if (accountMenu.value) {
+    accountMenu.value.open = false;
+    const summary = accountMenu.value.querySelector('summary');
+    if (summary && document.activeElement && accountMenu.value.contains(document.activeElement)) {
+      summary.focus();
+    }
+  }
+}
+function dismissAccountMenu(event: PointerEvent) {
+  if (event.target instanceof Node && !accountMenu.value?.contains(event.target)) closeAccountMenu();
+}
+onMounted(() => document.addEventListener("pointerdown", dismissAccountMenu));
+onUnmounted(() => document.removeEventListener("pointerdown", dismissAccountMenu));
 const passwordForm = reactive({ current: "", next: "", confirm: "" });
 const users = ref<{ username: string; name: string; role: string; active: number }[]>([]);
 const newUser = reactive({ username: "", name: "", password: "", role: "staff" });
 const nav = computed(() => [
-  { key: "projects", label: tx("项目订单", "Project orders") },
+  { key: "projects", label: tx("订单", "Orders") },
   { key: "customers", label: tx("客户资料", "Customers") },
+  { key: "providers", label: tx("供应商", "Suppliers") },
+  { key: "pricing", label: tx("定价与模板", "Pricing & templates") },
+  { key: "finance", label: tx("账款与返利", "Accounts & rebates") },
+  { key: "help", label: tx("操作指南", "Operating guide") },
   { key: "dashboard", label: tx("分析看板", "Dashboard") },
   { key: "products", label: tx("产品目录", "Product catalogue") },
 ]);
@@ -46,12 +73,15 @@ async function act(fn: () => Promise<void>) {
 }
 
 async function load() {
-  const [catalogue, who] = await Promise.all([
+  const [catalogue, who, runtime] = await Promise.all([
     request<ApiProduct[]>("admin/products"),
     request<{ username: string; name: string; role: string }>("auth/me"),
+    request<{email_mode:string;email_delivery_enabled:boolean;demo_email_address:string}>('operations/runtime'),
   ]);
   products.value = catalogue;
   me.value = who;
+  emailMode.value = runtime.email_mode;
+  emailEnabled.value = runtime.email_delivery_enabled;
   if (who.role === "admin") users.value = await request("users");
 }
 
@@ -121,7 +151,8 @@ async function logout() {
 }
 
 function openTab(key: string) {
-  tab.value = key;
+  mobileNavOpen.value = false;
+  void router.push(`/crm/${key}`);
   window.scrollTo({ top: 0 });
 }
 
@@ -132,12 +163,31 @@ onMounted(() => {
 
 <template>
   <main class="page crm" :class="{ 'is-signed': signed }">
-    <aside v-if="signed" class="desk-rail">
+    <aside v-if="signed" class="desk-rail" :class="{'mobile-open':mobileNavOpen}">
       <div class="rail-brand">VERA</div>
-      <button v-for="item in nav" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
-        {{ item.label }}
+      <button type="button" class="rail-mobile-toggle" :aria-expanded="mobileNavOpen" @click="mobileNavOpen=!mobileNavOpen"><Menu :size="20" aria-hidden="true" />{{ tx('菜单','Menu') }} · {{ pageTitle }}</button>
+      <button type="button" :class="{ current: tab === 'projects' }" @click="openTab('projects')">
+        <FolderKanban :size="20" aria-hidden="true" />
+        {{ tx("订单", "Orders") }}
       </button>
+      <button type="button" :class="{ current: tab === 'customers' }" @click="openTab('customers')">
+        <Users :size="20" aria-hidden="true" />
+        {{ tx("客户资料", "Customers") }}
+      </button>
+      <button type="button" :class="{ current: tab === 'providers' }" @click="openTab('providers')"><Truck :size="20" aria-hidden="true" />{{ tx('供应商', 'Suppliers') }}</button>
+      <button type="button" :class="{ current: tab === 'pricing' }" @click="openTab('pricing')"><FileSpreadsheet :size="20" aria-hidden="true" />{{ tx('定价与模板', 'Pricing & templates') }}</button>
+      <button type="button" :class="{ current: tab === 'finance' }" @click="openTab('finance')"><Wallet :size="20" aria-hidden="true" />{{ tx('账款与返利', 'Accounts & rebates') }}</button>
+      <button type="button" :class="{ current: tab === 'dashboard' }" @click="openTab('dashboard')">
+        <BarChart3 :size="20" aria-hidden="true" />
+        {{ tx("分析看板", "Dashboard") }}
+      </button>
+      <button type="button" :class="{ current: tab === 'products' }" @click="openTab('products')">
+        <Package :size="20" aria-hidden="true" />
+        {{ tx("产品目录", "Product catalogue") }}
+      </button>
+      <button type="button" :class="{current:tab==='help'}" @click="openTab('help')"><BookOpen :size="20" aria-hidden="true" />{{ tx('操作指南','Operating guide') }}</button>
       <button v-if="me.role === 'admin'" type="button" :class="{ current: tab === 'users' }" @click="openTab('users')">
+        <Settings :size="20" aria-hidden="true" />
         {{ tx("系统设置", "Settings") }}
       </button>
       <div class="rail-bottom">
@@ -162,13 +212,18 @@ onMounted(() => {
 
     <template v-else>
       <header class="crm-bar">
-        <div class="page-context">
-          <span>VERA / CRM</span>
-          <h1>{{ pageTitle }}</h1>
-        </div>
-        <button type="button" class="secondary" @click="toggleLocale">{{ locale === "zh" ? "English" : "中文" }}</button>
-        <button type="button" class="secondary" @click="passwordOpen = !passwordOpen">{{ tx("修改密码", "Change password") }}</button>
-        <button type="button" class="secondary" @click="logout">{{ tx("退出", "Sign out") }}</button>
+        <nav class="page-context" :aria-label="tx('当前位置', 'Breadcrumb')">
+          <span>VERA</span><span aria-hidden="true">/</span><span>CRM</span><span aria-hidden="true">/</span><strong aria-current="page">{{ pageTitle }}</strong>
+        </nav>
+        <details ref="accountMenu" class="account-menu" @keydown.esc="closeAccountMenu">
+          <summary :aria-label="tx('账户菜单', 'Account menu')" :title="me.name"><span>{{ (me.name || 'V').slice(0, 1) }}</span></summary>
+          <div class="account-dropdown">
+            <div class="account-identity"><strong>{{ me.name }}</strong><small>{{ me.role === 'admin' ? tx('管理员', 'Admin') : tx('员工', 'Staff') }}</small></div>
+            <button type="button" @click="toggleLocale(); closeAccountMenu()">{{ locale === 'zh' ? 'English' : '中文' }}</button>
+            <button type="button" @click="passwordOpen = !passwordOpen; closeAccountMenu()">{{ tx('修改密码', 'Change password') }}</button>
+            <button type="button" @click="logout(); closeAccountMenu()">{{ tx('退出', 'Sign out') }}</button>
+          </div>
+        </details>
       </header>
       <form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword">
         <label>{{ tx("当前密码", "Current password") }}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label>
@@ -176,8 +231,9 @@ onMounted(() => {
         <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
-      <ProjectDesk v-if="tab === 'projects'" :admin="me.role === 'admin'" />
-      <PortalCustomers v-if="tab === 'customers'" />
+      <ProjectDesk v-if="['projects','providers','pricing','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
+      <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
+      <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" />
       <SampleDashboard v-if="tab === 'dashboard'" />
       <ProductManager v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
       <div v-if="tab === 'users' && me.role === 'admin'" class="settings-layout">
@@ -220,35 +276,62 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.crm { font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 32px 28px 48px; overflow-x: hidden; }
-.crm.is-signed { padding-left: 268px; }
-.desk-rail { position: fixed; inset: 0 auto 0 0; width: 236px; background: #1a2823; color: #e7eee9; padding: 28px 16px; display: flex; flex-direction: column; gap: 4px; }
-.rail-brand { font-size: 22px; letter-spacing: 0.16em; padding: 4px 12px 20px; }
-.desk-rail button { display: flex; align-items: center; min-height: 44px; border: 0; background: transparent; color: #e7eee9; padding: 10px 14px; text-align: left; font-size: 15px; border-radius: 6px; }
+.crm {
+  --fs-page-title: 20px; --lh-page-title: 1.35;
+  --fs-title: 15px; --lh-title: 1.5;
+  --fs-heading: 14px; --lh-heading: 1.5;
+  --fs-body: 13px; --lh-body: 1.55;
+  --fs-meta: 12px; --lh-meta: 1.5;
+  --fw-body: 400;
+  --fw-emphasis: 600;
+  font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); font-size: var(--fs-body); line-height: var(--lh-body); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow: visible;
+}
+.crm.is-signed { padding-left: 252px; }
+.desk-rail { position: fixed; inset: 0 auto 0 0; width: 228px; background: #1a2823; color: #e7eee9; padding: 24px 12px; display: flex; flex-direction: column; gap: 4px; }
+.rail-brand { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); letter-spacing: 0.16em; padding: 4px 12px 16px; }
+.crm h1, .crm h2, .crm h3, .crm h4, .crm h5, .crm h6 { font-weight: var(--fw-emphasis); }
+.desk-rail button { display: flex; align-items: center; gap: 10px; min-height: 44px; border: 0; background: transparent; color: #e7eee9; padding: 10px 12px; text-align: left; font-size: var(--fs-heading); line-height: var(--lh-heading); font-weight: var(--fw-body); border-radius: 6px; transition: background 0.2s; }
+.desk-rail button:hover { background: rgba(255,255,255,0.08); }
+.desk-rail button:focus-visible { outline: 2px solid #0f6e5c; outline-offset: 2px; }
 .desk-rail button.current { background: #0f6e5c; color: white; }
 .rail-bottom { margin-top: auto; display: flex; gap: 10px; align-items: center; padding: 16px 12px; border-top: 1px solid rgba(231, 238, 233, 0.16); }
-.user-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #8e9a94; color: #1a2823; font-size: 14px; }
-.user-meta strong { display: block; font-size: 14px; }
-.user-meta small { display: block; font-size: 12px; opacity: 0.75; margin-top: 2px; }
+.user-avatar { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: #8e9a94; color: #1a2823; font-size: var(--fs-heading); line-height: 1; }
+.user-meta strong { display: block; font-size: var(--fs-heading); line-height: var(--lh-heading); }
+.user-meta small { display: block; font-size: var(--fs-meta); line-height: var(--lh-meta); opacity: 0.75; margin-top: 2px; }
 .crm-bar { display: flex; align-items: flex-end; gap: 12px; min-height: 72px; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #e1e6df; }
 .page-context { margin-right: auto; }
-.page-context span { font-size: 12px; letter-spacing: 0.14em; color: #6d7c72; }
-.page-context h1 { font-size: 28px; line-height: 1.25; font-weight: 600; margin: 6px 0 0; }
-.crm-bar button, .login button, .password-form button, .user-form button { min-height: 40px; font-size: 14px; padding: 8px 14px; border-radius: 6px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; }
+.page-context span { font-size: var(--fs-meta); line-height: var(--lh-meta); letter-spacing: 0.14em; color: #5d6b64; }
+.page-context h1 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 6px 0 0; }
+.crm-bar button, .login button, .password-form button, .user-form button { min-height: 44px; font-size: var(--fs-body); line-height: var(--lh-body); padding: 8px 14px; border-radius: 6px; border: 1px solid #0f6e5c; background: #0f6e5c; color: white; font-weight: var(--fw-body); }
 .crm-bar button.secondary { background: white; color: #24342c; border-color: #d5ddd6; }
 .card, .login { background: white; border: 1px solid #e1e6df; border-radius: 8px; padding: 24px; }
 .login { max-width: 440px; margin: 48px auto; }
-.login h1 { font-size: 28px; margin: 0 0 8px; }
-.login p, .card p { font-size: 15px; line-height: 1.6; }
-.crm label { display: block; margin: 14px 0; font-size: 14px; }
-.crm input, .crm select { width: 100%; box-sizing: border-box; min-height: 40px; margin-top: 6px; padding: 8px 12px; font-size: 15px; border: 1px solid #d5ddd6; border-radius: 6px; }
+.login h1 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 0 0 8px; }
+.login p, .card p { font-size: var(--fs-body); line-height: var(--lh-body); }
+.crm label { display: block; margin: 14px 0; font-size: var(--fs-body); line-height: var(--lh-body); }
+.crm input, .crm select, .crm button { line-height: var(--lh-body); }
+.crm select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%2352615c' d='M4 6l4 4 4-4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.crm select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.crm option { line-height: var(--lh-body); }
+.crm input, .crm select { width: 100%; box-sizing: border-box; min-height: 44px; margin-top: 6px; padding: 8px 12px; font-size: var(--fs-body); border: 1px solid #d5ddd6; border-radius: 6px; }
 .password-form, .user-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 12px; align-items: end; margin-bottom: 16px; }
 .password-form label, .user-form label { margin: 0; }
 .settings-layout { display: grid; gap: 24px; }
-.card h2 { font-size: 20px; margin: 0 0 16px; }
+.card h2 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); margin: 0 0 16px; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1px solid #e1e6df; }
+th, td { text-align: left; font-size: var(--fs-body); line-height: var(--lh-body); padding: 12px 10px; border-bottom: 1px solid #e1e6df; }
+th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 .alert { padding: 12px 16px; background: #fae8e1; color: #842b16; }
 .success { padding: 12px 16px; background: #e5efdd; }
 @media (max-width: 800px) {
@@ -259,4 +342,47 @@ th, td { text-align: left; font-size: 14px; padding: 12px 10px; border-bottom: 1
   .crm-bar { flex-wrap: wrap; }
   .page-context { flex-basis: 100%; }
 }
+@media (max-width: 390px) {
+  .crm, .crm.is-signed { padding: 12px; }
+  .desk-rail { grid-template-columns: 1fr 1fr; gap: 2px; margin: -12px -12px 16px; }
+  .crm-bar { min-height: 60px; margin-bottom: 16px; }
+  .page-context h1 { font-size: var(--fs-title); line-height: var(--lh-title); }
+}
+
+.crm { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f3f6f4; }
+.crm :deep(*) { box-sizing: border-box; }
+.crm :deep(h1), .crm :deep(h2), .crm :deep(h3), .crm :deep(h4) { font-family: inherit; letter-spacing: -.015em; }
+.crm :deep(button), .crm :deep(input), .crm :deep(select), .crm :deep(textarea) { font-family: inherit; }
+.crm-bar { min-height: 64px; align-items: center; margin-bottom: 24px; }
+.page-context h1 { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); }
+.desk-rail { width: 220px; padding: 28px 14px; background: #19392d; box-sizing: border-box; }
+.crm.is-signed { padding-left: 248px; }
+.desk-rail button { font-size: var(--fs-heading); line-height: var(--lh-heading); padding: 10px 12px; border-radius: 8px; }
+.desk-rail button.current { background: #315844; }
+.crm-bar button.secondary { font-size: var(--fs-body); line-height: var(--lh-body); min-height: 44px; padding: 8px 12px; font-weight: var(--fw-body); }
+@media(max-width:800px) { .crm.is-signed { padding: 16px; } .desk-rail { width: auto; padding: 12px; gap: 4px; } .crm-bar { gap: 8px; } }
+@media(max-width:390px) { .crm.is-signed { padding: 12px; } .desk-rail button { font-size: var(--fs-meta); line-height: var(--lh-meta); min-height: 44px; font-weight: var(--fw-body); } }
+.desk-rail>button{justify-content:flex-start;text-align:left}
+.desk-rail>button>svg{flex:0 0 20px;width:20px;height:20px}
+.demo-notice{padding:8px 12px;margin:0 0 12px;border:1px solid #c6dace;background:#edf5ef;color:#244f37;border-radius:6px;font-size:13px;line-height:1.45}
+.crm{--fs-body:13px;--fs-meta:12px;--fs-heading:13px;--fs-title:15px}
+
+.crm .crm-bar { min-height: 44px; padding: 0 0 10px; margin-bottom: 16px; display: flex; align-items: center; flex-wrap: nowrap; }
+.crm .page-context { display: flex; align-items: center; gap: 9px; min-width: 0; margin-right: auto; flex-basis: auto; }
+.crm .page-context span { font-size: var(--fs-meta); line-height: var(--lh-meta); letter-spacing: 0; color: #5d6b64; }
+.crm .page-context strong { font-size: var(--fs-heading); line-height: var(--lh-heading); font-weight: var(--fw-emphasis); color: #203c30; }
+.account-menu { position: relative; flex-shrink: 0; }
+.account-menu summary { list-style: none; cursor: pointer; border-radius: 50%; }
+.account-menu summary::-webkit-details-marker { display: none; }
+.account-menu summary > span { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: #e4eee7; color: #234b37; border: 1px solid #cadbce; font-size: var(--fs-body); line-height: 1; font-weight: var(--fw-emphasis); }
+.account-menu summary:focus-visible { outline: 2px solid #237356; outline-offset: 3px; }
+.account-dropdown { position: absolute; right: 0; top: 53px; z-index: 30; width: 196px; border: 1px solid #dce5df; border-radius: 10px; padding: 6px; background: white; box-shadow: 0 8px 32px #17382b1a; }
+.account-identity { padding: 9px 10px; margin-bottom: 4px; border-bottom: 1px solid #edf1ee; }
+.account-identity strong, .account-identity small { display: block; font-size: var(--fs-body); line-height: var(--lh-body); }
+.account-identity small { color: #5d6b64; font-size: var(--fs-meta); line-height: var(--lh-meta); }
+.crm .account-dropdown button { width: 100%; display: block; text-align: left; background: white; color: #31483b; border: 0; border-radius: 6px; font-size: var(--fs-body); line-height: var(--lh-body); padding: 10px 10px; min-height: 44px; font-weight: var(--fw-body); }
+.crm .account-dropdown button:hover { background: #edf5f1; }
+@media(max-width:600px) { .crm .crm-bar { margin-bottom: 12px; } }
+.desk-rail .rail-mobile-toggle{display:none}
+@media(max-width:800px){.desk-rail .rail-mobile-toggle{display:flex;grid-column:1/-1}.desk-rail:not(.mobile-open)>button:not(.rail-mobile-toggle){display:none}.desk-rail{margin-bottom:10px!important}}
 </style>

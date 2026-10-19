@@ -26,7 +26,10 @@ def fixture():
             names[code+'_w']='Pricing!$B$1:$C$1';names[code+'_h']='Pricing!$A$2:$A$3';names[code+'_Price']='Pricing!$B$2:$C$3'
         cells['Pricing']['A'+str(489+n)]=code
         cells['Pricing']['B'+str(489+n)]='10'
-    cells['Product Listing']['B101']='In Fit';names['Fitting']="'Product Listing'!$B$101"
+    # The client workbook defines Fitting as the row B101:D101. The demo used a single cell, so it
+    # offered one fitting option and refused the other two — a demo-only gap that reads as a product bug.
+    cells['Product Listing']['B101']='In Fit';cells['Product Listing']['C101']='Out Fit'
+    cells['Product Listing']['D101']='Make Size';names['Fitting']="'Product Listing'!$B$101:$D$101"
     for col in range(2,10):cells['Product Listing'][column(col)+'102']=str(Decimal(col-1)/20)
     cells['Pricing'].update({'B1':'500','C1':'1000','A2':'500','A3':'1000','B2':'100','C2':'150','B3':'200','C3':('ROUNDUP(B2*1.35,0)','0')})
     cells['In Put'].update({'Q33':('(Q31+N(Q32))*0.15',None),'Q32':('IF(Order!I4,MAX(SUM(Order!X8:X500),150),"Supply Only")',None)})

@@ -15,7 +15,7 @@ def export_project(project, kind='production'):
     ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
     ET.register_namespace('',ns)
     title='Production information — DRAFT (supplier format not yet confirmed)' if kind=='production' else 'Installation and delivery job sheet'
-    rows=[ [title],['Project / order',project['project_name']+' / '+project['id']],
+    rows=[ [title],['Project / order',project['project_name']+' / '+project.get('order_number',project['id'])],
           ['Company / contact',project['company']+' / '+project['contact_name']],
           ['Company address',project['company_address']],['Site address',project['site_address']],
           ['Phone / email',project['phone']+' / '+project['email']],

@@ -53,8 +53,43 @@ with tempfile.TemporaryDirectory() as folder:
     post(staff,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()})
     after=customer.get('/api/portal/catalog').json()['products']
     assert [(p['id'],p['source_code']) for p in before]==[(p['id'],p['source_code']) for p in after]
-    assert len(staff.get('/api/products').json())==5
-    assert len(after)==24 and all('matrix' not in str(p.get('price_rule',{})) for p in after if p.get('source_code','').startswith('Shutters'))
+    
+    # Verify public /api/products returns exactly 5 website series (staff login, but endpoint is mixed auth)
+    public_products = staff.get('/api/products').json()
+    assert len(public_products)==5, f'Expected 5 website series, got {len(public_products)}'
+    website_series_names = sorted([p['name_en'] for p in public_products])
+    expected_series = sorted(['VERA Classic', 'VERA Eco', 'VERA Natural', 'VERA Prime', 'VERA Deluxe'])
+    assert website_series_names == expected_series, f'Expected {expected_series}, got {website_series_names}'
+    # Verify no aluminium or inactive blinds in public catalog
+    assert all(p.get('category') != 'aluminium' or p.get('sample', False) for p in public_products), 'No aluminium shutters in public'
+    assert all(p.get('category') not in ('roller', 'venetian', 'vertical', 'exterior') for p in public_products), 'No inactive blinds in public'
+    
+    # Verify admin can see all products including inactive blinds
+    admin_products = staff.get('/api/admin/products').json()
+    inactive_blinds = [p for p in admin_products if p.get('category') == 'blinds' and not p.get('published', True)]
+    # Should have 18+ blind products from template (23 total - 4 shutters - Shutters_Aluminium = 18)
+    assert len(inactive_blinds) == 0, 'Non-website rows must not be created by a fresh import'
+    print(f'\n✓ Admin list shows {len(inactive_blinds)} inactive blind products:')
+    for p in sorted(inactive_blinds, key=lambda x: x.get('source_code', '')):
+        print(f"  {p.get('source_code', 'N/A'):35s} - {p.get('name_en', 'N/A'):40s} (published={p.get('published')}, orderable={p.get('orderable')})")
+    
+    # Portal catalog only shows published products (so 5 shutters + Ashwood, not the 18 inactive blinds)
+    assert len(after) == 5, f'Expected exactly five website series, got {len(after)}'
+    
+    # Critical: Verify none of the blind products appear in portal catalog
+    # This must hold even if blind products were accidentally made published/orderable
+    portal_product_codes = {p.get('source_code') for p in after if p.get('source_code')}
+    blind_product_codes = {p.get('source_code') for p in inactive_blinds if p.get('source_code')}
+    blinds_in_portal = portal_product_codes & blind_product_codes
+    assert len(blinds_in_portal) == 0, f'Portal catalog must not contain blind products, but found: {blinds_in_portal}'
+    
+    # Verify portal catalog contains only the expected shutter series
+    expected_codes = {'Shutters_PVC', 'Shutters_PVC_Eco', 'Shutters_Pinewood', 'Shutters_Basswood', 'VERA_Ashwood_provisional'}
+    assert portal_product_codes == expected_codes, f'Expected {expected_codes}, got {portal_product_codes}'
+    print(f'\n✓ Portal catalog correctly excludes all {len(blind_product_codes)} blind products')
+    print(f'  Only 5 website series visible: {", ".join(sorted(portal_product_codes))}')
+    
+    assert all('matrix' not in str(p.get('price_rule',{})) for p in after if p.get('source_code','').startswith('Shutters'))
     assert all('rate_per_m2' not in (p.get('price_rule') or {}) and 'matrix' not in (p.get('price_rule') or {}) for p in after)
     p=next(p for p in after if p['source_code']=='Shutters_PVC')
     body=dict(project_name='TEST project',site_address='Site',submission_key='test-project',installation_required=True,

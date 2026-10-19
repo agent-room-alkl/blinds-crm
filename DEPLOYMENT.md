@@ -20,7 +20,7 @@ The apply command writes retired rows to a NEW private archive, drops only a fix
 
 An administrator uploads the current xlsm in Project orders. Only dictionaries and pricing go into the private database; source customer rows and VBA are not imported/executed. Check warnings and verify reference prices before operational use.
 
-Configure SMTP_HOST, SMTP_PORT, SMTP_SECURITY, SMTP_FROM and optional SMTP username/password. Arrival events attempt email after their batch is saved; invoice sending is explicit. Unconfigured/ambiguous delivery remains visible. The retired IMAP sync, AI drafting, inbox collection, webhook and cron settings are gone.
+Email defaults to `VERA_EMAIL_MODE=demo`. Keep `VERA_DEMO_EMAIL_ADDRESS` private. Demo delivery becomes ready only with SMTP_HOST, SMTP_PORT, SMTP_SECURITY, and SMTP_FROM matching that same test address; optional SMTP username/password depend on the provider. Demo messages force both From and To to the test address even when a customer address is stored. Without a ready mail service, notification attempts are recorded as unsent and no SMTP connection opens. A future live mode requires both `VERA_EMAIL_MODE=live` and `VERA_LIVE_EMAIL_APPROVED=yes` after the owner approves customer delivery. Arrival events create notifications after their batch is saved; invoice sending is explicit. Unconfigured/ambiguous delivery remains visible. The retired IMAP sync, AI drafting, inbox collection, webhook and cron settings are gone.
 
 ## Validation
 

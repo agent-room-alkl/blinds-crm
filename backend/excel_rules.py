@@ -196,7 +196,7 @@ def up(v, places=2):
 
 
 def calculate_line(rule, line, adjustment=None):
-    if rule['status'] != 'configured':
+    if rule['status'] not in ('configured', 'provisional_placeholder'):
         raise ValueError(rule.get('reason', 'Product price rule is missing'))
     supplied = line['options']
     allowed = {f['key']: f for f in rule['schema']}
