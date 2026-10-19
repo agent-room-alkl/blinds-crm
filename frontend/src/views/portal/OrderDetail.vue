@@ -112,7 +112,7 @@ onMounted(async () => {
         <h2>{{ tx("相关发票", "Related Invoices") }}</h2>
         <div class="invoices-list">
           <div v-for="invoice in order.invoices" :key="invoice.id" class="invoice-item">
-            <strong>{{ invoice.kind }}</strong>
+            <strong>{{ invoice.invoice_number || invoice.kind }}</strong>
             <span>{{ invoice.currency }} {{ invoice.amount }}</span>
             <span>{{ invoice.status }}</span>
           </div>

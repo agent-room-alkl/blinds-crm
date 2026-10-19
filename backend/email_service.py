@@ -29,7 +29,7 @@ def configuration():
     return {'configured':ready,'sender':sender if ready else '',
             'mode':delivery_mode,'delivery_enabled':ready,'demo_recipient':sandbox},(host,port,mode,sender)
 
-def send_email(recipient,subject,body,attachments=()):
+def send_email(recipient,subject,body,attachments=(),html=None):
     state,(host,port,mode,sender)=configuration()
     if not state['configured']:raise RuntimeError('Email delivery is not configured')
     if state['mode']=='demo':
@@ -40,6 +40,7 @@ def send_email(recipient,subject,body,attachments=()):
     if '\r' in subject or '\n' in subject:raise ValueError('Invalid email subject')
     message=EmailMessage();message['From']=sender;message['To']=recipient;message['Subject']=subject
     message['Date']=formatdate(localtime=False);message['Message-ID']=make_msgid();message.set_content(body)
+    if html:message.add_alternative(html,subtype='html')
     for name,data,maintype,subtype in attachments:
         message.add_attachment(data,maintype=maintype,subtype=subtype,filename=name)
     context=ssl.create_default_context()

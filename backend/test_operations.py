@@ -135,18 +135,54 @@ with tempfile.TemporaryDirectory() as folder:
     assert len(other.get('/api/portal/consumption').json()['invoices']) == 0
     print('PASS settlement/rebate: company boundaries, deposit deduction, credit source/use dedupe and invoice-send dedupe')
 
-    # Preview is read-only, shows the exact email, and reports the real destination (owner-only in demo mode).
-    before = (staff.get('/api/operations/invoices').json(), len(staff.get('/api/operations/notifications').json()))
+    # Readable numbers, HTML+PDF email, read-only preview with the real destination.
+    all_invoices = staff.get('/api/operations/invoices').json()
+    order_no = {o['id']: o['order_number'] for o in staff.get('/api/operations/orders').json()}
+    for inv in all_invoices:
+        letter = 'D' if inv['kind'] == 'deposit' else 'B'
+        assert inv['invoice_number'] == min(order_no[x] for x in inv['order_ids']) + '-' + letter, inv['invoice_number']
+    assert len({i['invoice_number'] for i in all_invoices}) == len(all_invoices)
+    number = next(i for i in all_invoices if i['id'] == invoice['id'])['invoice_number']
+    before = (all_invoices, len(staff.get('/api/operations/notifications').json()))
     with patch.dict(os.environ, {'VERA_EMAIL_MODE': 'demo', 'VERA_DEMO_EMAIL_ADDRESS': 'owner@example.invalid'}), patch('email_service.send_email') as send:
         preview = staff.get(f"/api/operations/invoices/{invoice['id']}/mail-preview").json()
-        assert preview['subject'] == 'VERA invoice '+invoice['id'] and invoice['amount'] in preview['body']
+        assert preview['subject'] == 'VERA invoice ' + number and preview['invoice_number'] == number
+        assert invoice['amount'] in preview['body'] and invoice['amount'] in preview['html']
         assert preview['customer_recipient'] == a['email'] and preview['delivered_to'] == 'owner@example.invalid'
-        assert preview['content_type'] == 'text/plain' and preview['email_mode'] == 'demo'
+        assert preview['content_type'] == 'text/html' and preview['email_mode'] == 'demo' and preview['attachment'] == number + '.pdf'
+        for text in (preview['subject'], preview['body'], preview['html']):
+            assert 'project:' not in text and 'deposit:' not in text and 'balance:' not in text, text
         assert send.call_count == 0
+    pdf = staff.get(f"/api/operations/invoices/{invoice['id']}/pdf")
+    assert pdf.status_code == 200 and pdf.headers['content-type'] == 'application/pdf' and pdf.content.startswith(b'%PDF')
     assert portal.get(f"/api/operations/invoices/{invoice['id']}/mail-preview").status_code == 401
+    assert portal.get(f"/api/operations/invoices/{invoice['id']}/pdf").status_code == 401
     assert staff.get('/api/operations/invoices/missing/mail-preview').status_code == 404
     assert before == (staff.get('/api/operations/invoices').json(), len(staff.get('/api/operations/notifications').json()))
-    print('PASS invoice mail preview: exact content, real destination, read-only')
+    print('PASS invoice mail preview: readable numbers, HTML+PDF, real destination, read-only')
+
+    # A never-delivered invoice notification (old plain format, suppressed) is refreshed and sent with HTML + PDF; delivered ones are not re-sent.
+    import service as svc
+    target = next(i for i in all_invoices if i['id'] != invoice['id'])
+    nid = 'invoice-mail:' + target['id']
+    with svc.db() as c:
+        row = c.execute('SELECT data FROM operations_records WHERE id=?', (nid,)).fetchone()
+        d = json.loads(row['data'])
+        d.update(status='demo_suppressed', subject='VERA invoice ' + target['id'], body='old plain text')
+        d.pop('html', None)
+        c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(d), nid))
+    live = ({'configured': True, 'mode': 'live', 'delivery_enabled': True, 'demo_recipient': ''}, None)
+    with patch('email_service.configuration', return_value=live), patch('email_service.send_email', return_value='<resend>') as send:
+        post(staff, f"operations/invoices/{target['id']}/send")
+        assert send.call_count == 1
+        args, kwargs = send.call_args
+        assert kwargs['html'].lstrip().startswith('<!doctype html>') and 'old plain text' not in args[2]
+        (filename, data, maintype, subtype), = kwargs['attachments']
+        assert filename == target['invoice_number'] + '.pdf' and data.startswith(b'%PDF') and (maintype, subtype) == ('application', 'pdf')
+        assert args[1] == 'VERA invoice ' + target['invoice_number'] and 'project:' not in args[2]
+        post(staff, f"operations/invoices/{target['id']}/send")
+        assert send.call_count == 1
+    print('PASS invoice send: HTML part and PDF attachment, never-delivered refreshed, delivered not re-sent')
 
     # A new price sheet never rewrites a reviewed order snapshot.
     post(staff,'operations/pricing/1',{**rule,'rate_per_m2':'999'})

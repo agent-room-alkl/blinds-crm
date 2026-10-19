@@ -15,6 +15,7 @@ from pathlib import Path
 
 WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").read_text(encoding="utf-8"))
 
+import invoice_mail
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 
@@ -378,7 +379,18 @@ def register(app, s):
 
     def records(c, kind, cid=None):
         rows = c.execute('SELECT * FROM operations_records WHERE kind=?', (kind,)).fetchall()
-        return [json.loads(r['data']) for r in rows if cid is None or r['customer_id'] == cid]
+        out = [json.loads(r['data']) for r in rows if cid is None or r['customer_id'] == cid]
+        if kind == 'invoice' and out:
+            numbers = {d['id']: d.get('order_number') for d in (json.loads(r['data']) for r in c.execute("SELECT data FROM operations_records WHERE kind='project'").fetchall())}
+            for i in out:
+                i['invoice_number'] = invoice_mail.invoice_number(i, numbers)
+        return out
+
+    def invoice_email(c, iid):
+        # One builder for the stored invoice: used by preview, queueing, delivery and the PDF download.
+        inv = get(c, iid, 'invoice')
+        orders = {oid: get(c, oid, 'project') for oid in inv['order_ids']}
+        return invoice_mail.build(inv, profile(c, inv['customer_id']), orders)
 
     def put(c, kind, d, cid=None):
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
@@ -543,11 +555,13 @@ def register(app, s):
         return {'lines': lines, 'total': None if missing else money(total), 'currency': currency or 'NZD',
                 'tax_basis': tax_basis, 'pricing_status': 'rules_required' if missing else 'configured', 'missing_price_rules': sorted(set(missing))}
 
-    def queue(c, cid, subject, text, nid, invoice_id=None):
+    def queue(c, cid, subject, text, nid, invoice_id=None, html=None):
         # Persist recipient and actual batch scope before any transport attempt.
         p = profile(c, cid)
         d = {'id': nid, 'customer_id': cid, 'recipient': p['email'], 'subject': subject.replace('\r',' ').replace('\n',' '), 'body': text,
              'status': 'pending', 'created_at': s.now(), 'invoice_id': invoice_id}
+        if html:
+            d['html'] = html
         put(c, 'notification', d, cid)
         return nid
 
@@ -573,10 +587,17 @@ def register(app, s):
                 d.update(status='not_configured', error='SMTP is not configured')
                 save(c,d)
                 return d
+            attachments = []
+            if d.get('invoice_id'):
+                try:
+                    model = invoice_email(c, d['invoice_id'])
+                    attachments = [(model['number'] + '.pdf', invoice_mail.render_pdf(model), 'application', 'pdf')]
+                except Exception:
+                    raise HTTPException(500, 'The invoice PDF could not be created; nothing was sent')
             d['status'] = 'sending'
             save(c,d)
         try:
-            mid = send_email(d['recipient'], d['subject'], d['body'])
+            mid = send_email(d['recipient'], d['subject'], d['body'], attachments=attachments, html=d.get('html'))
             demo=mail_state.get('mode')=='demo'
             d.update(status='demo_sent' if demo else 'sent', message_id=mid, sent_at=s.now())
             if demo:d['delivered_to']=mail_state['demo_recipient']
@@ -942,7 +963,7 @@ def register(app, s):
                 raise HTTPException(409, 'Price rules must be confirmed before review acceptance and invoicing')
             d['status'] = 'accepted'
             event(d, 'review_accepted', actor)
-            inv = {'id': 'deposit:'+oid, 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
+            inv = {'id': 'deposit:'+oid, 'invoice_number': (d.get('order_number') or oid[-8:].upper()) + '-D', 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
                    'amount': d.get('deposit') or deposit_amount(d['total']), 'currency': d['currency'], 'tax_basis': d['tax_basis'],
                    'deposit_rate': str(DEPOSIT_RATE), 'rounding': 'ROUND_UP_2DP',
                    'rule_source': 'Client reply 2026-10-15; In Put!P51',
@@ -1242,25 +1263,28 @@ def register(app, s):
         with s.db() as c:
             return records(c, 'invoice')
 
-    def invoice_mail(iid, d):
-        # Single source for the invoice email so the preview and the real send can never drift apart.
-        text = 'VERA invoice '+iid+'\n'+d['currency']+' '+d['amount']+'\n'+'\n'.join(l['order_id']+': '+l['amount'] for l in d['lines'])
-        return 'VERA invoice '+iid, text
-
     @app.get('/api/operations/invoices/{iid}/mail-preview')
     def invoice_mail_preview(iid: str, actor=Depends(s.auth)):
-        # Read-only: shows exactly what a send would produce and who would really receive it. Sends nothing.
+        # Read-only: the exact email (HTML and text) a send would produce, and who would really receive it.
         from email_service import configuration
         state = configuration()[0]
         with s.db() as c:
-            d = get(c, iid, 'invoice')
-            customer_email = profile(c, d['customer_id'])['email']
-        subject, text = invoice_mail(iid, d)
+            model = invoice_email(c, iid)
+            customer_email = profile(c, get(c, iid, 'invoice')['customer_id'])['email']
         demo = state['mode'] == 'demo'
-        return {'invoice_id': iid, 'subject': subject, 'body': text, 'content_type': 'text/plain',
+        return {'invoice_id': iid, 'invoice_number': model['number'], 'subject': model['subject'], 'body': model['text'],
+                'html': model['html'], 'content_type': 'text/html', 'attachment': model['number'] + '.pdf',
                 'customer_recipient': customer_email, 'email_mode': state['mode'],
                 'delivery_enabled': bool(state['delivery_enabled'] and state['configured']),
                 'delivered_to': state['demo_recipient'] if demo else customer_email}
+
+    @app.get('/api/operations/invoices/{iid}/pdf')
+    def invoice_pdf(iid: str, actor=Depends(s.auth)):
+        from fastapi.responses import Response
+        with s.db() as c:
+            model = invoice_email(c, iid)
+        return Response(invoice_mail.render_pdf(model), media_type='application/pdf',
+                        headers={'Content-Disposition': f'inline; filename="{model["number"]}.pdf"'})
 
     @app.post('/api/operations/invoices/{iid}/send')
     def send_invoice(iid: str, actor=Depends(s.auth)):
@@ -1269,9 +1293,16 @@ def register(app, s):
             c.execute('BEGIN IMMEDIATE')
             d = get(c, iid, 'invoice')
             row = c.execute('SELECT 1 FROM operations_records WHERE id=?', (nid,)).fetchone()
+            model = invoice_email(c, iid)
             if not row:
-                subject, text = invoice_mail(iid, d)
-                queue(c, d['customer_id'], subject, text, nid, iid)
+                queue(c, d['customer_id'], model['subject'], model['text'], nid, iid, html=model['html'])
+            else:
+                old = get(c, nid, 'notification')
+                if old['status'] in ('not_configured', 'demo_suppressed', 'pending'):
+                    # Never delivered: refresh to the current format and try again. Delivered mail is never re-sent.
+                    old.update(subject=model['subject'], body=model['text'], html=model['html'], status='pending')
+                    old.pop('error', None)
+                    put(c, 'notification', old, d['customer_id'])
             d['notification_id'] = nid
             put(c, 'invoice', d, d['customer_id'])
         n = deliver(nid)
@@ -1344,7 +1375,8 @@ def register(app, s):
                 put(c, 'rebate', r, cid)
                 remaining -= used
                 allocations.append({'rebate_id': r['id'], 'amount': money(used)})
-            d = {'id': iid, 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
+            d = {'id': iid, 'invoice_number': invoice_mail.invoice_number({'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'id': iid}, {o['id']: o.get('order_number') for o in orders}),
+                 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
                  'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'gross': money(gross), 'amount': money(remaining),
                  'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
                  'request_hash': bodyhash(body), 'rules_evidence': body.rules_evidence}

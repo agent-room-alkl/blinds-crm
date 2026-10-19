@@ -29,11 +29,15 @@ interface Invoice {
   status: string;
   payment_status?: string;
   order_ids?: string[];
+  invoice_number?: string;
 }
 interface MailPreview {
   invoice_id: string;
   subject: string;
   body: string;
+  html: string;
+  attachment: string;
+  invoice_number: string;
   customer_recipient: string;
   email_mode: string;
   delivery_enabled: boolean;
@@ -279,6 +283,27 @@ async function load() {
 }
 
 function orderLabel(id:string) { return orders.value.find(o=>o.id===id)?.order_number || id.slice(-12); }
+// Invoices are always shown by their readable number, never by the internal record id.
+function invoiceLabel(invoice: Invoice) { return invoice.invoice_number || `${orderLabel(invoice.order_ids?.[0] || invoice.id)}-${invoice.kind === 'deposit' ? 'D' : 'B'}`; }
+// Notification subjects stored before readable numbers existed still contain record ids; show them readably.
+function prettySubject(text: string) {
+  let out = text;
+  for (const invoice of invoices.value) out = out.split(invoice.id).join(invoiceLabel(invoice));
+  return out.replace(/(?:project|deposit|balance):[0-9a-f]{16,}/g, (raw) => orderLabel(raw));
+}
+async function openInvoicePdf() {
+  const chosen = invoices.value.find((invoice) => invoicePick.value.includes(invoice.id));
+  if (!chosen) return;
+  try {
+    const response = await fetch(`/api/operations/invoices/${encodeURIComponent(chosen.id)}/pdf`, { headers: session.token ? { Authorization: `Bearer ${session.token}` } : {} });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const url = URL.createObjectURL(await response.blob());
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  }
+}
 
 function orderStatus(value: string) {
   const labels: Record<string, [string, string]> = {
@@ -502,9 +527,9 @@ function sendSelectedInvoices() {
     for (const invoice of chosen) {
       try {
         const sent = await request<Invoice>(`operations/invoices/${invoice.id}/send`, {});
-        results.push(`${invoice.id}: ${mailStatus(sent.status)}`);
+        results.push(`${invoiceLabel(invoice)}: ${mailStatus(sent.status)}`);
       } catch (cause) {
-        results.push(`${invoice.id}: failed ${cause instanceof Error ? cause.message : String(cause)}`);
+        results.push(`${invoiceLabel(invoice)}: failed ${cause instanceof Error ? cause.message : String(cause)}`);
       }
     }
     notice.value = results.join("; ");
@@ -574,8 +599,8 @@ function settleSelected() {
     const invoice = await request<Invoice>("operations/settlements", body);
     operationKeys.delete(JSON.stringify({ settle: orderIds, evidence: settlementEvidence.value.trim() }));
     notice.value = tx(
-      `已生成尾款草稿 ${invoice.id}，金额 ${invoice.currency} ${invoice.amount}。部分到货或未收定金会被拒绝。发送仍是另一步。`,
-      `Balance draft ${invoice.id} created for ${invoice.currency} ${invoice.amount}. Partial arrival or an unpaid deposit is refused. Sending stays a separate step.`,
+      `已生成尾款草稿 ${invoiceLabel(invoice)}，金额 ${invoice.currency} ${invoice.amount}。部分到货或未收定金会被拒绝。发送仍是另一步。`,
+      `Balance draft ${invoiceLabel(invoice)} created for ${invoice.currency} ${invoice.amount}. Partial arrival or an unpaid deposit is refused. Sending stays a separate step.`,
     );
     picked.value=[];
   });
@@ -1031,14 +1056,14 @@ async function loadOrderProviders(orderId: string) {
 </div><div v-show="detailSection === 'invoices'">              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
                 <h3>{{ tx("发票", "Invoices") }}</h3>
                 <div v-for="invoice in selectedOrder.invoices" :key="invoice.id" class="invoice">
-                  <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未收", "Unpaid") }}</label>
+                  <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoiceLabel(invoice) }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未收", "Unpaid") }}</label>
                   <template v-if="invoice.kind === 'balance'">
                     <input v-model="receiptNote[invoice.id]" :placeholder="tx('尾款备注', 'Balance note')" />
                     <button type="button" class="secondary" :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx("尾款已收", "Balance received") }}</button>
                   </template>
                 </div>
               </div>
-<div v-if="selectedOrder.status!=='pending_review' && selectedOrder.payment_status==='deposit_unpaid'" class="actions"><button type="button" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx('核实到账后记录定金已收','Record deposit after confirming receipt') }}</button></div><p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><div class="invoice-actions"><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选的本单发票','Send selected order invoices') }}</button><button type="button" :disabled="busy || !invoicePick.length" @click="previewInvoiceMail">{{ tx('预览邮件','Preview email') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div><div v-if="mailPreview" class="mail-preview" role="region" :aria-label="tx('邮件预览','Email preview')"><p><strong>{{ tx('邮件预览（纯文本，尚未发送）','Email preview (plain text, not sent)') }}</strong></p><p>{{ tx('实际收件人','Actual recipient') }}: {{ mailPreview.delivered_to || tx('未配置','not configured') }}<template v-if="mailPreview.email_mode==='demo'"> · {{ tx('演示模式：不会发给客户','Demo mode: never sent to the customer') }} ({{ tx('客户邮箱','customer address') }}: {{ mailPreview.customer_recipient }})</template><template v-if="!mailPreview.delivery_enabled"> · {{ tx('发信通道未启用，点发送只会记录不会投递','Delivery not enabled; sending only records it') }}</template></p><p>{{ tx('标题','Subject') }}: {{ mailPreview.subject }}</p><pre>{{ mailPreview.body }}</pre></div></div>
+<div v-if="selectedOrder.status!=='pending_review' && selectedOrder.payment_status==='deposit_unpaid'" class="actions"><button type="button" :disabled="busy" @click="deposit(selectedOrder.id)">{{ tx('核实到账后记录定金已收','Record deposit after confirming receipt') }}</button></div><p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><div class="invoice-actions"><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选的本单发票','Send selected order invoices') }}</button><button type="button" :disabled="busy || !invoicePick.length" @click="previewInvoiceMail">{{ tx('预览邮件','Preview email') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div><div v-if="mailPreview" class="mail-preview" role="region" :aria-label="tx('邮件预览','Email preview')"><p><strong>{{ tx('邮件预览（HTML 正文 + PDF 附件，尚未发送）','Email preview (HTML body + PDF attachment, not sent)') }}</strong></p><p>{{ tx('实际收件人','Actual recipient') }}: {{ mailPreview.delivered_to || tx('未配置','not configured') }}<template v-if="mailPreview.email_mode==='demo'"> · {{ tx('演示模式：不会发给客户','Demo mode: never sent to the customer') }} ({{ tx('客户邮箱','customer address') }}: {{ mailPreview.customer_recipient }})</template><template v-if="!mailPreview.delivery_enabled"> · {{ tx('发信通道未启用，点发送只会记录不会投递','Delivery not enabled; sending only records it') }}</template></p><p>{{ tx('标题','Subject') }}: {{ mailPreview.subject }}</p><iframe class="mail-frame" :title="tx('邮件正文预览','Email body preview')" sandbox="" :srcdoc="mailPreview.html"></iframe><p>{{ tx('附件','Attachment') }}: {{ mailPreview.attachment }} · <button type="button" class="linklike" @click="openInvoicePdf">{{ tx('打开 PDF','Open PDF') }}</button></p></div></div>
               <div v-show="detailSection === 'history'"><h3>{{ tx('操作记录','Activity') }}</h3><p v-for="(item,index) in selectedOrder.history || []" :key="index">{{ item.created_at }} · {{ item.action }}<span v-if="item.template_id"> · {{ tx('导出模板','Export template') }} #{{ item.template_id }} · {{ item.template_revision ? 'v'+item.template_revision : tx('历史版本未标记','Historical revision unspecified') }}</span></p></div>
             </article>
           </section>
@@ -1153,13 +1178,13 @@ async function loadOrderProviders(orderId: string) {
                 <div v-for="order in financeOrders" :key="order.id" class="finance-order"><label class="checkbox-label"><input type="checkbox" v-model="picked" :value="order.id" /><span>{{ order.order_number }} · {{ orderStatus(order.status) }}</span></label><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink></div><p v-if="!financeOrders.length">{{ tx('此客户暂无订单','No orders for this customer') }}</p>
               </div></div>
               <div class="finance-panel"><div class="finance-panel-head"><h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><span>{{ financeInvoices.length }}</span></div><div class="finance-list">
-                <div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div>
+                <div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ invoiceLabel(invoice) }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div>
                 <p v-if="!financeInvoices.length" class="hint">{{ tx('此客户暂无发票','No invoices for this customer') }}</p>
-              </div><div class="finance-panel-foot"><div v-if="mailPreview" class="mail-preview" role="region" :aria-label="tx('邮件预览','Email preview')"><p><strong>{{ tx('邮件预览（纯文本，尚未发送）','Email preview (plain text, not sent)') }}</strong></p><p>{{ tx('实际收件人','Actual recipient') }}: {{ mailPreview.delivered_to || tx('未配置','not configured') }}<template v-if="mailPreview.email_mode==='demo'"> · {{ tx('演示模式：不会发给客户','Demo mode: never sent to the customer') }} ({{ tx('客户邮箱','customer address') }}: {{ mailPreview.customer_recipient }})</template><template v-if="!mailPreview.delivery_enabled"> · {{ tx('发信通道未启用，点发送只会记录不会投递','Delivery not enabled; sending only records it') }}</template></p><p>{{ tx('标题','Subject') }}: {{ mailPreview.subject }}</p><pre>{{ mailPreview.body }}</pre></div><button type="button" :disabled="busy || !invoicePick.length" @click="previewInvoiceMail">{{ tx('预览邮件','Preview email') }}</button><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button></div></div>
+              </div><div class="finance-panel-foot"><div v-if="mailPreview" class="mail-preview" role="region" :aria-label="tx('邮件预览','Email preview')"><p><strong>{{ tx('邮件预览（HTML 正文 + PDF 附件，尚未发送）','Email preview (HTML body + PDF attachment, not sent)') }}</strong></p><p>{{ tx('实际收件人','Actual recipient') }}: {{ mailPreview.delivered_to || tx('未配置','not configured') }}<template v-if="mailPreview.email_mode==='demo'"> · {{ tx('演示模式：不会发给客户','Demo mode: never sent to the customer') }} ({{ tx('客户邮箱','customer address') }}: {{ mailPreview.customer_recipient }})</template><template v-if="!mailPreview.delivery_enabled"> · {{ tx('发信通道未启用，点发送只会记录不会投递','Delivery not enabled; sending only records it') }}</template></p><p>{{ tx('标题','Subject') }}: {{ mailPreview.subject }}</p><iframe class="mail-frame" :title="tx('邮件正文预览','Email body preview')" sandbox="" :srcdoc="mailPreview.html"></iframe><p>{{ tx('附件','Attachment') }}: {{ mailPreview.attachment }} · <button type="button" class="linklike" @click="openInvoicePdf">{{ tx('打开 PDF','Open PDF') }}</button></p></div><button type="button" :disabled="busy || !invoicePick.length" @click="previewInvoiceMail">{{ tx('预览邮件','Preview email') }}</button><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button></div></div>
               <div class="finance-panel finance-action-panel"><nav class="finance-pane-tabs" aria-label="Finance actions"><button type="button" :class="{active:financePane==='balance'}" @click="financePane='balance'">{{ tx('尾款','Balance') }}</button><button type="button" :class="{active:financePane==='rebates'}" @click="financePane='rebates'">{{ tx('返利','Rebates') }}</button><button type="button" :class="{active:financePane==='notifications'}" @click="financePane='notifications'">{{ tx('通知','Notices') }}</button></nav>
                 <div v-show="financePane==='balance'" class="finance-action-content"><h3>{{ tx('生成尾款草稿','Create balance draft') }}</h3><p class="hint">{{ tx('仅限同公司、同币种、全部交付且定金已收。金额扣除已保存定金。','Same company and currency, fully delivered with deposit received. Stored deposits are deducted.') }}</p><label>{{ tx('规则说明（按所选订单自动生成，可修改）','Rule note (generated from the selected orders; editable)') }}<textarea v-model="settlementEvidence" rows="4" /></label><p class="hint">{{ tx('生成的只是草稿发票，不会发给客户；检查后再到“发票”里单独点发送。','This only creates a draft invoice. Nothing is sent to the customer; review it, then send it separately from the invoice list.') }}</p><button type="button" :disabled="busy || !picked.length" @click="fillEvidence">{{ tx('按所选订单重新生成说明','Regenerate note from selected orders') }}</button></div>
                 <div v-show="financePane==='rebates'" class="finance-action-content"><h3>{{ tx('已确认返利','Confirmed rebates') }}</h3><p class="hint">{{ tx('只录入已确认月度金额；不自动推算返利。','Record only confirmed monthly amounts; rebate tiers are not inferred.') }}</p><div v-if="admin" class="form-grid"><label>{{ tx('年月','Month') }}<input v-model="rebateForm.month" placeholder="2026-10" /></label><label>{{ tx('金额','Amount') }}<input v-model="rebateForm.amount" inputmode="decimal" /></label><label class="finance-evidence">{{ tx('确认依据','Evidence') }}<input v-model="rebateForm.evidence" /></label></div><div class="finance-list"><div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocation.invoice_id }} · {{ allocation.amount }}</p></div></div></div>
-                <div v-show="financePane==='notifications'" class="finance-action-content"><h3>{{ tx('通知记录','Notifications') }}</h3><div class="finance-list"><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ item.subject }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div></div></div>
+                <div v-show="financePane==='notifications'" class="finance-action-content"><h3>{{ tx('通知记录','Notifications') }}</h3><div class="finance-list"><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ prettySubject(item.subject) }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div></div></div>
                 <div v-show="financePane==='balance'" class="finance-panel-foot"><button type="button" :disabled="busy || !picked.length" @click="settleSelected">{{ tx('生成尾款草稿','Create balance draft') }}</button></div>
                 <div v-show="financePane==='rebates' && admin" class="finance-panel-foot"><button type="button" :disabled="busy || !picked.length" @click="recordRebate">{{ tx('记入已确认返利','Record confirmed rebate') }}</button></div>
               </div>
@@ -1440,7 +1465,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .finance-panel-head span{color:#52635a;font-size:12px}
 .finance-list{flex:1;min-height:0;overflow-y:auto;padding:4px 10px;overflow-wrap:anywhere}
 .finance-panel-foot{padding:10px;border-top:1px solid #e4eae5}
-.finance-panel-foot button{width:100%}.finance-panel-foot button+button{margin-top:8px}.mail-preview{margin-top:12px;padding:12px;border:1px solid #cfe0d6;border-radius:8px;background:#f5faf7;text-align:left}.mail-preview p{margin:4px 0;overflow-wrap:anywhere}.mail-preview pre{margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+.finance-panel-foot button{width:100%}.finance-panel-foot button+button{margin-top:8px}.mail-preview{margin-top:12px;padding:12px;border:1px solid #cfe0d6;border-radius:8px;background:#f5faf7;text-align:left}.mail-preview p{margin:4px 0;overflow-wrap:anywhere}.mail-frame{display:block;width:100%;height:540px;margin:10px 0 6px;border:1px solid #d3ddd6;border-radius:10px;background:#fff}.mail-preview .linklike{display:inline;min-height:0;padding:0;border:0;background:none;color:#0f6e5c;text-decoration:underline;cursor:pointer;font:inherit;width:auto}
 .finance-order{display:block;padding:8px 0;border-bottom:1px solid #e4eae5}
 .finance-order label{min-height:32px}
 .finance-order a{display:block;padding-left:28px;line-height:1.35}

@@ -35,7 +35,7 @@ const error = ref("");
 const notice = ref("");
 interface CompanyUse {
   orders: { id: string; project_name?: string; total: string | null; currency?: string; status?: string }[];
-  invoices: { id: string; kind: string; amount: string; currency: string; status?: string; payment_status?: string }[];
+  invoices: { id: string; invoice_number?: string; kind: string; amount: string; currency: string; status?: string; payment_status?: string }[];
   rebates: { id: string; month?: string; amount: string; currency: string; used?: string; remaining?: string }[];
   summary?: Record<string, { ordered?: string; invoiced?: string; received?: string; outstanding_invoiced?: string }>;
   unpriced_orders?: number;
@@ -116,7 +116,7 @@ async function save() {
       <p v-for="(money, currency) in usage.summary || {}" :key="currency">{{ currency }} · {{ tx("已下单", "Ordered") }} {{ money.ordered || "—" }} · {{ tx("已开票", "Invoiced") }} {{ money.invoiced || "—" }} · {{ tx("已收", "Received") }} {{ money.received || "—" }} · {{ tx("已开票未收", "Invoiced outstanding") }} {{ money.outstanding_invoiced || "—" }}</p>
       <p v-for="order in usage.orders" :key="order.id"><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink> · {{ order.status || "" }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("合计待配置", "Total not configured") }}</p>
       <RouterLink v-if="detailTab === 'finance'" :to="{path:'/crm/finance',query:{customer:selected}}">{{ tx('打开客户账本','Open customer ledger') }}</RouterLink>
-      <p v-for="invoice in usage.invoices" :key="invoice.id">{{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ invoice.status || "—" }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</p>
+      <p v-for="invoice in usage.invoices" :key="invoice.id">{{ invoice.invoice_number || invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ invoice.status || "—" }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</p>
       <p v-for="credit in usage.rebates" :key="credit.id">{{ tx("返利", "Rebate") }} {{ credit.month || credit.id }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</p>
     </section>
     <p v-if="error" class="alert" role="alert">{{ error }}</p>

@@ -30,7 +30,7 @@ onMounted(async () => {
       <div v-if="consumption.invoices && consumption.invoices.length" class="invoices-list">
         <div v-for="invoice in consumption.invoices" :key="invoice.id" class="invoice-card">
           <div class="invoice-header">
-            <strong>{{ invoice.kind }}</strong>
+            <strong>{{ invoice.invoice_number || invoice.kind }}</strong>
             <span class="invoice-status">{{ invoice.status }}</span>
           </div>
           <div class="invoice-details">

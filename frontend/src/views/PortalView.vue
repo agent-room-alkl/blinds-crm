@@ -54,7 +54,7 @@ interface PortalOrder {
   currency?: string;
   pricing_status?: string;
   lines?: PortalLine[];
-  invoices?: { id: string; kind: string; amount: string; currency: string; status: string; payment_status?: string }[];
+  invoices?: { id: string; invoice_number?: string; kind: string; amount: string; currency: string; status: string; payment_status?: string }[];
 }
 interface PricedQuote {
   total: string | null;
@@ -74,7 +74,7 @@ interface MoneySummary {
   outstanding_invoiced?: string;
 }
 interface Consumption {
-  invoices: { id: string; kind: string; amount: string; currency: string; status: string; payment_status?: string }[];
+  invoices: { id: string; invoice_number?: string; kind: string; amount: string; currency: string; status: string; payment_status?: string }[];
   rebates: { id: string; month?: string; amount: string; currency: string; used?: string; remaining?: string }[];
   statistics_status?: string;
   summary?: Record<string, MoneySummary>;
@@ -374,7 +374,7 @@ function messageOf(cause: unknown) {
             <li v-for="line in order.lines" :key="line.id || line.window_name">{{ line.window_name }} · {{ line.amount ? `${order.currency || ""} ${line.amount}` : tx("行价待配置", "Line price not configured") }}</li>
           </ul>
           <ul v-if="order.invoices?.length">
-            <li v-for="invoice in order.invoices" :key="invoice.id">{{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ invoice.status }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</li>
+            <li v-for="invoice in order.invoices" :key="invoice.id">{{ invoice.invoice_number || invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ tx("发送", "Send") }} {{ invoice.status }} · {{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</li>
           </ul>
         </article>
       </section>
@@ -393,7 +393,7 @@ function messageOf(cause: unknown) {
         </article>
         <p v-if="!consumption?.invoices.length">{{ tx("还没有发票。", "No invoices yet.") }}</p>
         <article v-for="invoice in consumption?.invoices || []" :key="invoice.id" class="order-row">
-          <strong>{{ invoice.kind }}</strong>
+          <strong>{{ invoice.invoice_number || invoice.kind }}</strong>
           <span>{{ invoice.currency }} {{ invoice.amount }}</span>
           <span>{{ tx("发送", "Send") }} {{ invoice.status }}</span>
           <span>{{ tx("收款", "Receipt") }} {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未确认收款", "Receipt not confirmed") }}</span>
