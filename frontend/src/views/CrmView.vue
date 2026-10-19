@@ -25,7 +25,6 @@ const credentials = reactive({ username: "", password: "" });
 const products = ref<ApiProduct[]>([]);
 const emailMode = ref('demo');
 const emailEnabled = ref(false);
-const demoEmailAddress = ref('');
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
 const mobileNavOpen = ref(false);
@@ -83,7 +82,6 @@ async function load() {
   me.value = who;
   emailMode.value = runtime.email_mode;
   emailEnabled.value = runtime.email_delivery_enabled;
-  demoEmailAddress.value = runtime.demo_email_address || '';
   if (who.role === "admin") users.value = await request("users");
 }
 
@@ -227,7 +225,6 @@ onMounted(() => {
           </div>
         </details>
       </header>
-      <p v-if="emailMode==='demo'" class="demo-notice" role="status">{{ emailEnabled ? tx('演示模式 · 邮件只发送到管理员测试邮箱，不发送给客户。','Demo mode · Email goes only to the owner test mailbox, never to customers.') : tx('演示模式 · 发件服务未就绪；当前只记录通知，不会投递邮件给客户。','Demo mode · Mail delivery is not ready. Notifications are recorded without delivery to customers.') }}<span v-if="demoEmailAddress"> {{ tx('测试邮箱：','Test mailbox: ') }}{{ demoEmailAddress }}</span></p>
       <form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword">
         <label>{{ tx("当前密码", "Current password") }}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label>
         <label>{{ tx("新密码", "New password") }}<input v-model="passwordForm.next" type="password" autocomplete="new-password" minlength="8" required /></label>

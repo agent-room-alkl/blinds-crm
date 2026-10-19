@@ -14,10 +14,10 @@ const loading = ref(true);
 const STATUS_TIMELINE = [
   { key: 'draft', label_zh: '草稿', label_en: 'Draft' },
   { key: 'pending_review', label_zh: '已提交待审核', label_en: 'Submitted' },
-  { key: 'confirmed', label_zh: '已审核并冻结', label_en: 'Confirmed' },
-  { key: 'deposit_invoiced', label_zh: '定金发票已开', label_en: '60% Deposit Invoiced' },
-  { key: 'deposit_paid', label_zh: '定金已付', label_en: 'Deposit Paid' },
-  { key: 'ordered', label_zh: '已向供应商下单', label_en: 'Ordered' },
+  { key: 'accepted', label_zh: '已审核并冻结', label_en: 'Confirmed' },
+  { key: 'deposit_unpaid', label_zh: '定金发票已开', label_en: '60% Deposit Invoiced' },
+  { key: 'deposit_received', label_zh: '定金已付', label_en: 'Deposit Paid' },
+  { key: 'supplier_ordered', label_zh: '已向供应商下单', label_en: 'Ordered' },
   { key: 'in_transit', label_zh: '运输中', label_en: 'In Transit' },
   { key: 'delivered', label_zh: '已交付', label_en: 'Delivered' },
   { key: 'balance_invoiced', label_zh: '尾款发票已开', label_en: 'Balance Invoiced' },
@@ -26,7 +26,16 @@ const STATUS_TIMELINE = [
 
 const currentStatusIndex = computed(() => {
   if (!order.value) return -1;
-  return STATUS_TIMELINE.findIndex(s => s.key === order.value.status);
+  const status = order.value.status;
+  const payment = order.value.payment_status;
+  if (payment === 'paid') return 9;
+  if (payment === 'balance_unpaid' || order.value.invoices?.some((invoice: any) => invoice.kind === 'balance')) return 8;
+  if (status === 'delivered') return 7;
+  if (['in_transit', 'partially_arrived', 'arrived', 'partially_delivered'].includes(status)) return 6;
+  if (status === 'supplier_ordered') return 5;
+  if (payment === 'deposit_received') return 4;
+  if (status === 'accepted' && order.value.invoices?.some((invoice: any) => invoice.kind === 'deposit')) return 3;
+  return STATUS_TIMELINE.findIndex(s => s.key === status);
 });
 
 onMounted(async () => {
