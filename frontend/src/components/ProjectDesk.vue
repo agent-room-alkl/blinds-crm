@@ -68,6 +68,7 @@ interface OrderProvider {
   sheet_name?: string;
 }
 interface ProjectOrder {
+  order_number?: string;
   id: string;
   customer_id: number;
   company: string;
@@ -745,6 +746,7 @@ async function loadOrderProviders(orderId: string) {
             </label>
             <button type="button" :aria-pressed="selectedOrder?.id === order.id" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
               <strong>{{ order.project_name }}</strong>
+              <span>{{ order.order_number }}</span>
               <span>{{ order.company }}</span>
               <small>{{ orderStatus(order.status) }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</small>
             </button>

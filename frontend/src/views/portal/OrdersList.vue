@@ -59,6 +59,7 @@ function startNewOrder() {
           <strong>{{ order.project_name }}</strong>
           <span class="order-status">{{ order.status }}</span>
         </div>
+        <p>{{ tx('订单号', 'Order no.') }} {{ order.order_number }}</p>
         <p class="order-address">{{ order.site_address }}</p>
         <div class="order-footer">
           <span>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("待定价", "TBC") }}</span>

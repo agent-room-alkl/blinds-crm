@@ -77,7 +77,7 @@ onMounted(async () => {
         <h2>{{ tx("订单信息", "Order Information") }}</h2>
         <dl>
           <dt>{{ tx("订单号", "Order ID") }}</dt>
-          <dd>{{ order.id }}</dd>
+          <dd>{{ order.order_number }}</dd>
           <dt>{{ tx("施工地址", "Site Address") }}</dt>
           <dd>{{ order.site_address }}</dd>
           <dt>{{ tx("状态", "Status") }}</dt>

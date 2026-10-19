@@ -48,8 +48,11 @@ with tempfile.TemporaryDirectory() as folder:
     post(portal,'portal/price',body,409)
     pending = post(portal,'portal/orders',body)
     oid = pending['id']
+    assert pending['order_number'] == 'V0000001'
+    assert len(pending['order_number']) <= 16
     assert pending['total'] is None and not pending['invoices']
     assert post(portal,'portal/orders',body)['id'] == oid
+    assert post(portal,'portal/orders',body)['order_number'] == pending['order_number']
     post(portal,'portal/orders',{**body, 'project_name':'changed'},409)
     post(staff,f'operations/orders/{oid}/review',status=409)
     post(staff,f'operations/orders/{oid}/deposit-received',status=409)
@@ -766,4 +769,27 @@ with tempfile.TemporaryDirectory() as folder:
     print(f'✓ Order submission works with provisional pricing (order status: {order_data["pricing_status"]})')
     
     print('\nPASS T-13 Legacy DB: VERA_Ashwood_display products are migrated to VERA_Ashwood_provisional and work correctly')
+
+    # Backfill preserves every existing order/invoice field and is repeatable.
+    from service import db
+    from operations import backfill_order_numbers
+    with db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        before = {r['id']: json.loads(r['data']) for r in c.execute("SELECT id,data FROM operations_records WHERE kind='project'")}
+        invoices = [dict(r) for r in c.execute("SELECT * FROM operations_records WHERE kind='invoice' ORDER BY id")]
+        for rid, value in before.items():
+            value.pop('order_number', None)
+            c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(value), rid))
+        assert backfill_order_numbers(c) == len(before)
+        assert backfill_order_numbers(c) == 0
+        numbers = set()
+        for r in c.execute("SELECT id,data FROM operations_records WHERE kind='project'"):
+            value = json.loads(r['data'])
+            number = value.pop('order_number')
+            assert number.startswith('V') and number[1:].isdigit() and len(number) <= 16
+            assert number not in numbers
+            numbers.add(number)
+            assert value == before[r['id']]
+        assert [dict(r) for r in c.execute("SELECT * FROM operations_records WHERE kind='invoice' ORDER BY id")] == invoices
+    print('PASS readable order numbers: unique, bounded, replay stable; legacy backfill repeatable and references unchanged')
 

@@ -125,6 +125,30 @@ def deposit_amount(total):
     return str((Decimal(total) * DEPOSIT_RATE).quantize(Decimal('.01'), rounding=ROUND_UP))
 
 
+def allocate_order_number(c):
+    """Caller holds BEGIN IMMEDIATE (the PostgreSQL advisory transaction lock)."""
+    rid = 'order-number-sequence'
+    row = c.execute('SELECT data FROM operations_records WHERE id=?', (rid,)).fetchone()
+    number = int(json.loads(row['data'])['value']) + 1 if row else 1
+    if number >= 10**15:
+        raise HTTPException(409, 'Order number capacity reached')
+    c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
+              (rid, 'internal_counter', None, json.dumps({'id': rid, 'value': number})))
+    return f'V{number:07d}'
+
+
+def backfill_order_numbers(c):
+    rows = c.execute("SELECT id,data FROM operations_records WHERE kind='project' ORDER BY id").fetchall()
+    orders = sorted((json.loads(row['data']) for row in rows), key=lambda d: (d.get('created_at', ''), d['id']))
+    changed = 0
+    for order in orders:
+        if not order.get('order_number'):
+            order['order_number'] = allocate_order_number(c)
+            c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(order, ensure_ascii=False), order['id']))
+            changed += 1
+    return changed
+
+
 def migrate(c):
     c.executescript('''
     CREATE TABLE IF NOT EXISTS portal_profiles(customer_id INTEGER PRIMARY KEY REFERENCES customers(id), username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, data TEXT NOT NULL);
@@ -818,7 +842,7 @@ def register(app, s):
             if old:
                 return portal_view(enrich(c, old))
             p = profile(c, cid)
-            d = {**calculate(c, body), 'id': oid, 'customer_id': cid, 'company': p['company'],
+            d = {**calculate(c, body), 'id': oid, 'order_number': allocate_order_number(c), 'customer_id': cid, 'company': p['company'],
                  'contact_name': p['contact_name'], 'email': p['email'], 'phone': p['phone'],
                  'company_address': p['company_address'], 'project_name': body.project_name, 'site_address': body.site_address,
                  'status': 'pending_review', 'payment_status': 'deposit_unpaid', 'history': [], 'created_at': s.now(),
