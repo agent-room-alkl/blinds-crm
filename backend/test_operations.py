@@ -28,6 +28,7 @@ with tempfile.TemporaryDirectory() as folder:
 
     a = provision('customerA')
     b = provision('customerB')
+    post(staff,'operations/customers',{**{k:a[k] for k in ('company','contact_name','email','phone','company_address')},'username':'duplicate-company','password':'test-password'},409)
     post(staff, 'operations/customers', {**{k: a[k] for k in ('company','contact_name','email','phone','company_address')},
          'customer_id': a['customer_id'], 'username': 'another', 'password': 'test-password'}, 409)
     for c, name in [(portal, 'customerA'), (other, 'customerB')]:
@@ -792,4 +793,34 @@ with tempfile.TemporaryDirectory() as folder:
             assert value == before[r['id']]
         assert [dict(r) for r in c.execute("SELECT * FROM operations_records WHERE kind='invoice' ORDER BY id")] == invoices
     print('PASS readable order numbers: unique, bounded, replay stable; legacy backfill repeatable and references unchanged')
+
+    versions = staff.get('/api/operations/pricing-templates').json()
+    version = next(v for v in versions if v['id']=='template:legacy-test')
+    assert version['orders'] and not version['applicability_confirmed']
+    assert all(len(o['order_number']) <= 16 for o in version['orders'])
+    post(staff,'operations/pricing-templates/template:legacy-test/applicability',{'provider_ids':[pid_a]})
+    assert next(v for v in staff.get('/api/operations/pricing-templates').json() if v['id']==version['id'])['provider_ids']==[pid_a]
+    post(staff,'operations/pricing-templates/template:legacy-test/applicability',{'provider_ids':[999999]},404)
+    assert other.get('/api/operations/pricing-templates').status_code==401
+    frozen = staff.get('/api/operations/orders').json()
+    post(staff,'operations/pricing-templates/template:legacy-test/activate')
+    assert staff.get('/api/operations/orders').json()==frozen
+    before_template = next(t for t in staff.get('/api/operations/provider-templates').json() if t['id']==tid_a)
+    revision_body={'provider_id':pid_a,'name':'Alpha revised','sheet_name':'AlphaV2','column_mappings':{'window_name':'A'},'supersedes_id':tid_a}
+    revised=post(staff,'operations/provider-templates',revision_body)
+    templates=staff.get('/api/operations/provider-templates').json()
+    assert next(t for t in templates if t['id']==tid_a)==before_template
+    assert next(t for t in templates if t['id']==revised['id'])['revision']==2
+    post(staff,'operations/provider-templates',{**revision_body,'provider_id':pid_b},404)
+    post(staff,f'operations/orders/{oid1}/assign-provider',{'provider_id':pid_a,'template_id':revised['id']})
+    assert staff.get(f'/api/operations/orders/{oid1}/supplier-export').status_code==200
+    exported=next(o for o in staff.get('/api/operations/orders').json() if o['id']==oid1)
+    saved=[e for e in exported['history'] if e['action']=='supplier_exported'][-1]
+    assert saved['template_id']==revised['id'] and saved['template_revision']==2 and saved['column_mappings']=={'window_name':'A'}
+    post(staff,f'operations/orders/{oid1}/assign-provider',{'provider_id':pid_a,'template_id':tid_a})
+    after=next(o for o in staff.get('/api/operations/orders').json() if o['id']==oid1)
+    assert saved in after['history']
+    provider=next(p for p in staff.get('/api/operations/providers').json() if p['id']==pid_a)
+    assert any(o['id']==oid1 and o['template_id']==tid_a for o in provider['orders'])
+    print('PASS resource ownership: pricing usage/supplier applicability, frozen activation, immutable export revisions and historical export audit')
 

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
 
 interface Line {
+  rule_version?: string;
   id: string;
   window_name: string;
   product_id?: number;
@@ -29,12 +31,15 @@ interface Invoice {
   order_ids?: string[];
 }
 interface Notice {
+  customer_id: number;
   id: string;
   status: string;
   recipient: string;
   subject: string;
 }
 interface Rebate {
+  source_order_ids?: string[];
+  allocations?: {invoice_id?:string;amount?:string}[];
   id: string;
   customer_id: number;
   month: string;
@@ -45,6 +50,7 @@ interface Rebate {
   evidence?: string;
 }
 interface Provider {
+  orders?: {id:string;order_number?:string;project_name:string;template_id?:number}[];
   id: number;
   name: string;
   contact_email: string;
@@ -52,6 +58,8 @@ interface Provider {
   active: number;
 }
 interface ProviderTemplate {
+  revision?: number;
+  supersedes_id?: number;
   id: number;
   provider_id: number;
   name: string;
@@ -68,6 +76,7 @@ interface OrderProvider {
   sheet_name?: string;
 }
 interface ProjectOrder {
+  history?: {action:string;created_at:string;provider_id?:number;template_id?:number;template_revision?:number}[];
   order_number?: string;
   id: string;
   customer_id: number;
@@ -85,8 +94,16 @@ interface ProjectOrder {
   invoices?: Invoice[];
 }
 
-const props = defineProps<{ admin: boolean }>();
+const props = withDefaults(defineProps<{ admin: boolean; workspace?: string }>(), { workspace: 'projects' });
+const route = useRoute();
 const templateStatus = ref("");
+interface PricingVersion {id:string;version:string;active:boolean;source?:string;imported_at?:string;products:string[];provider_ids:number[];applicability_confirmed:boolean;orders:{id:string;order_number?:string;project_name:string}[]}
+const pricingVersions = ref<PricingVersion[]>([]);
+const applicability = reactive<Record<string,number[]>>({});
+const financeCustomer = ref(String(route.query.customer || ''));
+const customers = ref<{customer_id:number;company:string}[]>([]);
+const financeOrders = computed(()=>orders.value.filter(o=>!financeCustomer.value || String(o.customer_id)===financeCustomer.value));
+const financeInvoices = computed(()=>invoices.value.filter(i=>!financeCustomer.value || String(i.customer_id)===financeCustomer.value));
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const orders = ref<ProjectOrder[]>([]);
@@ -101,6 +118,7 @@ const rebateForm = reactive({ month: "", amount: "", evidence: "" });
 const receiptNote = reactive<Record<string, string>>({});
 const adjustNote = reactive<Record<string, string>>({});
 const busy = ref(false);
+const loaded = ref(false);
 const error = ref("");
 const notice = ref("");
 const statusFilter = ref("");
@@ -111,21 +129,13 @@ const arrivalRows = ref<{ order_id: string; status: string; detail: string }[]>(
 const batch = reactive<Record<string, number>>({});
 const operationKeys = new Map<string, string>();
 const supplierRef = reactive<Record<string, string>>({});
-const account = reactive({
-  company: "",
-  contact_name: "",
-  email: "",
-  phone: "",
-  company_address: "",
-  username: "",
-  password: "",
-});
 const providerForm = reactive({
   name: "",
   contact_email: "",
   notes: "",
 });
 const templateForm = reactive({
+  supersedes_id: null as number|null,
   provider_id: 0,
   name: "",
   sheet_name: "",
@@ -134,7 +144,7 @@ const templateForm = reactive({
 const mappingField = ref("");
 const mappingColumn = ref("");
 const orderProviderForm = reactive<Record<string, { provider_id: number; template_id: number }>>({});
-const activeSection = ref("operations");
+const activeSection = computed(() => (({pricing:'pricing',providers:'providers',finance:'settlement'} as Record<string,string>)[props.workspace] || 'operations'));
 const validFields = ["order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
 
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
@@ -142,9 +152,10 @@ const listPage = ref(0);
 const mobileListOpen = ref(false);
 const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.length / 5)));
 const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 5, (Math.min(listPage.value, pageCount.value - 1) + 1) * 5));
-const selectedId = ref("");
+const selectedId = ref(String(route.query.order || ''));
 const detailSection = ref("fulfilment");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
+watch(()=>selectedOrder.value?.id,()=>{invoicePick.value=[]});
 const editingProvider = ref<Provider | null>(null);
 const editProviderForm = reactive({
   name: "",
@@ -154,7 +165,7 @@ const editProviderForm = reactive({
 });
 
 onMounted(() => {
-  void load();
+  void load().catch(cause=>{error.value=cause instanceof Error?cause.message:String(cause)}).finally(()=>{loaded.value=true});
 });
 
 function stableKey(signature: string) {
@@ -166,13 +177,15 @@ function stableKey(signature: string) {
 }
 
 async function load() {
-  const [listed, billed, mailed, credits, providerList, templateList] = await Promise.all([
+  const [listed, billed, mailed, credits, providerList, templateList, versions, companies] = await Promise.all([
     request<ProjectOrder[]>("operations/orders"),
     request<Invoice[]>("operations/invoices"),
     request<Notice[]>("operations/notifications"),
     request<{ calculation_status: string; credits: Rebate[] }>("operations/rebates"),
     request<Provider[]>("operations/providers"),
     request<ProviderTemplate[]>("operations/provider-templates"),
+    request<PricingVersion[]>("operations/pricing-templates"),
+    request<{customer_id:number;company:string}[]>("operations/customers"),
   ]);
   orders.value = listed;
   invoices.value = billed;
@@ -180,9 +193,12 @@ async function load() {
   rebates.value = credits.credits;
   providers.value = providerList;
   providerTemplates.value = templateList;
+  pricingVersions.value = versions;
+  customers.value = companies;
+  for(const v of versions) applicability[v.id]=[...v.provider_ids];
   await refreshTemplate();
   rebateStatus.value = credits.calculation_status;
-  for (const order of orders.value) {
+  for (const order of props.workspace === 'projects' ? orders.value : []) {
     supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
     if (!orderProviderForm[order.id]) {
       orderProviderForm[order.id] = { provider_id: 0, template_id: 0 };
@@ -230,20 +246,6 @@ async function act(fn: () => Promise<void>) {
   } finally {
     busy.value = false;
   }
-}
-
-function openAccount() {
-  return act(async () => {
-    await request("operations/customers", { ...account });
-    account.company = "";
-    account.contact_name = "";
-    account.email = "";
-    account.phone = "";
-    account.company_address = "";
-    account.username = "";
-    account.password = "";
-    notice.value = tx("已开通一个客户账号和一个联系人。", "Opened one customer account with one contact.");
-  });
 }
 
 function review(id: string) {
@@ -413,6 +415,7 @@ function oneCompany(rows: ProjectOrder[]) {
     error.value = tx("不能把不同公司放进同一张尾款或同一笔返利。", "Projects from different companies cannot share one balance invoice or one rebate.");
     return null;
   }
+  if(new Set(rows.map(o=>o.currency)).size !== 1){error.value=tx('只能选择同一币种的订单','Select orders in one currency');return null;}
   return ids[0];
 }
 
@@ -456,7 +459,7 @@ function recordRebate() {
       month: rebateForm.month,
       amount: rebateForm.amount,
       evidence: rebateForm.evidence.trim(),
-      currency: "NZD",
+      currency: rows[0]?.currency || 'NZD',
     });
     rebateForm.amount = "";
     rebateForm.evidence = "";
@@ -506,8 +509,8 @@ async function refreshTemplate() {
   try {
     const status = await request<{ version?: string; products_count?: number; warnings?: string[] }>("operations/template-status");
     templateStatus.value = tx(
-      `模板版本 ${status.version || "—"}，产品 ${status.products_count ?? "—"}。${(status.warnings || []).join(" ")}`,
-      `Template version ${status.version || "—"}, products ${status.products_count ?? "—"}. ${(status.warnings || []).join(" ")}`,
+      `当前价表 ${(status.version || "—").slice(0,12)}。Deluxe 暂定价格仍需商业确认。`,
+      `Active price version ${(status.version || "—").slice(0,12)}. Deluxe provisional pricing still requires confirmation.`,
     );
   } catch (cause) {
     templateStatus.value = cause instanceof Error ? cause.message : String(cause);
@@ -644,9 +647,20 @@ function createTemplate() {
     templateForm.name = "";
     templateForm.sheet_name = "";
     templateForm.column_mappings = {};
+    templateForm.supersedes_id = null;
     notice.value = tx("已创建供应商模板", "Provider template created");
   });
 }
+
+function reviseTemplate(template:ProviderTemplate) {
+  templateForm.provider_id=template.provider_id;
+  templateForm.name=template.name;
+  templateForm.sheet_name=template.sheet_name;
+  templateForm.column_mappings={...JSON.parse(template.column_mappings)};
+  templateForm.supersedes_id=template.id;
+}
+function saveApplicability(version:PricingVersion) { return act(async()=>{ await request(`operations/pricing-templates/${encodeURIComponent(version.id)}/applicability`,{provider_ids:applicability[version.id] || []}); notice.value=tx('已保存此版本的供应商适用范围','Supplier applicability saved for this version'); }); }
+function activateVersion(version:PricingVersion) { return act(async()=>{await request(`operations/pricing-templates/${encodeURIComponent(version.id)}/activate`,{}); notice.value=tx('已启用此价表；历史订单价格保持不变','Pricing version activated; historical prices unchanged');}); }
 
 async function assignProvider(orderId: string) {
   const form = orderProviderForm[orderId];
@@ -722,12 +736,13 @@ async function loadOrderProviders(orderId: string) {
 </script>
 
 <template>
-  <section class="desk" :class="{ 'workspace-layout': true }">
+  <section class="desk" :class="{ 'workspace-layout': true, 'global-workspace': workspace !== 'projects' }">
     <p v-if="error" class="alert card" role="alert">{{ error }}</p>
     <p v-if="notice" class="success card" role="status">{{ notice }}</p>
 
-    <div class="workspace-grid">
-      <aside class="card order-list" :class="{ 'mobile-expanded': mobileListOpen }">
+    <p v-if="!loaded" role="status">{{ tx('加载中…','Loading…') }}</p>
+    <div v-show="loaded" class="workspace-grid">
+      <aside v-if="workspace === 'projects'" class="card order-list" :class="{ 'mobile-expanded': mobileListOpen }">
         <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
         <label class="filter-row">{{ tx("筛选", "Filter") }}
           <select v-model="statusFilter" @change="listPage = 0">
@@ -760,14 +775,7 @@ async function loadOrderProviders(orderId: string) {
       </aside>
 
       <div class="detail-panel">
-        <nav class="section-tabs">
-          <button type="button" :class="{ active: activeSection === 'operations' }" @click="activeSection = 'operations'">{{ tx("订单操作", "Operations") }}</button>
-          <button type="button" :class="{ active: activeSection === 'pricing' }" @click="activeSection = 'pricing'">{{ tx("定价模板", "Pricing") }}</button>
-          <button type="button" :class="{ active: activeSection === 'customers' }" @click="activeSection = 'customers'">{{ tx("客户账号", "Customers") }}</button>
-          <button type="button" :class="{ active: activeSection === 'providers' }" @click="activeSection = 'providers'">{{ tx("供应商管理", "Providers") }}</button>
-          <button type="button" :class="{ active: activeSection === 'batch' }" @click="activeSection = 'batch'">{{ tx("批量操作", "Batch") }}</button>
-          <button type="button" :class="{ active: activeSection === 'settlement' }" @click="activeSection = 'settlement'">{{ tx("结算返利", "Settlement") }}</button>
-        </nav>
+        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button :disabled="busy" @click="transitSelected">{{ tx('批量标为在途','Mark in transit') }}</button><button :disabled="busy" @click="arriveSelected">{{ tx('批量记录到货','Record arrivals') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="transitRows.length || arrivalRows.length">{{ notice }}</p></div>
 
         <div class="section-content">
           <section v-if="activeSection === 'operations'" class="card section-card">
@@ -779,6 +787,7 @@ async function loadOrderProviders(orderId: string) {
               <header class="order-header">
                 <div>
                   <h2>{{ selectedOrder.project_name }}</h2>
+                  <strong>{{ selectedOrder.order_number }}</strong>
                   <p class="company-name">{{ selectedOrder.company }}</p>
                 </div>
                 <div class="status-badges">
@@ -795,8 +804,9 @@ async function loadOrderProviders(orderId: string) {
               <nav class="detail-tabs" aria-label="Project details">
                 <button type="button" :class="{active: detailSection === 'fulfilment'}" @click="detailSection = 'fulfilment'">{{ tx("明细与履约", "Lines & fulfilment") }}</button>
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
-                <button v-if="selectedOrder.status === 'pending_review'" type="button" :class="{active: detailSection === 'adjustment'}" @click="detailSection = 'adjustment'">{{ tx("价格调整", "Adjustments") }}</button>
+                <button type="button" :class="{active: detailSection === 'adjustment'}" @click="detailSection = 'adjustment'">{{ tx("计价与审核", "Pricing & review") }}</button>
                 <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
+                <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
               </nav>
 <div v-show="detailSection === 'fulfilment'">              <h3>{{ tx("产品明细", "Product lines") }}</h3>
               <div class="table-scroll"><table>
@@ -842,6 +852,7 @@ async function loadOrderProviders(orderId: string) {
                     </select>
                   </label>
                   <button type="button" :disabled="busy || !orderProviderForm[selectedOrder.id].provider_id" @click="assignProvider(selectedOrder.id)">{{ tx("分配供应商", "Assign provider") }}</button>
+                  <RouterLink to="/crm/providers">{{ tx('管理共享供应商','Manage shared suppliers') }}</RouterLink>
                 </div>
                 <div class="form-row">
                   <button type="button" class="secondary" :disabled="busy" @click="exportWithProvider(selectedOrder.id, orderProviderForm[selectedOrder.id].provider_id || undefined, false)">{{ tx("导出供应商模板", "Export provider template") }}</button>
@@ -851,7 +862,9 @@ async function loadOrderProviders(orderId: string) {
                 </div>
               </div>
 
-</div><div v-show="detailSection === 'adjustment'">              <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
+</div><div v-show="detailSection === 'adjustment'">
+              <h3>{{ tx('本单计价依据','Pricing applied to this order') }}</h3><p v-for="version in [...new Set(selectedOrder.lines.map(l=>l.rule_version).filter(Boolean))]" :key="version"><RouterLink :to="{path:'/crm/pricing',query:{version}}">{{ tx('定价版本','Pricing version') }} {{ version?.slice(0,12) }}</RouterLink></p><p v-if="selectedOrder.status !== 'pending_review'">{{ tx('审核后价格已冻结','Prices frozen after acceptance') }}</p>
+              <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
                 <h3>{{ tx("价格调整", "Price adjustment") }}</h3>
                 <div class="table-scroll"><table>
                   <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("折扣比例", "Discount") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Install surcharge") }}</th></tr></thead>
@@ -871,43 +884,37 @@ async function loadOrderProviders(orderId: string) {
 </div><div v-show="detailSection === 'invoices'">              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
                 <h3>{{ tx("发票", "Invoices") }}</h3>
                 <div v-for="invoice in selectedOrder.invoices" :key="invoice.id" class="invoice">
-                  <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未收", "Unpaid") }}</label>
+                  <label><input type="checkbox" :value="invoice.id" v-model="invoicePick" /> {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === "received" ? tx("已收", "Received") : tx("未收", "Unpaid") }}</label>
                   <template v-if="invoice.kind === 'balance'">
                     <input v-model="receiptNote[invoice.id]" :placeholder="tx('尾款备注', 'Balance note')" />
                     <button type="button" class="secondary" :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx("尾款已收", "Balance received") }}</button>
                   </template>
                 </div>
               </div>
-<p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p></div>            </article>
+<p v-if="!selectedOrder.invoices?.length" class="hint">{{ tx("暂无发票", "No invoices yet") }}</p><button v-if="selectedOrder.invoices?.length" :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ tx('发送勾选的本单发票','Send selected order invoices') }}</button><RouterLink :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('客户结算与返利账本','Customer settlement & rebate ledger') }}</RouterLink></div>
+              <div v-show="detailSection === 'history'"><h3>{{ tx('操作记录','Activity') }}</h3><p v-for="(item,index) in selectedOrder.history || []" :key="index">{{ item.created_at }} · {{ item.action }}<span v-if="item.template_id"> · {{ tx('导出模板','Export template') }} #{{ item.template_id }} · {{ item.template_revision ? 'v'+item.template_revision : tx('历史版本未标记','Historical revision unspecified') }}</span></p></div>
+            </article>
           </section>
 
           <section v-if="activeSection === 'pricing'" class="card section-card">
-            <h2>{{ tx("导入计价模板", "Import pricing template") }}</h2>
-            <p class="hint">{{ tx("只把选项和价格放进私有库。页面不展示整张批发价矩阵，也不把客户原文件提交到公开仓库。", "Options and prices go into the private store. This page does not show the wholesale price matrix, and the customer's original file is not committed to the public repository.") }}</p>
-            <input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" />
+            <h2>{{ tx("共享定价模板", "Shared pricing templates") }}</h2>
+            <p class="hint">{{ tx("在此统一管理价表。新版本影响后续计价，已审核订单保留原价。供应商导出格式在供应商模块单独管理。", "Manage shared pricing versions here. New versions affect future pricing; accepted orders retain their prices. Supplier export formats are managed under Suppliers.") }}</p>
+            <label v-if="admin">{{ tx('导入并启用新价表（影响后续计价）','Import & activate a price workbook (affects future pricing)') }}<input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" /></label>
             <p v-if="templateStatus" class="template-status">{{ templateStatus }}</p>
-          </section>
-
-          <section v-if="activeSection === 'customers'" class="card section-card">
-            <h2>{{ tx("开通客户账号", "Open customer account") }}</h2>
-            <p class="hint">{{ tx("一个客户只能有一个登录和一个联系人。", "A customer can have only one login and one contact.") }}</p>
-            <form @submit.prevent="openAccount" class="form-grid">
-              <label>{{ tx("公司", "Company") }}<input v-model="account.company" required /></label>
-              <label>{{ tx("联系人", "Contact") }}<input v-model="account.contact_name" required /></label>
-              <label>{{ tx("邮箱", "Email") }}<input v-model="account.email" type="email" required /></label>
-              <label>{{ tx("电话", "Phone") }}<input v-model="account.phone" required /></label>
-              <label>{{ tx("公司地址", "Company address") }}<input v-model="account.company_address" required /></label>
-              <label>{{ tx("登录账号", "Username") }}<input v-model="account.username" required autocomplete="off" /></label>
-              <label>{{ tx("初始密码", "Starting password") }}<input v-model="account.password" type="password" required autocomplete="new-password" /></label>
-              <button :disabled="busy">{{ tx("开通", "Open") }}</button>
-            </form>
+            <p v-if="!pricingVersions.length">{{ tx('尚未导入定价模板','No pricing workbook imported') }}</p>
+            <article v-for="version in pricingVersions" :key="version.id" class="template-card" :class="{highlight:route.query.version===version.version}">
+              <h3>{{ version.version.slice(0,12) }} · {{ version.active ? tx('当前启用','Active') : tx('历史版本','Historical') }}</h3><p>{{ version.imported_at }} · {{ tx('系列','Products') }}: {{ version.products.map(code=>({'Shutters_PVC':'Classic','Shutters_PVC_Eco':'Eco','Shutters_Pinewood':'Natural','Shutters_Basswood':'Prime','VERA_Ashwood_provisional':'Deluxe'} as Record<string,string>)[code] || code).join(', ') }}</p>
+              <button v-if="admin && !version.active" :disabled="busy" @click="activateVersion(version)">{{ tx('启用此版本（仅后续计价）','Activate for future pricing') }}</button>
+              <h4>{{ tx('适用供应商（明确配置）','Applicable suppliers (explicit configuration)') }}</h4><p v-if="!version.applicability_confirmed">{{ tx('尚未确认，不从付款抬头推断','Unspecified; never inferred from payment issuer') }}</p><label v-for="provider in providers" :key="provider.id" class="checkbox-label"><input type="checkbox" v-model="applicability[version.id]" :value="provider.id" :disabled="!admin" />{{ provider.name }}</label><button v-if="admin" :disabled="busy" @click="saveApplicability(version)">{{ tx('保存适用范围','Save applicability') }}</button>
+              <h4>{{ tx('引用订单','Referenced by orders') }} ({{ version.orders.length }})</h4><div class="resource-orders"><p v-for="order in version.orders" :key="order.id"><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.order_number }} · {{ order.project_name }}</RouterLink></p></div>
+            </article>
           </section>
 
           <section v-if="activeSection === 'providers'" class="card section-card">
             <h2>{{ tx("供应商管理", "Provider management") }}</h2>
             
             <h3>{{ tx("创建供应商", "Create provider") }}</h3>
-            <form @submit.prevent="createProvider" class="form-grid">
+            <form v-if="admin" @submit.prevent="createProvider" class="form-grid">
               <label>{{ tx("供应商名称", "Provider name") }}<input v-model="providerForm.name" required /></label>
               <label>{{ tx("联系邮箱", "Contact email") }}<input v-model="providerForm.contact_email" type="email" /></label>
               <label>{{ tx("备注", "Notes") }}<input v-model="providerForm.notes" /></label>
@@ -921,7 +928,9 @@ async function loadOrderProviders(orderId: string) {
                   <h4>{{ provider.name }} <span :class="{ 'status-active': provider.active, 'status-inactive': !provider.active }">{{ provider.active ? tx("活跃", "Active") : tx("停用", "Inactive") }}</span></h4>
                   <p v-if="provider.contact_email"><strong>{{ tx("邮箱", "Email") }}:</strong> {{ provider.contact_email }}</p>
                   <p v-if="provider.notes"><strong>{{ tx("备注", "Notes") }}:</strong> {{ provider.notes }}</p>
-                  <button type="button" class="secondary" @click="startEditProvider(provider)">{{ tx("编辑", "Edit") }}</button>
+                  <button v-if="admin" type="button" class="secondary" @click="startEditProvider(provider)">{{ tx("编辑", "Edit") }}</button>
+                  <h4>{{ tx('关联订单','Assigned orders') }} ({{ provider.orders?.length || 0 }})</h4><p v-for="order in provider.orders" :key="order.id"><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.order_number }} · {{ order.project_name }}</RouterLink> · {{ tx('导出模板','Export template') }} #{{ order.template_id || '—' }}</p>
+                  <h4>{{ tx('适用价表','Applicable pricing versions') }}</h4><p v-for="version in pricingVersions.filter(v=>v.provider_ids.includes(provider.id))" :key="version.id"><RouterLink :to="{path:'/crm/pricing',query:{version:version.version}}">{{ version.version.slice(0,12) }}</RouterLink></p><p v-if="!pricingVersions.some(v=>v.provider_ids.includes(provider.id))">{{ tx('尚未确认','Unspecified') }}</p>
                 </div>
                 <form v-else @submit.prevent="updateProvider" class="edit-form">
                   <label>{{ tx("名称", "Name") }}<input v-model="editProviderForm.name" required /></label>
@@ -938,7 +947,8 @@ async function loadOrderProviders(orderId: string) {
 
             <h3>{{ tx("配置供应商输出模板", "Configure provider template") }}</h3>
             <p class="hint">{{ tx("为每个供应商配置专用Excel模板，定义字段到列的映射关系。", "Configure custom Excel templates for each provider with field-to-column mappings.") }}</p>
-            <form @submit.prevent="createTemplate" class="template-form">
+            <form v-if="admin" @submit.prevent="createTemplate" class="template-form">
+              <p v-if="templateForm.supersedes_id">{{ tx('正在创建新版本，历史模板不会修改','Creating a new revision; historical template stays unchanged') }} #{{ templateForm.supersedes_id }} <button type="button" @click="templateForm.supersedes_id=null">{{ tx('改为独立模板','Create a separate template') }}</button></p>
               <div class="form-grid">
                 <label>{{ tx("供应商", "Provider") }}
                   <select v-model="templateForm.provider_id" required>
@@ -973,7 +983,7 @@ async function loadOrderProviders(orderId: string) {
             <h3>{{ tx("现有模板", "Existing templates") }}</h3>
             <div class="template-list">
               <div v-for="template in providerTemplates" :key="template.id" class="template-card">
-                <h4>{{ template.name }} <span class="provider-badge">{{ providers.find(p => p.id === template.provider_id)?.name }}</span></h4>
+                <h4>{{ template.name }} · {{ template.revision ? 'v'+template.revision : tx('历史版本未标记','Historical revision unspecified') }} <span class="provider-badge">{{ providers.find(p => p.id === template.provider_id)?.name }}</span></h4><button v-if="admin" class="secondary" @click="reviseTemplate(template)">{{ tx('基于此版创建新版本','Create revision from this version') }}</button>
                 <p><strong>{{ tx("工作表", "Sheet") }}:</strong> {{ template.sheet_name }}</p>
                 <p><strong>{{ tx("映射", "Mappings") }}:</strong> {{ Object.keys(JSON.parse(template.column_mappings)).length }} {{ tx("个字段", "fields") }}</p>
                 <p><strong>{{ tx("状态", "Status") }}:</strong> {{ template.active ? tx("活跃", "Active") : tx("停用", "Inactive") }}</p>
@@ -989,29 +999,12 @@ async function loadOrderProviders(orderId: string) {
             </div>
           </section>
 
-          <section v-if="activeSection === 'batch'" class="card section-card">
-            <h2>{{ tx("批量操作", "Batch operations") }}</h2>
-            <p class="hint">{{ tx("勾选多个订单后批量标记在途或记录到货", "Select multiple orders for batch transit or arrival") }}</p>
-            <div class="batch-actions">
-              <button type="button" :disabled="busy" @click="transitSelected">{{ tx("批量标为在途", "Mark in transit") }}</button>
-              <button type="button" :disabled="busy" @click="arriveSelected">{{ tx("批量记录到货", "Record arrival") }}</button>
-            </div>
-            <p v-if="transitRows.length">{{ transitRows.map((row) => `${row.order_id}: ${row.status}${row.reason ? " (" + row.reason + ")" : ""}`).join(" · ") }}</p>
-            <p v-if="arrivalRows.length">{{ arrivalRows.map((row) => `${row.order_id}: ${row.status} ${row.detail}`).join(" · ") }}</p>
-
-            <h3>{{ tx("发票发送", "Invoice sending") }}</h3>
-            <p class="hint">{{ tx("勾选同一公司的发票后一起发送。跨公司会被拦住。重复发送不会再发一封。", "Select invoices from one company, then send them together. A mix of companies is blocked. Sending again does not send another copy.") }}</p>
-            <button type="button" :disabled="busy" @click="sendSelectedInvoices">{{ tx("发送勾选的发票", "Send selected") }}</button>
-
-            <h3>{{ tx("通知状态", "Notifications") }}</h3>
-            <p v-if="!notices.length">{{ tx("还没有到货或发票通知。", "No notifications yet.") }}</p>
-            <div v-for="item in notices" :key="item.id" class="notification-item">
-              <span>{{ item.subject }} · {{ item.recipient }} · {{ mailStatus(item.status) }}</span>
-              <button v-if="item.status === 'not_configured'" type="button" class="secondary" :disabled="busy" @click="retryNotice(item.id)">{{ tx("重试", "Retry") }}</button>
-            </div>
-          </section>
-
           <section v-if="activeSection === 'settlement'" class="card section-card">
+            <h2>{{ tx('账款与返利','Accounts & rebates') }}</h2>
+            <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
+            <h3>{{ tx('订单选择（用于同公司结算/返利来源）','Orders for settlement / rebate sources') }}</h3><p>{{ tx('已选','Selected') }} {{ picked.length }}</p>
+            <div v-for="order in financeOrders" :key="order.id" class="finance-order"><label class="checkbox-label"><input type="checkbox" v-model="picked" :value="order.id" />{{ order.order_number }} · {{ order.company }} · {{ orderStatus(order.status) }}</label><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink></div><p v-if="!financeOrders.length">{{ tx('此客户暂无订单','No orders for this customer') }}</p>
+            <h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ customers.find(c=>c.customer_id===invoice.customer_id)?.company }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ tx('发送勾选发票','Send selected invoices') }}</button>
             <h2>{{ tx("同公司尾款", "Balance invoice") }}</h2>
             <p class="hint">{{ tx("只对已全部交付、定金已收、同一公司的订单生成尾款草稿。部分到货会拒绝。金额用已保存的定金，不按 60% 重算旧发票。", "A balance draft is created only for fully delivered, deposit-confirmed orders of one company. Partial arrival is refused. The amount uses the stored deposit and does not recalculate an old invoice at 60%.") }}</p>
             <label>{{ tx("已确认的规则说明", "Confirmed rule evidence") }}<textarea v-model="settlementEvidence" rows="3" /></label>
@@ -1019,16 +1012,17 @@ async function loadOrderProviders(orderId: string) {
 
             <h3>{{ tx("已确认返利", "Confirmed rebates") }}</h3>
             <p class="hint">{{ tx("只记录已经确认的月度金额。没有阶梯公式，页面不算返点。同一订单不能重复计入。", "Record only a confirmed monthly amount. There is no tier formula, and this page does not calculate a rebate. An order cannot be counted twice.") }}</p>
-            <p v-if="rebateStatus">{{ rebateStatus }}</p>
-            <div class="form-grid">
+            <p v-if="rebateStatus">{{ tx('只记录已确认的月度返利，不自动套用阶梯公式。','Record confirmed monthly rebates only; no automatic tier calculation.') }}</p>
+            <div v-if="admin" class="form-grid">
               <label>{{ tx("年月", "Month") }}<input v-model="rebateForm.month" placeholder="2026-10" /></label>
               <label>{{ tx("金额", "Amount") }}<input v-model="rebateForm.amount" inputmode="decimal" /></label>
               <label>{{ tx("确认依据", "Evidence") }}<input v-model="rebateForm.evidence" /></label>
               <button type="button" :disabled="busy" @click="recordRebate">{{ tx("记入", "Record") }}</button>
             </div>
-            <div v-for="credit in rebates" :key="credit.id" class="rebate-item">
-              <span>#{{ credit.customer_id }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span>
+            <div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item">
+              <span>{{ customers.find(c=>c.customer_id===credit.customer_id)?.company }} · {{ credit.month }} · {{ credit.currency }} {{ credit.amount }} · {{ tx("已用", "Used") }} {{ credit.used || "0.00" }} · {{ tx("余额", "Remaining") }} {{ credit.remaining || "0.00" }}</span><p>{{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocation.invoice_id }} · {{ allocation.amount }}</p>
             </div>
+            <h3>{{ tx('通知记录','Notifications') }}</h3><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ item.subject }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div>
           </section>
         </div>
       </div>
@@ -1256,4 +1250,10 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .order-pick:hover:not(:disabled) { color: #24342e; }
 .desk .list-pagination button:hover:not(:disabled) { background: #edf3ef; color: #234b37; border-color: #bfd1c5; }
 .desk .link-button:hover:not(:disabled) { background: #edf3ef; color: #17432d; }
+.global-workspace .workspace-grid{grid-template-columns:minmax(0,1fr)}
+.global-workspace .detail-panel{width:100%;min-width:0}.global-workspace .section-card{max-width:1200px;margin:0 auto}
+.template-card,.template-status{overflow-wrap:anywhere}.checkbox-label{display:flex;align-items:center;gap:8px;min-height:44px}.checkbox-label input[type=checkbox]{width:20px;height:20px;min-height:20px;flex:none}
+.batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}.batch-toolbar button,.global-workspace button{min-height:44px}.finance-order{display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-bottom:1px solid #e1e6df;padding:8px 0}.finance-order label{margin:0}.highlight{border:2px solid #17523a}.global-workspace a{color:#17523a;text-decoration:underline}.global-workspace select{max-width:100%}
+@media(max-width:700px){.global-workspace .section-card{padding:12px}.global-workspace .form-grid{grid-template-columns:minmax(0,1fr)}.global-workspace .mapping-controls{display:flex;flex-wrap:wrap}.global-workspace .mapping-controls>*{min-width:0;max-width:100%}.finance-order{display:block}}
+.global-workspace .template-card{padding:14px;margin-top:12px}.global-workspace .template-card h3,.global-workspace .template-card h4{margin:8px 0}.global-workspace .template-card p{margin:6px 0}.resource-orders{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}.resource-orders p{margin:0!important}.resource-orders a{min-height:44px}.pick-mark{min-width:44px;min-height:44px}.global-workspace .template-card>.checkbox-label{display:inline-flex;margin-right:20px}@media(max-width:700px){.resource-orders{grid-template-columns:minmax(0,1fr)}}
 </style>

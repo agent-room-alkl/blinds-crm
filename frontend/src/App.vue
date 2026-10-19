@@ -71,4 +71,5 @@ function toggleLocale() {
 @media(max-width:700px){.frame-portal .rail{min-height:60px;padding:6px 12px}}
 
 .frame-portal{padding:0;display:flex;flex-direction:column;min-height:100dvh}.frame-portal .rail{flex:none}
+.frame-work{margin:0;padding:0}
 </style>

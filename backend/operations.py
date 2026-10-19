@@ -298,6 +298,10 @@ class ProviderTemplateCreate(Input):
     name: str = Field(min_length=1, max_length=200)
     sheet_name: str = Field(min_length=1, max_length=100)
     column_mappings: dict[str, str]  # field_name -> column_letter
+    supersedes_id: int | None = None
+
+class PricingApplicability(Input):
+    provider_ids: list[int] = Field(default_factory=list, max_length=200)
 
 class OrderProviderAssignment(Input):
     provider_id: int
@@ -622,6 +626,8 @@ def register(app, s):
                     raise HTTPException(409, 'This customer already has its single portal account')
                 c.execute('UPDATE customers SET company=? WHERE id=?', (body.company, cid))
             else:
+                if any(r['company'].strip().casefold()==body.company.strip().casefold() for r in c.execute('SELECT company FROM customers')):
+                    raise HTTPException(409,'Company already exists; manage its existing customer account')
                 cid = c.execute('INSERT INTO customers(company,locale) VALUES(?,?)', (body.company, 'en')).lastrowid
             d = body.model_dump(exclude={'password'}, mode='json')
             d.update(customer_id=cid, created_at=s.now(), created_by=actor)
@@ -637,6 +643,47 @@ def register(app, s):
             c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?',(s.dump(d),cid))
             c.execute('UPDATE customers SET company=? WHERE id=?',(body.company,cid))
             return d
+
+    @app.get('/api/operations/pricing-templates')
+    def pricing_templates(actor=Depends(s.auth)):
+        with s.db() as c:
+            pointer = c.execute('SELECT data FROM operations_records WHERE id=?', ('template-current',)).fetchone()
+            active = json.loads(pointer['data'])['template_id'] if pointer else None
+            projects = records(c, 'project')
+            result = []
+            for template in records(c, 'template'):
+                scope = c.execute('SELECT data FROM operations_records WHERE id=?', ('pricing-scope:'+template['id'],)).fetchone()
+                used = [{'id':d['id'], 'order_number':d.get('order_number'), 'project_name':d['project_name'],
+                         'lines':[line['id'] for line in d['lines'] if line.get('rule_version') == template['version']]}
+                        for d in projects if any(line.get('rule_version') == template['version'] for line in d['lines'])]
+                result.append({'id':template['id'], 'version':template['version'], 'active':template['id']==active,
+                               'source':template.get('source'), 'imported_at':template.get('imported_at'),
+                               'products':[p['source_code'] for p in template['products'] if p['source_code'] in
+                                           ('Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood','VERA_Ashwood_provisional')],
+                               'provider_ids':json.loads(scope['data'])['provider_ids'] if scope else [],
+                               'applicability_confirmed':bool(scope), 'orders':used})
+            return result
+
+    @app.post('/api/operations/pricing-templates/{tid}/applicability')
+    def pricing_applicability(tid:str,body:PricingApplicability,actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            get(c,tid,'template')
+            ids = sorted(set(body.provider_ids))
+            for pid in ids:
+                if not c.execute('SELECT 1 FROM providers WHERE id=?',(pid,)).fetchone():
+                    raise HTTPException(404,'Supplier not found')
+            value={'id':'pricing-scope:'+tid,'template_id':tid,'provider_ids':ids,'updated_at':s.now(),'actor':actor}
+            put(c,'pricing_applicability',value)
+            return value
+
+    @app.post('/api/operations/pricing-templates/{tid}/activate')
+    def activate_pricing_template(tid:str,actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            get(c,tid,'template')
+            put(c,'template_pointer',{'id':'template-current','template_id':tid,'activated_at':s.now(),'actor':actor})
+            return {'template_id':tid,'status':'active','historical_orders_unchanged':True}
 
     @app.get('/api/operations/template-status')
     def template_status(actor=Depends(s.auth)):
@@ -1054,7 +1101,15 @@ def register(app, s):
                 for name,content in package.items():
                     z.writestr(name,content)
             
-            filename=f"vera-provider-{provider_id}-{d['id'].replace(':','-')}.xlsx"
+            c.execute('BEGIN IMMEDIATE')
+            # Preserve the exact exported revision even if the order is reassigned later.
+            d=get(c,oid,'project')
+            revision_row=c.execute('SELECT data FROM operations_records WHERE id=?',('provider-template-revision:'+str(template_id),)).fetchone()
+            revision=json.loads(revision_row['data']).get('revision') if revision_row else None
+            event(d,'supplier_exported',actor,provider_id=provider_id,template_id=template_id,
+                  template_revision=revision,sheet_name=sheet_name,column_mappings=mappings)
+            put(c,'project',d,d['customer_id'])
+            filename=f"vera-provider-{provider_id}-{d.get('order_number') or d['id'].replace(':','-')}.xlsx"
             return Response(out.getvalue(),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                            headers={'Content-Disposition':f'attachment; filename="{filename}"','Cache-Control':'no-store'})
 
@@ -1311,7 +1366,14 @@ def register(app, s):
     @app.get('/api/operations/providers')
     def list_providers(actor=Depends(s.auth)):
         with s.db() as c:
-            return [dict(row) for row in c.execute('SELECT * FROM providers ORDER BY name').fetchall()]
+            projects = {d['id']:d for d in records(c,'project')}
+            result=[]
+            for row in c.execute('SELECT * FROM providers ORDER BY name').fetchall():
+                assigned = c.execute('SELECT order_id,template_id FROM order_providers WHERE provider_id=?',(row['id'],)).fetchall()
+                result.append({**dict(row),'orders':[{'id':a['order_id'],'order_number':projects[a['order_id']].get('order_number'),
+                    'project_name':projects[a['order_id']]['project_name'],'template_id':a['template_id']}
+                    for a in assigned if a['order_id'] in projects]})
+            return result
 
     @app.post('/api/operations/providers')
     def create_provider(body:ProviderCreate,actor=Depends(s.require_admin)):
@@ -1335,9 +1397,14 @@ def register(app, s):
     @app.get('/api/operations/provider-templates')
     def list_provider_templates(provider_id:int|None=None,actor=Depends(s.auth)):
         with s.db() as c:
-            if provider_id:
-                return [dict(row) for row in c.execute('SELECT * FROM provider_templates WHERE provider_id=? ORDER BY name',(provider_id,)).fetchall()]
-            return [dict(row) for row in c.execute('SELECT * FROM provider_templates ORDER BY provider_id,name').fetchall()]
+            result=[]
+            revisions={d['template_id']:d for d in records(c,'provider_template_revision')}
+            for row in c.execute('SELECT * FROM provider_templates ORDER BY provider_id,name').fetchall():
+                if provider_id and row['provider_id']!=provider_id: continue
+                meta=revisions.get(row['id'],{})
+                result.append({**dict(row),'revision':meta.get('revision'), 'supersedes_id':meta.get('supersedes_id'),
+                               'family_id':meta.get('family_id',row['id'])})
+            return result
 
     @app.post('/api/operations/provider-templates')
     def create_provider_template(body:ProviderTemplateCreate,actor=Depends(s.require_admin)):
@@ -1357,9 +1424,20 @@ def register(app, s):
                 if field not in valid_fields:
                     raise HTTPException(422,f'Unknown field: {field}')
             validate_template(body.sheet_name, body.column_mappings)
+            family_id=None
+            revision=1
+            if body.supersedes_id:
+                parent=c.execute('SELECT * FROM provider_templates WHERE id=? AND provider_id=?',(body.supersedes_id,body.provider_id)).fetchone()
+                if not parent: raise HTTPException(404,'Previous template revision not found for this supplier')
+                meta=c.execute('SELECT data FROM operations_records WHERE id=?',('provider-template-revision:'+str(body.supersedes_id),)).fetchone()
+                family_id=json.loads(meta['data'])['family_id'] if meta else body.supersedes_id
+                previous=[v.get('revision',1) for v in records(c,'provider_template_revision') if v.get('family_id')==family_id]
+                revision=max(previous or [1])+1
             cursor=c.execute('INSERT INTO provider_templates(provider_id,name,sheet_name,column_mappings,created_at) VALUES(?,?,?,?,?)',
                      (body.provider_id,body.name,body.sheet_name,json.dumps(body.column_mappings),s.now()))
             tid=cursor.lastrowid
+            put(c,'provider_template_revision',{'id':'provider-template-revision:'+str(tid),'template_id':tid,
+                'family_id':family_id or tid,'revision':revision,'supersedes_id':body.supersedes_id,'created_at':s.now(),'actor':actor})
             return dict(c.execute('SELECT * FROM provider_templates WHERE id=?',(tid,)).fetchone())
 
     @app.post('/api/operations/orders/{oid}/assign-provider')
@@ -1385,9 +1463,13 @@ def register(app, s):
             if existing:
                 c.execute('UPDATE order_providers SET template_id=?,is_preferred=? WHERE id=?',
                          (body.template_id,1 if body.is_preferred else 0,existing['id']))
+                event(d,'supplier_assigned',actor,provider_id=body.provider_id,template_id=body.template_id)
+                put(c,'project',d,d['customer_id'])
                 return {'order_id':oid,'provider_id':body.provider_id,'template_id':body.template_id,'updated':True}
             c.execute('INSERT INTO order_providers(order_id,provider_id,template_id,is_preferred,assigned_at) VALUES(?,?,?,?,?)',
                      (oid,body.provider_id,body.template_id,1 if body.is_preferred else 0,s.now()))
+            event(d,'supplier_assigned',actor,provider_id=body.provider_id,template_id=body.template_id)
+            put(c,'project',d,d['customer_id'])
             return {'order_id':oid,'provider_id':body.provider_id,'template_id':body.template_id,'assigned_at':s.now()}
 
     @app.get('/api/operations/orders/{oid}/providers')

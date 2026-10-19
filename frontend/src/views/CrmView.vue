@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
 import ProductManager from "../components/ProductManager.vue";
@@ -7,7 +8,7 @@ import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
-import { FolderKanban, Users, BarChart3, Package, Settings } from "lucide-vue-next";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -16,7 +17,9 @@ const signed = ref(!!session.token);
 const busy = ref(false);
 const error = ref("");
 const message = ref("");
-const tab = ref("projects");
+const route = useRoute();
+const router = useRouter();
+const tab = computed(() => String(route.params.section || 'projects'));
 const credentials = reactive({ username: "", password: "" });
 const products = ref<ApiProduct[]>([]);
 const me = ref({ username: "", name: "", role: "staff" });
@@ -42,6 +45,9 @@ const newUser = reactive({ username: "", name: "", password: "", role: "staff" }
 const nav = computed(() => [
   { key: "projects", label: tx("订单", "Orders") },
   { key: "customers", label: tx("客户资料", "Customers") },
+  { key: "providers", label: tx("供应商", "Suppliers") },
+  { key: "pricing", label: tx("定价与模板", "Pricing & templates") },
+  { key: "finance", label: tx("账款与返利", "Accounts & rebates") },
   { key: "dashboard", label: tx("分析看板", "Dashboard") },
   { key: "products", label: tx("产品目录", "Product catalogue") },
 ]);
@@ -137,7 +143,7 @@ async function logout() {
 }
 
 function openTab(key: string) {
-  tab.value = key;
+  void router.push(`/crm/${key}`);
   window.scrollTo({ top: 0 });
 }
 
@@ -158,6 +164,9 @@ onMounted(() => {
         <Users :size="20" aria-hidden="true" />
         {{ tx("客户资料", "Customers") }}
       </button>
+      <button type="button" :class="{ current: tab === 'providers' }" @click="openTab('providers')"><Truck :size="20" aria-hidden="true" />{{ tx('供应商', 'Suppliers') }}</button>
+      <button type="button" :class="{ current: tab === 'pricing' }" @click="openTab('pricing')"><FileSpreadsheet :size="20" aria-hidden="true" />{{ tx('定价与模板', 'Pricing & templates') }}</button>
+      <button type="button" :class="{ current: tab === 'finance' }" @click="openTab('finance')"><Wallet :size="20" aria-hidden="true" />{{ tx('账款与返利', 'Accounts & rebates') }}</button>
       <button type="button" :class="{ current: tab === 'dashboard' }" @click="openTab('dashboard')">
         <BarChart3 :size="20" aria-hidden="true" />
         {{ tx("分析看板", "Dashboard") }}
@@ -211,8 +220,8 @@ onMounted(() => {
         <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
-      <ProjectDesk v-if="tab === 'projects'" :admin="me.role === 'admin'" />
-      <PortalCustomers v-if="tab === 'customers'" />
+      <ProjectDesk v-if="['projects','providers','pricing','finance'].includes(tab)" :key="tab" :workspace="tab" :admin="me.role === 'admin'" />
+      <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" />
       <SampleDashboard v-if="tab === 'dashboard'" />
       <ProductManager v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
       <div v-if="tab === 'users' && me.role === 'admin'" class="settings-layout">
