@@ -6,11 +6,11 @@ Vue 3 + TypeScript and FastAPI customer portal/project operations. `/portal` is 
 
 Use `./dev.ps1 backend` and `./dev.ps1 frontend` in separate PowerShell terminals. The pair connects the frontend to port 8002. Keep unrelated processes running if a port is occupied.
 
-Alternatively, install `backend/requirements.txt` into a Python virtual environment, run `uvicorn app.main:app --reload --port 8002` from `backend`, and run `npm install` / `npm run dev` in `frontend` with the matching proxy. Local SQLite is available without PostgreSQL configuration. Server settings load from ignored `.env` files. Initial local demo credentials are `dylan` / `vera-demo`; cloud initialization requires a configured password.
+The current local and online app share the configured PostgreSQL `vera` schema. `backend/start_current.ps1` starts the local API on port 8002 with SMTP disabled for simulated workflows. There is no active SQLite application database. Connection values load from ignored `.env` files. See [current dataset and migration](docs/CURRENT_DATABASE.md).
 
 ## Workflow
 
-An administrator opens one account and one contact per company, then privately uploads the order workbook. The server extracts 23 product configurations and versioned area/matrix prices. The public catalogue shows five website shutter series; template-only products stay in the portal, and Ashwood is display-only without a confirmed price. Product IDs are not reused for different products.
+An administrator opens one account and one contact per company, then privately uploads the order workbook. The server extracts private versioned workbook rules. Public and portal catalogues both offer exactly five website series: Eco, Classic, Natural, Prime and Deluxe, with the official website images. Aluminium and blind codes are excluded from customer ordering. Deluxe remains explicitly provisional until its commercial rate is confirmed. Product IDs are not reused for different products.
 
 Customers configure named windows, separating repeated-window quantity from panels per window. The server calculates installation, GST and ROUNDUP. Customers cannot enter prices or discounts. Employees review documented adjustments, freeze the order and create a **60% deposit** draft. Manual receipt, supplier reference, transit, partial arrival and delivery are separate actions. Batch operations report each result and reuse idempotency keys on retry.
 
@@ -26,11 +26,11 @@ Retired Support/History tables are not created by the app. Remove existing copie
 
 See [deployment](DEPLOYMENT.md), [API](backend/OPERATIONS.md) and [Excel automation](docs/CRM-excel-automation.zh-CN.md). Earlier source-review documents describe their original stage; this README and active API describe current behavior.
 
-## Labelled local sample data
+## Current shared data
 
-`python backend/seed_demo.py` creates (or reuses) only `backend/.demo/vera-demo.db`, with 3 demo companies and 7 projects spanning pending review, deposit, supplier order, transit, partial arrival/delivery and settled states. It uses invented prices, example.invalid contacts and disabled SMTP. It refuses an existing database without its demo marker and cannot write PostgreSQL. The local staff demo account uses the existing README demo credentials; customer `demo-trade` uses the explicitly non-production password `local-demo-only`.
+The owner-approved shared dataset has 19 workbook customer companies, five website products and seven explicitly simulated orders. Missing source contact/address fields remain marked missing. Two payment/quotation issuers are inactive candidates whose role as factory suppliers is unconfirmed. Real contacts and rates stay private. Old demo/test databases were removed. Temporary database fixtures inside automated tests remain isolated.
 
-To review it, launch the backend with `VERA_DB_BACKEND=sqlite`, `VERA_DB=<absolute backend/.demo/vera-demo.db>`, `VERA_STORAGE_BACKEND=local`, `SMTP_HOST=` and `SMTP_FROM=`. Point the frontend proxy to that local backend. This sample database is ignored by Git and never replaces operational data.
+`seed_current.py` and `replace_current_postgres.py` support a future explicitly authorized rebuild/migration; they are not startup commands. Start the current app with `./dev.ps1 backend` and `./dev.ps1 frontend`.
 
 ## Verification
 

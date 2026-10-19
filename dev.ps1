@@ -9,7 +9,7 @@ $ErrorActionPreference='Stop'
 if ($Service -eq 'backend') {
     Push-Location (Join-Path $PSScriptRoot 'backend')
     try {
-        & python -m uvicorn app.main:app --host 127.0.0.1 --port 8002
+        & (Join-Path $PSScriptRoot 'backend/start_current.ps1')
     } finally { Pop-Location }
 } else {
     $taskPreviousApi=$env:VERA_DEV_API_URL

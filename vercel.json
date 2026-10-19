@@ -27,6 +27,10 @@
           "destination": "/index.html"
         },
         {
+          "source": "/portal/:path*",
+          "destination": "/index.html"
+        },
+        {
           "source": "/contact",
           "destination": "/index.html"
         }
