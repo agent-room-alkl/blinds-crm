@@ -1242,6 +1242,26 @@ def register(app, s):
         with s.db() as c:
             return records(c, 'invoice')
 
+    def invoice_mail(iid, d):
+        # Single source for the invoice email so the preview and the real send can never drift apart.
+        text = 'VERA invoice '+iid+'\n'+d['currency']+' '+d['amount']+'\n'+'\n'.join(l['order_id']+': '+l['amount'] for l in d['lines'])
+        return 'VERA invoice '+iid, text
+
+    @app.get('/api/operations/invoices/{iid}/mail-preview')
+    def invoice_mail_preview(iid: str, actor=Depends(s.auth)):
+        # Read-only: shows exactly what a send would produce and who would really receive it. Sends nothing.
+        from email_service import configuration
+        state = configuration()[0]
+        with s.db() as c:
+            d = get(c, iid, 'invoice')
+            customer_email = profile(c, d['customer_id'])['email']
+        subject, text = invoice_mail(iid, d)
+        demo = state['mode'] == 'demo'
+        return {'invoice_id': iid, 'subject': subject, 'body': text, 'content_type': 'text/plain',
+                'customer_recipient': customer_email, 'email_mode': state['mode'],
+                'delivery_enabled': bool(state['delivery_enabled'] and state['configured']),
+                'delivered_to': state['demo_recipient'] if demo else customer_email}
+
     @app.post('/api/operations/invoices/{iid}/send')
     def send_invoice(iid: str, actor=Depends(s.auth)):
         nid = 'invoice-mail:'+iid
@@ -1250,8 +1270,8 @@ def register(app, s):
             d = get(c, iid, 'invoice')
             row = c.execute('SELECT 1 FROM operations_records WHERE id=?', (nid,)).fetchone()
             if not row:
-                text = 'VERA invoice '+iid+'\n'+d['currency']+' '+d['amount']+'\n'+'\n'.join(l['order_id']+': '+l['amount'] for l in d['lines'])
-                queue(c, d['customer_id'], 'VERA invoice '+iid, text, nid, iid)
+                subject, text = invoice_mail(iid, d)
+                queue(c, d['customer_id'], subject, text, nid, iid)
             d['notification_id'] = nid
             put(c, 'invoice', d, d['customer_id'])
         n = deliver(nid)

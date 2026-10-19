@@ -135,6 +135,19 @@ with tempfile.TemporaryDirectory() as folder:
     assert len(other.get('/api/portal/consumption').json()['invoices']) == 0
     print('PASS settlement/rebate: company boundaries, deposit deduction, credit source/use dedupe and invoice-send dedupe')
 
+    # Preview is read-only, shows the exact email, and reports the real destination (owner-only in demo mode).
+    before = (staff.get('/api/operations/invoices').json(), len(staff.get('/api/operations/notifications').json()))
+    with patch.dict(os.environ, {'VERA_EMAIL_MODE': 'demo', 'VERA_DEMO_EMAIL_ADDRESS': 'owner@example.invalid'}), patch('email_service.send_email') as send:
+        preview = staff.get(f"/api/operations/invoices/{invoice['id']}/mail-preview").json()
+        assert preview['subject'] == 'VERA invoice '+invoice['id'] and invoice['amount'] in preview['body']
+        assert preview['customer_recipient'] == a['email'] and preview['delivered_to'] == 'owner@example.invalid'
+        assert preview['content_type'] == 'text/plain' and preview['email_mode'] == 'demo'
+        assert send.call_count == 0
+    assert portal.get(f"/api/operations/invoices/{invoice['id']}/mail-preview").status_code == 401
+    assert staff.get('/api/operations/invoices/missing/mail-preview').status_code == 404
+    assert before == (staff.get('/api/operations/invoices').json(), len(staff.get('/api/operations/notifications').json()))
+    print('PASS invoice mail preview: exact content, real destination, read-only')
+
     # A new price sheet never rewrites a reviewed order snapshot.
     post(staff,'operations/pricing/1',{**rule,'rate_per_m2':'999'})
     assert portal.get('/api/portal/orders').json()[0]['total']=='500.00'
