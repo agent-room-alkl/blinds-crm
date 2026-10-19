@@ -185,6 +185,10 @@ const productPageLines = computed(() => selectedOrder.value?.lines.slice(Math.mi
 watch(() => selectedOrder.value?.id, () => { productPage.value = 0; });
 watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[];fulfilError.value=''});
 watch(invoicePick,()=>{mailPreview.value=null});
+watch(picked, () => {
+  // Refresh the generated text for a new selection, but never overwrite wording the user changed.
+  if (!settlementEvidence.value.trim() || settlementEvidence.value === lastAutoEvidence) fillEvidence();
+}, { deep: true });
 watch(()=>selectedOrder.value?.invoices?.map(i=>`${i.id}:${i.status}`).join('|'),()=>{
   if(props.workspace!=='projects') return;
   const drafts=selectedOrder.value?.invoices?.filter(i=>i.status==='draft') || [];
@@ -523,6 +527,32 @@ function oneCompany(rows: ProjectOrder[]) {
   }
   if(new Set(rows.map(o=>o.currency)).size !== 1){error.value=tx('只能选择同一币种的订单','Select orders in one currency');return null;}
   return ids[0];
+}
+
+const AUTO_EVIDENCE_MAX_ORDERS = 8;
+function autoEvidence(rows: ProjectOrder[]) {
+  // Built only from stored facts. It states the billing basis; it never claims a rebate rule exists.
+  if (!rows.length) return "";
+  const parts = rows.slice(0, AUTO_EVIDENCE_MAX_ORDERS).map((order) => {
+    const deposit = order.invoices?.find((invoice) => invoice.kind === "deposit");
+    const ref = order.order_number || order.id;
+    const money = `${order.currency || ""} ${order.total ?? "?"}`.trim();
+    return tx(
+      `${ref}：订单总额 ${money}，已交付，定金${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""}已收`,
+      `${ref}: order total ${money}, delivered, deposit${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""} received`,
+    );
+  });
+  const more = rows.length > AUTO_EVIDENCE_MAX_ORDERS ? tx(`；另有 ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} 单`, `; ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} more orders`) : "";
+  return tx(
+    `按系统记录生成：全部交付且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除早于本月、已确认的返利余额；不自动计算返利。`,
+    `Generated from system records: fully delivered orders with deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only confirmed rebate balances from earlier months are deducted; no rebate is calculated automatically.`,
+  );
+}
+let lastAutoEvidence = "";
+function fillEvidence() {
+  const text = autoEvidence(selectedOrders()).slice(0, 1000); // backend limit
+  settlementEvidence.value = text;
+  lastAutoEvidence = text;
 }
 
 function settleSelected() {
@@ -1127,7 +1157,7 @@ async function loadOrderProviders(orderId: string) {
                 <p v-if="!financeInvoices.length" class="hint">{{ tx('此客户暂无发票','No invoices for this customer') }}</p>
               </div><div class="finance-panel-foot"><div v-if="mailPreview" class="mail-preview" role="region" :aria-label="tx('邮件预览','Email preview')"><p><strong>{{ tx('邮件预览（纯文本，尚未发送）','Email preview (plain text, not sent)') }}</strong></p><p>{{ tx('实际收件人','Actual recipient') }}: {{ mailPreview.delivered_to || tx('未配置','not configured') }}<template v-if="mailPreview.email_mode==='demo'"> · {{ tx('演示模式：不会发给客户','Demo mode: never sent to the customer') }} ({{ tx('客户邮箱','customer address') }}: {{ mailPreview.customer_recipient }})</template><template v-if="!mailPreview.delivery_enabled"> · {{ tx('发信通道未启用，点发送只会记录不会投递','Delivery not enabled; sending only records it') }}</template></p><p>{{ tx('标题','Subject') }}: {{ mailPreview.subject }}</p><pre>{{ mailPreview.body }}</pre></div><button type="button" :disabled="busy || !invoicePick.length" @click="previewInvoiceMail">{{ tx('预览邮件','Preview email') }}</button><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button></div></div>
               <div class="finance-panel finance-action-panel"><nav class="finance-pane-tabs" aria-label="Finance actions"><button type="button" :class="{active:financePane==='balance'}" @click="financePane='balance'">{{ tx('尾款','Balance') }}</button><button type="button" :class="{active:financePane==='rebates'}" @click="financePane='rebates'">{{ tx('返利','Rebates') }}</button><button type="button" :class="{active:financePane==='notifications'}" @click="financePane='notifications'">{{ tx('通知','Notices') }}</button></nav>
-                <div v-show="financePane==='balance'" class="finance-action-content"><h3>{{ tx('生成尾款草稿','Create balance draft') }}</h3><p class="hint">{{ tx('仅限同公司、同币种、全部交付且定金已收。金额扣除已保存定金。','Same company and currency, fully delivered with deposit received. Stored deposits are deducted.') }}</p><label>{{ tx('已确认的规则说明','Confirmed rule evidence') }}<textarea v-model="settlementEvidence" rows="2" /></label></div>
+                <div v-show="financePane==='balance'" class="finance-action-content"><h3>{{ tx('生成尾款草稿','Create balance draft') }}</h3><p class="hint">{{ tx('仅限同公司、同币种、全部交付且定金已收。金额扣除已保存定金。','Same company and currency, fully delivered with deposit received. Stored deposits are deducted.') }}</p><label>{{ tx('规则说明（按所选订单自动生成，可修改）','Rule note (generated from the selected orders; editable)') }}<textarea v-model="settlementEvidence" rows="4" /></label><p class="hint">{{ tx('生成的只是草稿发票，不会发给客户；检查后再到“发票”里单独点发送。','This only creates a draft invoice. Nothing is sent to the customer; review it, then send it separately from the invoice list.') }}</p><button type="button" :disabled="busy || !picked.length" @click="fillEvidence">{{ tx('按所选订单重新生成说明','Regenerate note from selected orders') }}</button></div>
                 <div v-show="financePane==='rebates'" class="finance-action-content"><h3>{{ tx('已确认返利','Confirmed rebates') }}</h3><p class="hint">{{ tx('只录入已确认月度金额；不自动推算返利。','Record only confirmed monthly amounts; rebate tiers are not inferred.') }}</p><div v-if="admin" class="form-grid"><label>{{ tx('年月','Month') }}<input v-model="rebateForm.month" placeholder="2026-10" /></label><label>{{ tx('金额','Amount') }}<input v-model="rebateForm.amount" inputmode="decimal" /></label><label class="finance-evidence">{{ tx('确认依据','Evidence') }}<input v-model="rebateForm.evidence" /></label></div><div class="finance-list"><div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocation.invoice_id }} · {{ allocation.amount }}</p></div></div></div>
                 <div v-show="financePane==='notifications'" class="finance-action-content"><h3>{{ tx('通知记录','Notifications') }}</h3><div class="finance-list"><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ item.subject }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div></div></div>
                 <div v-show="financePane==='balance'" class="finance-panel-foot"><button type="button" :disabled="busy || !picked.length" @click="settleSelected">{{ tx('生成尾款草稿','Create balance draft') }}</button></div>
