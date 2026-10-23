@@ -304,6 +304,24 @@ def apply_plan(url, schema, plan, backup_dir: Path):
                     "INSERT INTO providers(name, contact_email, notes, active, created_at) VALUES(%s, %s, %s, %s, %s)",
                     (row["name"], row["contact_email"], row["notes"], row["active"], row["created_at"]),
                 )
+        for row in plan["provider_templates"]:
+            provider = conn.execute("SELECT id FROM providers WHERE lower(name)=lower(%s)", (row["provider_name"],)).fetchone()
+            if not provider:
+                raise RuntimeError("Supplier template has no matching supplier")
+            found = conn.execute(
+                "SELECT id FROM provider_templates WHERE provider_id=%s AND lower(name)=lower(%s)",
+                (provider[0], row["name"]),
+            ).fetchone()
+            if found:
+                conn.execute(
+                    "UPDATE provider_templates SET sheet_name=%s, column_mappings=%s, active=%s WHERE id=%s",
+                    (row["sheet_name"], row["column_mappings"], row["active"], found[0]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO provider_templates(provider_id, name, sheet_name, column_mappings, active, created_at) VALUES(%s, %s, %s, %s, %s, %s)",
+                    (provider[0], row["name"], row["sheet_name"], row["column_mappings"], row["active"], row["created_at"]),
+                )
         conn.execute(
             "INSERT INTO operations_records(id, kind, customer_id, data) VALUES(%s, %s, NULL, %s) "
             "ON CONFLICT(id) DO UPDATE SET kind=EXCLUDED.kind, data=EXCLUDED.data",
