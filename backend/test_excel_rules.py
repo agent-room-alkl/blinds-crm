@@ -11,7 +11,8 @@ import zipfile
 from decimal import Decimal
 from pathlib import Path
 from xml.etree import ElementTree as ET
-from excel_rules import parse_template,calculate_line,workbook,column
+from excel_rules import parse_template,calculate_line,apply_order_minimum,workbook,column
+from addons import addon_totals,compose_unit
 from demo_workbook import fixture
 
 
@@ -27,6 +28,18 @@ assert calculate_line(matrix,line)['amount']=='135.00'
 shutter=rules['products'][0]
 assert calculate_line(shutter,{**line,'width_mm':'501','height_mm':'1000'})['area']=='0.51'
 assert calculate_line(shutter,{**line,'width_mm':'100','height_mm':'100'})['amount']=='50.00'
+assert addon_totals({'tier_on_tier':'yes','shaped_cutout':'yes'}) == (Decimal(0),Decimal(10),Decimal(300))
+assert compose_unit('2','340',0,10,300) == Decimal('1048.00')
+for material in ('Shutters_PVC','Shutters_PVC_Eco'):
+    try: addon_totals({'stained_colour':'yes'},material)
+    except ValueError: pass
+    else: raise AssertionError(material+' must reject stained colour')
+small = calculate_line({**shutter,'rate_per_m2':'280'}, {**line,'width_mm':'500','height_mm':'500'})
+small_line = {**small,'quantity':1,'pricing_status':'configured','price_snapshot':{**shutter,'rate_per_m2':'280'}}
+assert apply_order_minimum([small_line]) is True and small_line['amount']=='280.00'
+assert calculate_line(shutter,{**line,'panel_count':2})['installation_amount']=='100.00'
+# Confirmed $50/panel supersedes any legacy workbook installation rate.
+assert calculate_line({**shutter,'installation_rate':'250'}, {**line,'panel_count':2})['installation_amount']=='100.00'
 try:calculate_line(matrix,{**line,'width_mm':'1001'})
 except ValueError:pass
 else:raise AssertionError('oversize matrix price must fail')
@@ -43,7 +56,7 @@ with tempfile.TemporaryDirectory() as folder:
         return r.json()
     token=post(staff,'auth/login',{'username':'dylan','password':os.getenv('VERA_DEMO_PASSWORD','vera-demo')})['token']
     staff.headers['Authorization']='Bearer '+token
-    profile=post(staff,'operations/customers',dict(company='TEST only',contact_name='Test contact',email='test@example.invalid',phone='123',company_address='Company',username='testclient',password='test-password'))
+    profile=post(staff,'operations/customers',dict(company='TEST only',contact_name='Test contact',email='test@example.invalid',phone='123',company_address='Company',username='testclient',password='test-password',customer_type='wholesale',customer_code='TEST'))
     customer.headers['Authorization']='Bearer '+post(customer,'portal/login',{'username':'testclient','password':'test-password'})['token']
     post(customer,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()},401)
     imported=post(staff,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()})
@@ -123,9 +136,9 @@ with tempfile.TemporaryDirectory() as folder:
     from unittest.mock import patch
     with patch('email_service.configuration',return_value=({'configured':False},None)):
         post(staff,'operations/fulfilment',dict(order_id=oid,kind='arrival',operation_key='TEST-arrival',lines=[dict(line_id='1',quantity=1)]))
-    post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='TEST-delivery',lines=[dict(line_id='1',quantity=1)]))
-    invoice=post(staff,'operations/settlements',dict(order_ids=[oid],operation_key='TEST-balance',rules_evidence='TEST fully delivered approval',billing_basis='fully_delivered_remaining_total'))
+    invoice=post(staff,'operations/settlements',dict(order_ids=[oid],operation_key='TEST-balance',rules_evidence='TEST all arrived approval',billing_basis='all_arrived_remaining_total'))
     post(staff,f"operations/invoices/{invoice['id']}/received",{'note':'TEST received manually'})
+    post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='TEST-delivery',lines=[dict(line_id='1',quantity=1)]))
     consumption=customer.get('/api/portal/consumption').json()
     assert consumption['summary']['NZD']['received']==reviewed['total'] and consumption['summary']['NZD']['outstanding_invoiced']=='0.00'
     print('PASS private import/idempotence, catalogue scope, order GST/install, staff adjustments, safe XLSX, profile edits, receipt/consumption/settlement')

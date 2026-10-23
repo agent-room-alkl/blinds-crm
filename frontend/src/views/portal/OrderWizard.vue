@@ -7,6 +7,7 @@ import SeriesCards from "./wizard/SeriesCards.vue";
 import WindowList from "./wizard/WindowList.vue";
 import WindowConfig from "./wizard/WindowConfig.vue";
 import OrderReview from "./wizard/OrderReview.vue";
+import type { Addon } from "../../addons";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
@@ -17,6 +18,7 @@ const step = ref(1);
 const saving = ref(false);
 const error = ref("");
 const catalog = ref<any[]>([]);
+const addons = ref<Addon[]>([]);
 const lastSaved = ref<string | null>(null);
 const draftKey = ref("");
 
@@ -58,10 +60,11 @@ function safeStep(requested:number) {
 async function loadCatalog() {
   try {
     const [result, account] = await Promise.all([
-      portalRequest<{ products: any[] }>("catalog"),
+      portalRequest<{ products: any[]; addons?: any[] }>("catalog"),
       portalRequest<{ customer_id: number }>("me"),
     ]);
     catalog.value = result.products;
+    addons.value = result.addons || [];
     draftKey.value = `vera-order-draft:${account.customer_id}`;
     // The previous demo used one shared draft across all accounts.
     localStorage.removeItem("vera-order-draft");
@@ -200,11 +203,12 @@ if (portalSession.token) {
     <div class="wizard-body">
       <SeriesCards v-if="step === 1" v-model="draft.default_series" :catalog="catalog" @next="startFirstWindow" />
       <WindowList v-else-if="step === 2" v-model="draft.windows" :catalog="catalog" :default-series="draft.default_series" @next="nextStep" @prev="prevStep" />
-      <WindowConfig v-else-if="step === 3" v-model="draft.windows" :catalog="catalog" @next="nextStep" @prev="prevStep" />
+      <WindowConfig v-else-if="step === 3" v-model="draft.windows" :catalog="catalog" :addons="addons" :installation-required="draft.installation_required" @next="nextStep" @prev="prevStep" />
       <OrderReview
         v-else-if="step === 4"
         :draft="draft"
         :catalog="catalog"
+        :addons="addons"
         :saving="saving"
         :error="error"
         @submit="submitOrder"

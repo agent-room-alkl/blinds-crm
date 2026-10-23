@@ -6,10 +6,11 @@ import { request, session } from "../crm-api";
 import ProductManager from "../components/ProductManager.vue";
 import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
+import PricingKnowledge from "../components/PricingKnowledge.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
 import CrmGuide from "../components/CrmGuide.vue";
-import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen, Menu } from "lucide-vue-next";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen, Menu, PanelLeft } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -28,6 +29,7 @@ const emailEnabled = ref(false);
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
 const mobileNavOpen = ref(false);
+const railCollapsed = ref(false);
 const accountMenu = ref<HTMLDetailsElement>();
 function closeAccountMenu() { 
   if (accountMenu.value) {
@@ -50,7 +52,7 @@ const nav = computed(() => [
   { key: "projects", label: tx("订单", "Orders") },
   { key: "customers", label: tx("客户资料", "Customers") },
   { key: "providers", label: tx("供应商", "Suppliers") },
-  { key: "pricing", label: tx("定价与模板", "Pricing & templates") },
+  { key: "pricing", label: tx("定价知识库", "Pricing knowledge") },
   { key: "finance", label: tx("账款与返利", "Accounts & rebates") },
   { key: "help", label: tx("操作指南", "Operating guide") },
   { key: "dashboard", label: tx("分析看板", "Dashboard") },
@@ -162,33 +164,33 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="page crm" :class="{ 'is-signed': signed }">
-    <aside v-if="signed" class="desk-rail" :class="{'mobile-open':mobileNavOpen}">
-      <div class="rail-brand">VERA</div>
+  <main class="page crm" :class="{ 'is-signed': signed, 'rail-collapsed': signed && railCollapsed }">
+    <aside v-if="signed" class="desk-rail" :class="{'mobile-open':mobileNavOpen, 'is-collapsed': railCollapsed}">
+      <div class="rail-brand"><span class="rail-label">VERA</span><button type="button" class="rail-collapse" :aria-expanded="!railCollapsed" :aria-label="railCollapsed ? tx('展开菜单','Expand menu') : tx('收起菜单','Collapse menu')" @click="railCollapsed = !railCollapsed"><PanelLeft :size="20" aria-hidden="true" /></button></div>
       <button type="button" class="rail-mobile-toggle" :aria-expanded="mobileNavOpen" @click="mobileNavOpen=!mobileNavOpen"><Menu :size="20" aria-hidden="true" />{{ tx('菜单','Menu') }} · {{ pageTitle }}</button>
       <button type="button" :class="{ current: tab === 'projects' }" @click="openTab('projects')">
         <FolderKanban :size="20" aria-hidden="true" />
-        {{ tx("订单", "Orders") }}
+        <span class="rail-label">{{ tx("订单", "Orders") }}</span>
       </button>
       <button type="button" :class="{ current: tab === 'customers' }" @click="openTab('customers')">
         <Users :size="20" aria-hidden="true" />
-        {{ tx("客户资料", "Customers") }}
+        <span class="rail-label">{{ tx("客户资料", "Customers") }}</span>
       </button>
-      <button type="button" :class="{ current: tab === 'providers' }" @click="openTab('providers')"><Truck :size="20" aria-hidden="true" />{{ tx('供应商', 'Suppliers') }}</button>
-      <button type="button" :class="{ current: tab === 'pricing' }" @click="openTab('pricing')"><FileSpreadsheet :size="20" aria-hidden="true" />{{ tx('定价与模板', 'Pricing & templates') }}</button>
-      <button type="button" :class="{ current: tab === 'finance' }" @click="openTab('finance')"><Wallet :size="20" aria-hidden="true" />{{ tx('账款与返利', 'Accounts & rebates') }}</button>
+      <button type="button" :class="{ current: tab === 'providers' }" @click="openTab('providers')"><Truck :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('供应商', 'Suppliers') }}</span></button>
+      <button type="button" :class="{ current: tab === 'pricing' }" @click="openTab('pricing')"><BookOpen :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('定价知识库', 'Pricing knowledge') }}</span></button>
+      <button type="button" :class="{ current: tab === 'finance' }" @click="openTab('finance')"><Wallet :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('账款与返利', 'Accounts & rebates') }}</span></button>
       <button type="button" :class="{ current: tab === 'dashboard' }" @click="openTab('dashboard')">
         <BarChart3 :size="20" aria-hidden="true" />
-        {{ tx("分析看板", "Dashboard") }}
+        <span class="rail-label">{{ tx("分析看板", "Dashboard") }}</span>
       </button>
       <button type="button" :class="{ current: tab === 'products' }" @click="openTab('products')">
         <Package :size="20" aria-hidden="true" />
-        {{ tx("产品目录", "Product catalogue") }}
+        <span class="rail-label">{{ tx("产品目录", "Product catalogue") }}</span>
       </button>
-      <button type="button" :class="{current:tab==='help'}" @click="openTab('help')"><BookOpen :size="20" aria-hidden="true" />{{ tx('操作指南','Operating guide') }}</button>
+      <button type="button" :class="{current:tab==='help'}" @click="openTab('help')"><BookOpen :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('操作指南','Operating guide') }}</span></button>
       <button v-if="me.role === 'admin'" type="button" :class="{ current: tab === 'users' }" @click="openTab('users')">
         <Settings :size="20" aria-hidden="true" />
-        {{ tx("系统设置", "Settings") }}
+        <span class="rail-label">{{ tx("系统设置", "Settings") }}</span>
       </button>
       <div class="rail-bottom">
         <span class="user-avatar">{{ (me.name || "V").slice(0, 1) }}</span>
@@ -231,7 +233,8 @@ onMounted(() => {
         <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
-      <ProjectDesk v-if="['projects','providers','pricing','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
+      <PricingKnowledge v-if="tab === 'pricing'" :admin="me.role === 'admin'" />
+      <ProjectDesk v-if="['projects','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
       <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
       <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" />
       <SampleDashboard v-if="tab === 'dashboard'" />
@@ -287,6 +290,18 @@ onMounted(() => {
   font-family: var(--font-body, "Figtree", "Noto Sans SC", sans-serif); font-size: var(--fs-body); line-height: var(--lh-body); color: #1b2421; background: #f5f6f2; min-height: 100vh; padding: 24px 20px 36px; overflow: visible;
 }
 .crm.is-signed { padding-left: 252px; }
+.crm.is-signed.rail-collapsed { padding-left: 92px; }
+.desk-rail.is-collapsed { width: 72px; }
+.desk-rail.is-collapsed .rail-label, .desk-rail.is-collapsed .user-meta { display: none; }
+.desk-rail.is-collapsed .rail-brand { display: flex; justify-content: center; padding-inline: 0; }
+.rail-brand { display: flex; align-items: center; justify-content: space-between; }
+.rail-collapse { min-width: 44px; justify-content: center; }
+@media(max-width:800px) {
+  .crm.is-signed.rail-collapsed { padding: 16px; }
+  .desk-rail.is-collapsed { width: auto; }
+  .desk-rail.is-collapsed .rail-label { display: initial; }
+  .rail-collapse { display: none; }
+}
 .desk-rail { position: fixed; inset: 0 auto 0 0; width: 228px; background: #1a2823; color: #e7eee9; padding: 24px 12px; display: flex; flex-direction: column; gap: 4px; }
 .rail-brand { font-size: var(--fs-page-title); line-height: var(--lh-page-title); font-weight: var(--fw-emphasis); letter-spacing: 0.16em; padding: 4px 12px 16px; }
 .crm h1, .crm h2, .crm h3, .crm h4, .crm h5, .crm h6 { font-weight: var(--fw-emphasis); }

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
+import { describeAddons, leadText } from "../../addons";
 import { portalRequest } from "../../portal-api";
 
 const { locale } = useI18n();
@@ -17,9 +18,9 @@ const STATUS_TIMELINE = [
   { key: 'accepted', label_zh: '已审核并冻结', label_en: 'Confirmed' },
   { key: 'deposit_unpaid', label_zh: '定金发票已开', label_en: '60% Deposit Invoiced' },
   { key: 'deposit_received', label_zh: '定金已付', label_en: 'Deposit Paid' },
-  { key: 'supplier_ordered', label_zh: '已向供应商下单', label_en: 'Ordered' },
+  { key: 'supplier_ordered', label_zh: '已下单', label_en: 'Ordered' },
   { key: 'in_transit', label_zh: '运输中', label_en: 'In Transit' },
-  { key: 'delivered', label_zh: '已交付', label_en: 'Delivered' },
+  { key: 'delivered', label_zh: '已完成', label_en: 'Completed' },
   { key: 'balance_invoiced', label_zh: '尾款发票已开', label_en: 'Balance Invoiced' },
   { key: 'paid', label_zh: '已结清', label_en: 'Paid in Full' },
 ];
@@ -86,7 +87,13 @@ onMounted(async () => {
         <h2>{{ tx("订单信息", "Order Information") }}</h2>
         <dl>
           <dt>{{ tx("订单号", "Order ID") }}</dt>
-          <dd>{{ order.order_number }}</dd>
+          <dd v-if="order.order_number">{{ order.order_number }}</dd>
+          <dd v-else-if="order.order_number_confirmed === false">{{ tx("订单号待 VERA 管理员确认；确认后会显示在这里。", "Your order number is awaiting VERA admin confirmation. It will appear here once confirmed.") }}</dd>
+          <dd v-else>—</dd>
+          <template v-if="leadText(order.lead_time)">
+            <dt>{{ tx("预计交期", "Lead time") }}</dt>
+            <dd>{{ leadText(order.lead_time) }}</dd>
+          </template>
           <dt>{{ tx("施工地址", "Site Address") }}</dt>
           <dd>{{ order.site_address }}</dd>
           <dt>{{ tx("状态", "Status") }}</dt>
@@ -104,6 +111,7 @@ onMounted(async () => {
           <div v-for="line in order.lines" :key="line.id" class="line-item">
             <strong>{{ line.window_name }}</strong>
             <p>{{ line.amount ? `${order.currency || ""} ${line.amount}` : tx("待定价", "TBC") }}</p>
+            <p v-for="fact in describeAddons(line.options, locale)" :key="fact">{{ fact }}</p>
           </div>
         </div>
       </div>

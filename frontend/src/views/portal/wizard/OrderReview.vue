@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { describeConfiguredAddons, type Addon } from "../../../addons";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
@@ -8,6 +9,7 @@ const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const props = defineProps<{
   draft: any;
   catalog: any[];
+  addons?: Addon[];
   saving: boolean;
   error: string;
 }>();
@@ -46,6 +48,10 @@ function getProductName(productId: number) {
   if (!product) return "";
   return locale.value === "zh" ? product.name_zh : product.name_en;
 }
+
+function describeSelectedAddons(options: Record<string,string>, locale: string): string[] {
+  return describeConfiguredAddons(options, locale, props.addons || []);
+}
 </script>
 
 <template>
@@ -65,7 +71,12 @@ function getProductName(productId: number) {
           <dt>{{ tx("施工地址", "Site Address") }}</dt>
           <dd><input v-model="draft.site_address" :aria-label="tx('施工地址', 'Site Address')" required /></dd>
           <dt>{{ tx("需要安装", "Installation Required") }}</dt>
-          <dd>{{ draft.installation_required ? tx("是", "Yes") : tx("否", "No") }}</dd>
+          <dd>
+            <label class="install-choice">
+              <input v-model="draft.installation_required" type="checkbox" />
+              {{ tx("本订单需要安装。金额用当前模板计算，这里不填数字。", "This order needs installation. The current template calculates the amount; do not type it here.") }}
+            </label>
+          </dd>
         </dl>
       </div>
 
@@ -74,13 +85,14 @@ function getProductName(productId: number) {
         <div class="window-summary">
           <div v-for="(window, index) in draft.windows" :key="window.id" class="window-item">
             <div class="summary-title"><strong>{{ index + 1 }}. {{ window.window_name }}</strong><span>{{ getProductName(window.product_id) }}</span></div>
-            <div class="summary-facts"><span>{{ window.width_mm }} × {{ window.height_mm }} mm</span><span>{{ tx("数量", "Qty") }} {{ window.quantity }} · {{ window.panel_count }} {{ tx("扇", "panels") }}</span><span v-if="window.options.colour">{{ window.options.colour }}</span><span v-if="window.options.louver_size">{{ window.options.louver_size }}</span><span v-if="window.options.fitting">{{ window.options.fitting }}</span></div>
+            <div class="summary-facts"><span>{{ window.width_mm }} × {{ window.height_mm }} mm</span><span>{{ tx("数量", "Qty") }} {{ window.quantity }} · {{ window.panel_count }} {{ tx("扇", "panels") }}</span><span v-if="window.options.colour">{{ window.options.colour }}</span><span v-if="window.options.louver_size">{{ window.options.louver_size }}</span><span v-if="window.options.fitting">{{ window.options.fitting }}</span><span v-for="fact in describeSelectedAddons(window.options, locale)" :key="fact">{{ fact }}</span></div>
           </div>
         </div>
       </div>
 
       <div class="review-card">
         <h3>{{ tx("提交确认", "Submission Confirmation") }}</h3>
+        <p class="terms-text">{{ tx("订单号将由系统按客户类型自动生成。提交后先由 VERA 管理员核对并确认；确认前不会显示给客户。", "The system generates an order number from your customer type. A VERA admin will review and confirm it after submission; it will not be shown to you before then.") }}</p>
         <p class="terms-text">
           {{ tx(
             "我已核对尺寸，提交后由 VERA 审核并开 60% 定金发票。",
@@ -183,6 +195,20 @@ function getProductName(productId: number) {
   font-size: 15px;
   color: var(--ink);
   margin: 0 0 8px 0;
+}
+
+.install-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.install-choice input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
 }
 
 .window-summary {

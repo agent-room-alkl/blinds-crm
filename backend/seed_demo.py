@@ -4,7 +4,6 @@ Run: python backend/seed_demo.py
 The existing marked demo is reused; unrelated/existing databases are refused.
 """
 import argparse
-import base64
 import json
 import os
 from pathlib import Path
@@ -31,7 +30,6 @@ def main():
                       VERA_DEMO_PASSWORD='vera-demo',SMTP_HOST='',SMTP_FROM='')
     target.parent.mkdir(parents=True,exist_ok=True)
     from service import app,db,dump,business_now
-    from demo_workbook import fixture
     from fastapi.testclient import TestClient
     staff=TestClient(app)
     def post(client,path,body=None):
@@ -41,13 +39,13 @@ def main():
         return response.json()
     token=post(staff,'auth/login',{'username':'dylan','password':'vera-demo'})['token']
     staff.headers['Authorization']='Bearer '+token
-    imported=post(staff,'operations/template-import',{'filename':'DEMO-invented-prices.xlsx','content_base64':base64.b64encode(fixture()).decode()})
+    post(staff,'operations/pricing-knowledge/initialize-default',{})
     clients=[];profiles=[]
     for i,company in enumerate(['DEMO North Studio','DEMO Harbour Trade','DEMO South Projects'],1):
         username='demo-trade' if i==1 else 'demo-trade-'+str(i)
         profiles.append(post(staff,'operations/customers',dict(company=company,contact_name='Demo buyer '+str(i),
                          email=f'demo-{i}@example.invalid',phone='000 000 00'+str(i),company_address=f'DEMO {i} Example Road, Auckland',
-                         username=username,password='local-demo-only')))
+                         username=username,password='local-demo-only',customer_type='wholesale',customer_code=f'DEMO{i}')))
         client=TestClient(app);client.headers['Authorization']='Bearer '+post(client,'portal/login',{'username':username,'password':'local-demo-only'})['token']
         clients.append(client)
     catalog=clients[0].get('/api/portal/catalog').json()['products']
@@ -70,24 +68,19 @@ def main():
         if n==2:continue
         post(staff,'operations/transit',{'order_ids':[oid],'operation_key':'demo-transit-'+str(n+1)})
         if n==3:continue
-        arrival=[{'line_id':'1','quantity':2}] if n==4 else [{'line_id':'1','quantity':3},{'line_id':'2','quantity':2}]
+        arrival=[{'line_id':'1','quantity':3},{'line_id':'2','quantity':2}]
         post(staff,'operations/fulfilment',dict(order_id=oid,kind='arrival',operation_key='demo-arrival-'+str(n+1),lines=arrival))
-        if n==4:
-            post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='demo-delivery-'+str(n+1),lines=[{'line_id':'1','quantity':1}]))
         if n==5:
-            post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='demo-delivery-'+str(n+1),lines=arrival))
             month=(business_now().date().replace(day=1)-timedelta(days=1)).strftime('%Y-%m')
             post(staff,'operations/rebates',dict(customer_id=profiles[n%3]['customer_id'],source_order_ids=[oid],month=month,amount='35',evidence='DEMO confirmed opening credit; invented data',currency='NZD'))
-            inv=post(staff,'operations/settlements',dict(order_ids=[oid],operation_key='demo-balance',rules_evidence='DEMO full-delivery settlement example',billing_basis='fully_delivered_remaining_total'))
+            inv=post(staff,'operations/settlements',dict(order_ids=[oid],operation_key='demo-balance',rules_evidence='DEMO all-arrived settlement example',billing_basis='all_arrived_remaining_total'))
             post(staff,f"operations/invoices/{inv['id']}/received",{'note':'DEMO sample receipt only'})
+            post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='demo-delivery-'+str(n+1),lines=arrival))
     with db() as c:
         c.execute('BEGIN IMMEDIATE')
-        template=json.loads(c.execute('SELECT data FROM operations_records WHERE id=?',('template:'+imported['version'],)).fetchone()['data'])
-        template['source']='DEMONSTRATION workbook — invented prices; not a commercial price sheet'
-        c.execute('UPDATE operations_records SET data=? WHERE id=?',(dump(template),template['id']))
         marker={'id':'demo-seed:v1','scope':'demo','description':'Invented local sample data; no real customer or email','project_ids':created}
         c.execute('INSERT INTO operations_records VALUES(?,?,?,?)',(marker['id'],'demo_marker',None,dump(marker)))
-    print('Created labelled demo: 3 companies, 7 projects, deposit/balance invoices, partial batches and a used rebate')
+    print('Created labelled demo from the curated default pricing knowledge: 3 companies, 7 projects, deposit/balance invoices, whole-order fulfilment and a used rebate')
     print('Database:',target)
     print('No operational database or real email was used')
 

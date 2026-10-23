@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { withoutAddons, type Addon } from "../../../addons";
 import { portalRequest } from "../../../portal-api";
 
 const { locale } = useI18n();
@@ -21,6 +22,8 @@ interface WindowDraft {
 const props = defineProps<{
   modelValue: WindowDraft[];
   catalog: any[];
+  addons?: Addon[];
+  installationRequired?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -33,6 +36,7 @@ const currentIndex = ref(0);
 const pricing = ref(false);
 const priceData = ref<any>(null);
 const priceError = ref("");
+const addonQuotePending = ref(false);
 const validationAttempted = ref(false);
 
 const currentWindow = computed(() => props.modelValue[currentIndex.value]);
@@ -96,6 +100,9 @@ const COLOR_MAP: Record<string, string[]> = {
 const LOUVER_SIZES = computed(() => currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'louver_size')?.choices || []);
 const structureFields = computed(() => (currentProduct.value?.configuration_schema || []).filter((f: any) => !['colour', 'louver_size', 'fitting'].includes(f.key)));
 const fittingChoices = computed(() => currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'fitting')?.choices || []);
+const eligibleAddons = computed(() => (props.addons || []).filter((addon) => !addon.exclude?.includes(currentProduct.value?.source_code || "")));
+const windowAddons = computed(() => eligibleAddons.value.filter((addon) => addon.key !== "extra_installation"));
+const extraInstall = computed(() => eligibleAddons.value.find((addon) => addon.key === "extra_installation"));
 
 const availableColors = computed(() => {
   const choices = currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'colour')?.choices;
@@ -124,6 +131,18 @@ function updateWindow(updates: Partial<WindowDraft>) {
   const updated = [...props.modelValue];
   updated[currentIndex.value] = { ...currentWindow.value, ...updates };
   emit("update:modelValue", updated);
+}
+
+function setOption(key: string, value: string) {
+  if (!currentWindow.value) return;
+  const options = { ...currentWindow.value.options };
+  if (!value || value === "no" || value === "none") delete options[key];
+  else options[key] = value;
+  updateWindow({ options });
+}
+
+function onAddon(event: Event, key: string) {
+  setOption(key, (event.target as HTMLSelectElement).value);
 }
 
 function markConfigured() {
@@ -186,41 +205,60 @@ function prevWindow() {
   }
 }
 
-// Price calculation
+function priceBody(options: Record<string, string>) {
+  const window = currentWindow.value;
+  if (!window) throw new Error("No window");
+  return {
+    project_name: "Preview",
+    site_address: "Preview",
+    submission_key: "window-preview",
+    installation_required: Boolean(props.installationRequired),
+    lines: [
+      {
+        window_name: window.window_name,
+        product_id: Number(window.product_id),
+        width_mm: window.width_mm,
+        height_mm: window.height_mm,
+        quantity: window.quantity,
+        panel_count: window.panel_count,
+        options,
+      },
+    ],
+  };
+}
+
+// Price calculation. Add-on keys travel in the same options object.
+// A server that still rejects those keys is quoted again without them, so the current preview stays usable.
 let priceTicket = 0;
 watch(
-  currentWindow,
+  [currentWindow, () => props.installationRequired],
   async () => {
     if (!currentWindow.value || !currentWindow.value.configured) {
       ++priceTicket;
       pricing.value = false;
       priceError.value = "";
       priceData.value = null;
+      addonQuotePending.value = false;
       return;
     }
 
     pricing.value = true;
     priceError.value = "";
+    addonQuotePending.value = false;
     const ticket = ++priceTicket;
+    const options = currentWindow.value.options;
 
     try {
-      const result = await portalRequest<any>("price", {
-        project_name: "Preview",
-        site_address: "Preview",
-        submission_key: "window-preview",
-        installation_required: false,
-        lines: [
-          {
-            window_name: currentWindow.value.window_name,
-            product_id: Number(currentWindow.value.product_id),
-            width_mm: currentWindow.value.width_mm,
-            height_mm: currentWindow.value.height_mm,
-            quantity: currentWindow.value.quantity,
-            panel_count: currentWindow.value.panel_count,
-            options: currentWindow.value.options,
-          },
-        ],
-      });
+      let result: any;
+      try {
+        result = await portalRequest<any>("price", priceBody(options));
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        const serverLacksAddons = /Unsupported product fields|Unsupported product configuration|Complete exactly the configured product options/.test(message);
+        if (!serverLacksAddons || JSON.stringify(withoutAddons(options)) === JSON.stringify(options)) throw cause;
+        addonQuotePending.value = true;
+        result = await portalRequest<any>("price", priceBody(withoutAddons(options)));
+      }
       if (ticket === priceTicket) {
         priceData.value = result;
       }
@@ -332,6 +370,12 @@ watch(
             </select>
             <input v-else v-model="currentWindow.options[field.key]" type="text" :required="field.required" />
           </label>
+          <label v-for="addon in windowAddons" :key="addon.key">
+            {{ locale === "zh" ? addon.label_zh : addon.label_en }}
+            <select :value="currentWindow.options[addon.key] || 'no'" @change="onAddon($event, addon.key)">
+              <option v-for="choice in addon.choices" :key="choice.value" :value="choice.value">{{ locale === "zh" ? choice.label_zh : choice.label_en }}</option>
+            </select>
+          </label>
         </div>
 
         <div class="form-group">
@@ -344,6 +388,13 @@ watch(
             </select>
             <input v-else v-model="currentWindow.options.fitting" type="text" />
           </label>
+          <label v-if="extraInstall">
+            {{ locale === "zh" ? extraInstall.label_zh : extraInstall.label_en }}
+            <select :value="currentWindow.options.extra_installation || 'none'" @change="onAddon($event, 'extra_installation')">
+              <option v-for="choice in extraInstall.choices" :key="choice.value" :value="choice.value">{{ locale === "zh" ? choice.label_zh : choice.label_en }}</option>
+            </select>
+          </label>
+          <p v-if="extraInstall" class="price-note">{{ tx("水泥墙、高空和瓷砖只作记录，不改变收费。", "Concrete, high access and tile are recorded only and do not change the charge.") }}</p>
         </div>
       </div>
 
@@ -367,7 +418,8 @@ watch(
             <li v-if="priceData.subtotal">{{ tx("小计", "Subtotal") }}: {{ priceData.currency }} {{ priceData.subtotal }}</li>
             <li v-if="priceData.tax">GST: {{ priceData.currency }} {{ priceData.tax }}</li>
           </ul>
-          <p class="price-note">{{ tx("仅此窗预览，最终价格在提交时计算。配置选项（颜色、框型、叶片等）不影响价格。", "Preview for this window only. Final price calculated on submission. Configuration options (colour, frame, louver, etc.) do not affect price.") }}</p>
+          <p class="price-note">{{ tx("仅此窗预览，最终价格在提交时计算。颜色、框型和叶片不影响价格。", "Preview for this window only. Final price is calculated on submission. Colour, frame and louver do not affect price.") }}</p>
+          <p v-if="addonQuotePending" class="price-note">{{ tx("附加项已记在这扇窗上，当前价格服务尚未计入。提交时仍会带上这些选择。", "These add-ons are stored on the window. The current price service has not applied them yet. Submission still sends the choices.") }}</p>
         </div>
         <div v-else class="price-incomplete">
           <p>{{ tx("请完成", "Complete") }}：{{ missingFields.join(locale === 'zh' ? '、' : ', ') }}</p>
