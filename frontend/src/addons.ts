@@ -21,7 +21,7 @@ export const ADDONS: Addon[] = [
     { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$350/件", label_en: "Yes, +$350 each" }] },
   { key: "tracked_sliding", label_zh: "轨道推拉", label_en: "Tracked sliding", choices: [
     { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$400/件", label_en: "Yes, +$400 each" }] },
-  { key: "stained_colour", label_zh: "染色", label_en: "Stained colour", exclude: ["Shutters_PVC", "Shutters_PVC_Eco"], choices: [
+  { key: "stained_colour", label_zh: "染色", label_en: "Stained colour", exclude: ["Shutters_PVC", "Shutters_PVC_Eco", "Shutters_Pinewood"], choices: [
     { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$20/㎡", label_en: "Yes, +$20/sqm" }] },
   { key: "stainless_hinges", label_zh: "不锈钢合页", label_en: "Stainless hinges", choices: [
     { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$10/㎡", label_en: "Yes, +$10/sqm" }] },

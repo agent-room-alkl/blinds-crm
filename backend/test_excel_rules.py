@@ -30,10 +30,13 @@ assert calculate_line(shutter,{**line,'width_mm':'501','height_mm':'1000'})['are
 assert calculate_line(shutter,{**line,'width_mm':'100','height_mm':'100'})['amount']=='50.00'
 assert addon_totals({'tier_on_tier':'yes','shaped_cutout':'yes'}) == (Decimal(0),Decimal(10),Decimal(300))
 assert compose_unit('2','340',0,10,300) == Decimal('1048.00')
-for material in ('Shutters_PVC','Shutters_PVC_Eco'):
+# V5: stained colour is N/A for PVC Eco, PVC and Pinewood; Basswood and Ashwood take +$20/sqm.
+for material in ('Shutters_PVC','Shutters_PVC_Eco','Shutters_Pinewood'):
     try: addon_totals({'stained_colour':'yes'},material)
     except ValueError: pass
     else: raise AssertionError(material+' must reject stained colour')
+assert addon_totals({'stained_colour':'yes'},'Shutters_Basswood') == (Decimal(20),Decimal(0),Decimal(0))
+assert addon_totals({'double_closure':'yes'},'Shutters_Pinewood') == (Decimal(35),Decimal(0),Decimal(0))
 small = calculate_line({**shutter,'rate_per_m2':'280'}, {**line,'width_mm':'500','height_mm':'500'})
 small_line = {**small,'quantity':1,'pricing_status':'configured','price_snapshot':{**shutter,'rate_per_m2':'280'}}
 assert apply_order_minimum([small_line]) is True and small_line['amount']=='280.00'

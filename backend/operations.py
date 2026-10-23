@@ -240,12 +240,12 @@ def default_pricing_knowledge_manifest(wholesale_bytes, price_list_bytes, price_
     for fid,label,value,unit,excerpt in [
         ('tracked-bifold','Tracked bifold','350','NZD/item','Tracked Bifold (per item): +$350'),
         ('tracked-sliding','Tracked sliding','400','NZD/item','Tracked Sliding (per item): +$400'),
-        ('stained-colour','Stained colour','20','NZD/sqm','Stained Colour (per sqm): +$20'),
+        ('stained-colour','Stained colour','20','NZD/sqm','Stained Colour (per sqm): +$20; N/A for PVC Eco, PVC and Pinewood'),
         ('stainless-hinges','Stainless hinges','10','NZD/sqm','Stainless Hinges (per sqm): +$10'),
         ('hidden-hinges','Hidden hinges','40','NZD/sqm','Hidden Hinges (per sqm): +$40'),
         ('hidden-tilt-rod','Hidden tilt rod','40','NZD/sqm','Hidden Tilt Rod (per sqm): +$40'),
         ('tier-on-tier','Tier on tier','10','%','Tier on Tier (per sqm): +10%'),
-        ('double-closure','Double closure','35','NZD/sqm','Double Closure (per sqm): +$35'),
+        ('double-closure','Double closure','35','NZD/sqm','Double Closure (per sqm): +$35; N/A for PVC Eco and PVC'),
         ('shaped-cutout','Shaped / French door cut out','300','NZD/item','Shaped / French Door Cut Out (per item): +$300')]:
         cite_fact(fid,label,value,unit,'page 1',excerpt,'add_on_price')
     # The four common prices are corroborated across both sources.
