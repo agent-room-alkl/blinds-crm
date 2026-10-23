@@ -48,14 +48,12 @@ def init_db(connection=None,seed_admin=True,seed_catalog=True):
             c.ensure_schema();c.execute('BEGIN IMMEDIATE')
         c.executescript("""
         CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY,data TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY,company TEXT NOT NULL,locale TEXT NOT NULL,notes TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS customers(id INTEGER PRIMARY KEY,company TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY,name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,expires_at REAL NOT NULL,username TEXT NOT NULL);
         """)
         from operations import migrate
         migrate(c)
-        if 'notes' not in {r['name'] for r in c.execute('PRAGMA table_info(customers)')}:
-            c.execute("ALTER TABLE customers ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         if 'username' not in {r['name'] for r in c.execute('PRAGMA table_info(sessions)')}:
             c.execute("ALTER TABLE sessions ADD COLUMN username TEXT NOT NULL DEFAULT 'dylan'")
         if seed_admin and not c.execute('SELECT 1 FROM users WHERE username=?',('dylan',)).fetchone():

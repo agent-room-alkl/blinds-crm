@@ -1176,7 +1176,7 @@ def register(app, s):
             else:
                 if any(r['company'].strip().casefold()==body.company.strip().casefold() for r in c.execute('SELECT company FROM customers')):
                     raise HTTPException(409,'Company already exists; manage its existing customer account')
-                cid = c.execute('INSERT INTO customers(company,locale) VALUES(?,?)', (body.company, 'en')).lastrowid
+                cid = c.execute('INSERT INTO customers(company) VALUES(?)', (body.company,)).lastrowid
             d = body.model_dump(exclude={'password'}, mode='json')
             d.update(customer_id=cid, created_at=s.now(), created_by=actor)
             c.execute('INSERT INTO portal_profiles VALUES(?,?,?,?)', (cid, body.username, s.password_hash(body.password), s.dump(d)))

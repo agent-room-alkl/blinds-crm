@@ -58,7 +58,7 @@ def load_plan(source: Path):
     db = sqlite3.connect(source)
     db.row_factory = sqlite3.Row
     customers = []
-    for row in db.execute("SELECT id, company, locale, notes FROM customers ORDER BY id"):
+    for row in db.execute("SELECT id, company FROM customers ORDER BY id"):
         company = (row["company"] or "").strip()
         key = company.casefold()
         if key in EXCLUDED or key not in WHOLESALE:
@@ -73,8 +73,6 @@ def load_plan(source: Path):
         data = {**data, "customer_type": "wholesale", "customer_code": code, "portal_login": "disabled"}
         customers.append({
             "company": company,
-            "locale": row["locale"],
-            "notes": row["notes"] or "",
             "username": profile["username"],
             "data": data,
         })
@@ -272,8 +270,8 @@ def apply_plan(url, schema, plan, backup_dir: Path):
                 )
             else:
                 cid = conn.execute(
-                    "INSERT INTO customers(company, locale, notes) VALUES(%s, %s, %s) RETURNING id",
-                    (row["company"], row["locale"], row["notes"]),
+                    "INSERT INTO customers(company) VALUES(%s) RETURNING id",
+                    (row["company"],),
                 ).fetchone()[0]
                 conn.execute(
                     "INSERT INTO portal_profiles(customer_id, username, password_hash, data) VALUES(%s, %s, %s, %s)",

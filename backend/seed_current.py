@@ -60,7 +60,10 @@ def main():
    if not source_code:
     unresolved=json.loads(c.execute('SELECT data FROM portal_profiles WHERE customer_id=?',(profile['customer_id'],)).fetchone()['data']);unresolved['customer_type']=None;unresolved['customer_code']=None
     c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?',(dump(unresolved),profile['customer_id']))
-   c.execute('UPDATE customers SET notes=? WHERE id=?',(dump({'source_sheet':'In Put','source_row':person['source_row'],'source_code':source_code,'data_kind':'workbook_contact','address_missing':True,'customer_type_unresolved':not bool(source_code)}),profile['customer_id']))
+   # Workbook provenance lives on the portal profile now that customers only holds the company name.
+   stored=json.loads(c.execute('SELECT data FROM portal_profiles WHERE customer_id=?',(profile['customer_id'],)).fetchone()['data'])
+   stored['source_record']={'source_sheet':'In Put','source_row':person['source_row'],'source_code':source_code,'data_kind':'workbook_contact','address_missing':True,'customer_type_unresolved':not bool(source_code)}
+   c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?',(dump(stored),profile['customer_id']))
   client=TestClient(app);client.headers['Authorization']='Bearer '+post(client,'portal/login',{'username':username,'password':'local-demo-only'})['token'];clients.append(client);profiles.append(profile)
  # Payment/quote issuers are facts, but their role as factory supplier is not established.
  for name,ref in [(value('E33'),'In Put!E33'),(value('C48'),'In Put!C48')]:

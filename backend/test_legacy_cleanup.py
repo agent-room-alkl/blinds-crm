@@ -6,8 +6,8 @@ with tempfile.TemporaryDirectory() as folder:
     from service import db
     from cleanup_legacy import cleanup,LEGACY_TABLES,table_names
     with db() as c:
-        c.execute('INSERT INTO customers(id,company,locale) VALUES(?,?,?)',(1,'Retained company','en'))
-        c.execute('INSERT INTO customers(id,company,locale) VALUES(?,?,?)',(2,'Old orphan','en'))
+        c.execute('INSERT INTO customers(id,company) VALUES(?,?)',(1,'Retained company'))
+        c.execute('INSERT INTO customers(id,company) VALUES(?,?)',(2,'Old orphan'))
         c.execute('INSERT INTO portal_profiles VALUES(?,?,?,?)',(1,'retained','test-hash','{"customer_id":1}'))
         c.execute('INSERT INTO operations_records VALUES(?,?,?,?)',('project-test','project',1,'{"id":"project-test","total":"100"}'))
         for table in LEGACY_TABLES:
