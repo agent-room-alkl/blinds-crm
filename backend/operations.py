@@ -532,6 +532,10 @@ class ProfileEdit(Input):
         from email_service import address
         return address(v) if v else ''
 
+class PortalLogin(Input):
+    username: str = Field(min_length=3, max_length=100, pattern=r'^[A-Za-z0-9_.@-]+$')
+    password: str = Field(min_length=8, max_length=200)
+
 
 class LineAdjustment(Input):
     line_id: str
@@ -1187,6 +1191,23 @@ def register(app, s):
             c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?',(s.dump(d),cid))
             c.execute('UPDATE customers SET company=? WHERE id=?',(body.company,cid))
             return d
+
+    @app.post('/api/operations/customers/{cid}/portal-login')
+    def set_portal_login(cid:int,body:PortalLogin,actor=Depends(s.require_admin)):
+        """Open or reset an existing customer's single portal login; earlier sessions stop working."""
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row=c.execute('SELECT data FROM portal_profiles WHERE customer_id=?',(cid,)).fetchone()
+            if not row:
+                raise HTTPException(404,'Customer not found')
+            if c.execute('SELECT 1 FROM portal_profiles WHERE username=? AND customer_id<>?',(body.username,cid)).fetchone():
+                raise HTTPException(409,'Username already provisioned')
+            d=json.loads(row['data'])
+            d.update(username=body.username,portal_login='active',portal_login_updated_at=s.now(),portal_login_updated_by=actor)
+            c.execute('UPDATE portal_profiles SET username=?, password_hash=?, data=? WHERE customer_id=?',
+                      (body.username,s.password_hash(body.password),s.dump(d),cid))
+            c.execute('DELETE FROM portal_sessions WHERE customer_id=?',(cid,))
+            return {'customer_id':cid,'username':body.username,'portal_login':'active'}
 
     @app.get('/api/operations/orders/{oid}/lead-time')
     def accepted_lead_time(oid: str, actor=Depends(s.auth)):
