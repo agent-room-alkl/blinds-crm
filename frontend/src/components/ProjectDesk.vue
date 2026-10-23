@@ -440,7 +440,8 @@ function orderStatus(value: string) {
 
 function mailStatus(status: string) {
   const labels: Record<string, [string, string]> = {
-    demo_suppressed: ['演示记录 · 未发送', 'Demo recorded · not sent'],
+    // The send was recorded in demo mode; nothing reached the customer, but the invoice counts as sent.
+    demo_suppressed: ['已发送（演示，未真实投递）', 'Sent (demo, not delivered)'],
     demo_sent: ['演示邮件已发给自己', 'Demo email sent to owner'],
     draft: ['草稿', 'Draft'],
     pending: ["待发送", "Pending"],

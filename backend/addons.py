@@ -15,8 +15,9 @@ ADDONS = [
     {'key': 'tracked_sliding', 'label_zh': '轨道推拉', 'label_en': 'Tracked sliding',
      'choices': [{'value': 'no', 'label_zh': '不要', 'label_en': 'No'},
                  {'value': 'yes', 'label_zh': '要，+$400/件', 'label_en': 'Yes, +$400 each', 'fixed': '400'}]},
+    # V5: stained colour is N/A for PVC Eco, PVC and Pinewood.
     {'key': 'stained_colour', 'label_zh': '染色', 'label_en': 'Stained colour',
-     'exclude': ['Shutters_PVC', 'Shutters_PVC_Eco'],
+     'exclude': ['Shutters_PVC', 'Shutters_PVC_Eco', 'Shutters_Pinewood'],
      'choices': [{'value': 'no', 'label_zh': '不要', 'label_en': 'No'},
                  {'value': 'yes', 'label_zh': '要，+$20/㎡', 'label_en': 'Yes, +$20/sqm', 'per_sqm': '20'}]},
     {'key': 'stainless_hinges', 'label_zh': '不锈钢合页', 'label_en': 'Stainless hinges',

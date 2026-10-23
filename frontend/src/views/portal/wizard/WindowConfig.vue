@@ -288,7 +288,7 @@ watch(
 
     <div v-if="currentWindow" class="config-layout">
       <div class="config-form">
-        <div class="form-group">
+        <div class="form-group fg-basic">
           <h3>{{ tx("基本信息", "Basic") }}</h3>
           <label>
             {{ tx("窗户名称", "Window Name") }} *
@@ -326,7 +326,7 @@ watch(
           </div>
         </div>
 
-        <div class="form-group">
+        <div class="form-group fg-look">
           <h3>{{ tx("外观", "Appearance") }}</h3>
           <label>
             {{ tx("颜色", "Colour") }} *
@@ -360,7 +360,8 @@ watch(
           </label>
         </div>
 
-        <div class="form-group">
+        <div class="form-stack fg-side">
+        <div class="form-group fg-structure">
           <h3>{{ tx("结构（不影响价格）", "Structure (no price impact)") }}</h3>
           <label v-for="field in structureFields" :key="field.key">
             {{ locale === 'zh' ? field.label_zh : field.label_en }} {{ field.required ? '*' : '' }}
@@ -370,15 +371,21 @@ watch(
             </select>
             <input v-else v-model="currentWindow.options[field.key]" type="text" :required="field.required" />
           </label>
+        </div>
+
+        <div v-if="windowAddons.length" class="form-group fg-addons">
+          <h3>{{ tx("附加项（影响价格）", "Add-ons (affect price)") }}</h3>
           <label v-for="addon in windowAddons" :key="addon.key">
             {{ locale === "zh" ? addon.label_zh : addon.label_en }}
             <select :value="currentWindow.options[addon.key] || 'no'" @change="onAddon($event, addon.key)">
               <option v-for="choice in addon.choices" :key="choice.value" :value="choice.value">{{ locale === "zh" ? choice.label_zh : choice.label_en }}</option>
             </select>
           </label>
+          <p class="addon-hint">{{ tx("只显示当前系列可选的附加项；选「要」会按价目表加价。", "Only add-ons available for this series are shown; choosing one adds the price-list charge.") }}</p>
+        </div>
         </div>
 
-        <div class="form-group">
+        <div class="form-group fg-install">
           <h3>{{ tx("安装", "Installation") }}</h3>
           <label>
             {{ tx("安装方式", "Install Method") }}
@@ -483,6 +490,19 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+.addon-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: rgba(27, 36, 33, 0.62);
 }
 
 .form-group {
@@ -764,7 +784,7 @@ button.secondary:hover {
 }
 
 .window-config-step{padding:0}.step-intro{margin-bottom:10px}.step-intro h2{margin:4px 0}.section-label{margin-bottom:4px}.config-layout{gap:12px;margin-bottom:12px}.config-form{gap:12px;min-width:0}.form-group{padding:12px;min-width:0}.form-group h3{margin:0 0 8px}.form-group label{gap:4px;margin-bottom:8px;font-size:13px}.form-group input,.form-group select{min-width:0;min-height:44px;padding:6px 8px}.form-group .row{gap:8px}.color-grid,.louver-grid{gap:6px}.color-btn,.louver-btn{min-height:44px;min-width:44px;padding:6px}.price-panel{padding:14px;position:static;align-self:start}.step-actions{padding-top:10px;gap:8px}.price-note{font-size:12px}
-@media(min-width:1280px){.config-layout{grid-template-columns:minmax(0,1fr) 220px}.config-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:auto auto;align-items:start}.form-group:nth-child(1){grid-column:1;grid-row:1/3}.form-group:nth-child(2){grid-column:2;grid-row:1}.form-group:nth-child(3){grid-column:3;grid-row:1/3}.form-group:nth-child(4){grid-column:2;grid-row:2}.color-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.louver-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(min-width:1280px){.config-layout{grid-template-columns:minmax(0,1fr) 220px}.config-form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:auto 1fr;align-items:start}.fg-basic{grid-column:1;grid-row:1/3}.fg-look{grid-column:2;grid-row:1}.fg-side{grid-column:3;grid-row:1/3}.fg-install{grid-column:2;grid-row:2}.color-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.louver-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(min-width:701px) and (max-width:1279px){.config-layout{grid-template-columns:minmax(0,1fr) 220px}.config-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}}
 
 
@@ -774,6 +794,6 @@ button.secondary:hover {
 .field-label{line-height:20px}
 .form-group .row input{height:44px;min-height:44px;box-sizing:border-box;margin:0;flex:none}
 .validation-notice{padding:10px 12px;color:#8c2f2f;background:#fff4ed;border:1px solid #edc6b5;border-radius:4px}
-@media(min-width:1280px){.form-group:nth-child(1),.form-group:nth-child(3){align-self:stretch}.form-group:nth-child(3){align-content:start}}
-@media(min-width:1280px){.form-group:nth-child(3){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px}.form-group:nth-child(3)>h3{grid-column:1/-1}.config-form{grid-template-rows:auto auto;gap:10px}.form-group:nth-child(2){align-self:start}.form-group:nth-child(4){align-self:start}}
+@media(min-width:1280px){.fg-basic,.fg-side{align-self:stretch}.fg-structure{align-content:start}}
+@media(min-width:1280px){.fg-structure,.fg-addons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 8px}.fg-structure>h3,.fg-addons>h3,.fg-addons>.addon-hint{grid-column:1/-1}.config-form{grid-template-rows:auto 1fr;gap:10px}.fg-side{gap:10px}.fg-look,.fg-install{align-self:start}}
 </style>
