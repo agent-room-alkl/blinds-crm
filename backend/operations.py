@@ -1545,15 +1545,17 @@ def register(app, s):
                 code=rule.get('source_code')
                 if code not in code_map: continue
                 product=by_code.get(code)
+                display_provisional = code == 'VERA_Ashwood_provisional' and rule.get('status') == 'provisional_placeholder'
                 if product:
                     product.update(configuration_schema=rule.get('schema',product.get('configuration_schema',[])),
-                                   published=True if rule.get('status')=='configured' else product.get('published',True),
+                                   published=True if rule.get('status')=='configured' or display_provisional else product.get('published',True),
                     orderable=rule.get('status')=='configured')
                     c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
                 else:
                     names=code_map[code]; pid=max(product_rows,default=0)+1
+                    orderable = rule.get('status') == 'configured'
                     product={'id':pid,'name_zh':names[0],'name_en':names[0],'category':'shutters','material':names[1],
-                             'source_code':code,'published':rule.get('status')=='configured','orderable':rule.get('status')=='configured',
+                             'source_code':code,'published':orderable or display_provisional,'orderable':orderable,
                              'orderable_after_login':False,'configuration_schema':rule.get('schema',[]),'display_position':pid}
                     put(c,'product',product); product_rows[pid]=product
             for code,product in list(by_code.items()):
@@ -1913,7 +1915,8 @@ def register(app, s):
         from supplier_exports import export_supplier
         with s.db() as c:
             d = get(c, oid, 'project')
-            if d.get('payment_status') != 'deposit_received':
+            # A paid order has necessarily had its deposit received.
+            if d.get('payment_status') not in ('deposit_received', 'paid'):
                 raise HTTPException(409, 'Confirm the deposit before exporting the supplier order')
             customer = profile(c, d['customer_id'])
             products = {row['id']: json.loads(row['data']) for row in c.execute('SELECT id,data FROM products')}

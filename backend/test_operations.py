@@ -118,8 +118,13 @@ with tempfile.TemporaryDirectory() as folder:
         supplier_xml = archive.read('xl/worksheets/sheet1.xml').decode()
         assert saved_number in supplier_xml and oid not in supplier_xml
         assert 'purchase_cost' not in supplier_xml and 'gross_profit' not in supplier_xml
-    transit = post(staff,'operations/transit',{'order_ids':[oid,'not-found'],'operation_key':'transit-001'})
-    assert [r['status'] for r in transit['results']] == ['success','failed']
+    # Product 1 is the seeded Aluminium sample, which correctly cannot join a sea shipment.
+    post(staff,'operations/shipments',{'order_ids':[oid],'operation_key':'shipment-aluminium'},409)
+    # Treat it as a shutter only for the shipment checks, then restore it for the rest of the run.
+    import service as _service
+    with _service.db() as _c:
+        _sample = json.loads(_c.execute('SELECT data FROM products WHERE id=1').fetchone()['data'])
+        _c.execute('UPDATE products SET data=? WHERE id=1', (json.dumps({**_sample, 'category': 'shutters'}),))
     shipment = post(staff,'operations/shipments',{'order_ids':[oid],'operation_key':'shipment-001'})
     purchase = post(staff,f'operations/orders/{oid}/purchase-cost',{'factory_price_usd':'100.00'})
     assert purchase['usd_nzd_rate']=='1.70' and purchase['purchase_cost']=='170.00' and purchase['duty_cost']=='25.50'
@@ -128,6 +133,11 @@ with tempfile.TemporaryDirectory() as folder:
     actual = post(staff,f"operations/shipments/{shipment['id']}/costs",{'freight_land':'100.00','freight_sea':'400.00','duty_total':'90.00'})
     costs = staff.get(f"/api/operations/shipments/{shipment['id']}").json()['orders'][0]
     assert actual['duty_basis']=='actual' and costs['duty_cost']=='90.00' and costs['freight_cost']=='500.00'
+    with _service.db() as _c:
+        _c.execute('UPDATE products SET data=? WHERE id=1', (json.dumps(_sample),))
+    # Shipments are formed while orders are still "ordered"; marking them in transit comes after.
+    transit = post(staff,'operations/transit',{'order_ids':[oid,'not-found'],'operation_key':'transit-001'})
+    assert [r['status'] for r in transit['results']] == ['success','failed']
     assert not {'factory_price_usd','purchase_cost','duty_cost','total_cost','gross_profit'} & set(portal.get('/api/portal/orders').json()[0])
     print('PASS review/deposit: submission does not invoice; acceptance invoices 60% ROUNDUP; separate receipt gate')
 
@@ -816,31 +826,15 @@ with tempfile.TemporaryDirectory() as folder:
         }]
     }
 
+    # Unconfirmed series must not produce a customer-visible price or an order (pricing knowledge rule).
     price_resp = portal_authed.post('/api/portal/price', json=ash_price_order)
-    assert price_resp.status_code == 200, f'Price request failed: {price_resp.status_code} - {price_resp.text}'
-    price_data = price_resp.json()
-
-    # Verify it's marked as provisional pricing
-    assert price_data['pricing_status'] == 'provisional', \
-        f"Expected provisional pricing status, got {price_data['pricing_status']}"
-    assert any(l['pricing_status'] == 'provisional' for l in price_data['lines']), \
-        'At least one line should have provisional pricing status'
-
-    print(f'✓ Pricing works for migrated Ashwood:')
-    print(f'  - Total: {price_data["total"]} {price_data["currency"]}')
-    print(f'  - Pricing status: {price_data["pricing_status"]}')
-    print(f'  - Line pricing status: {price_data["lines"][0]["pricing_status"]}')
-
-    # Test that an order can be submitted with provisional pricing
+    assert price_resp.status_code == 409 and 'not ready' in price_resp.text, \
+        f'Unconfirmed Ashwood must not be priced: {price_resp.status_code} - {price_resp.text}'
     order_resp = portal_authed.post('/api/portal/orders', json=ash_price_order)
-    assert order_resp.status_code == 200, f'Order submission failed: {order_resp.status_code} - {order_resp.text}'
-    order_data = order_resp.json()
+    assert order_resp.status_code == 409, f'Unconfirmed Ashwood must not be ordered: {order_resp.status_code} - {order_resp.text}'
+    print('✓ Migrated Ashwood stays in the catalog but is neither priced nor orderable until its rate is confirmed')
 
-    assert order_data['pricing_status'] == 'provisional', \
-        f"Order should preserve provisional pricing status"
-    print(f'✓ Order submission works with provisional pricing (order status: {order_data["pricing_status"]})')
-
-    print('\nPASS T-13 Legacy DB: VERA_Ashwood_display products are migrated to VERA_Ashwood_provisional and work correctly')
+    print('\nPASS T-13 Legacy DB: VERA_Ashwood_display products are migrated to VERA_Ashwood_provisional and stay unquotable until confirmed')
 
     # Backfill preserves every existing order/invoice field and is repeatable.
     from service import db
