@@ -47,6 +47,40 @@ ADDONS = [
 ]
 
 ADDON_KEYS = {item['key'] for item in ADDONS}
+
+
+def _amount(value, money=True):
+    value = Decimal(str(value))
+    if value == value.to_integral_value():
+        return str(int(value))
+    return f'{value:.2f}' if money else str(value.normalize())
+
+
+def with_price_labels(addons):
+    """Rewrite the text of each priced choice from its amount, so the label always matches what is charged."""
+    for addon in addons if isinstance(addons, list) else []:
+        choices = addon.get('choices') if isinstance(addon, dict) else None
+        for choice in choices if isinstance(choices, list) else []:
+            if not isinstance(choice, dict) or not isinstance(choice.get('value'), str) or choice['value'] in ('no', 'none'):
+                continue
+            charged = [field for field in ('fixed', 'per_sqm', 'percent') if field in choice]
+            if len(charged) != 1:
+                continue
+            field = charged[0]
+            try:
+                amount = _amount(choice[field], money=field != 'percent')
+            except Exception:
+                continue  # publish validation reports the bad amount
+            suffix_zh, suffix_en = {'fixed': (f'+${amount}/件', f'+${amount} each'),
+                                    'per_sqm': (f'+${amount}/㎡', f'+${amount}/sqm'),
+                                    'percent': (f'+{amount}%', f'+{amount}%')}[field]
+            if choice['value'] == 'yes':
+                base_zh, base_en = '要', 'Yes'
+            else:
+                base_zh = str(choice.get('label_zh') or choice['value']).split('，+')[0]
+                base_en = str(choice.get('label_en') or choice['value']).split(', +')[0]
+            choice['label_zh'], choice['label_en'] = f'{base_zh}，{suffix_zh}', f'{base_en}, {suffix_en}'
+    return addons
 # Robin, 23 Oct: installation is 50 per shutter panel, and at least 150 on the order.
 PANEL_INSTALLATION = Decimal('50')
 ORDER_INSTALLATION_MINIMUM = Decimal('150')
