@@ -7,7 +7,7 @@ import ContactView from "./views/ContactView.vue";
 import CrmView from "./views/CrmView.vue";
 import PortalView from "./views/PortalView.vue";
 import PortalLayout from "./views/PortalLayout.vue";
-import OrderWizard from "./views/portal/OrderWizard.vue";
+import OrderTable from "./views/portal/OrderTable.vue";
 import OrdersList from "./views/portal/OrdersList.vue";
 import OrderDetail from "./views/portal/OrderDetail.vue";
 import Invoices from "./views/portal/Invoices.vue";
@@ -27,7 +27,8 @@ export const router = createRouter({
       component: PortalLayout,
       children: [
         { path: "", redirect: "/portal/orders" },
-        { path: "order/new", name: "new-order", component: OrderWizard },
+        { path: "order/new", name: "new-order", component: OrderTable },
+        { path: "order/new-table", redirect: "/portal/order/new" },
         { path: "orders", name: "orders", component: OrdersList },
         { path: "orders/:id", name: "order-detail", component: OrderDetail },
         { path: "invoices", name: "invoices", component: Invoices },
