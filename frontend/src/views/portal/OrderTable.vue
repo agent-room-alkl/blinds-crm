@@ -1,0 +1,183 @@
+<script setup lang="ts">
+import { computed, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
+import { portalRequest, portalSession } from "../../portal-api";
+import { describeConfiguredAddons, type Addon } from "../../addons";
+
+const { locale } = useI18n();
+const tx = (zh: string, en: string) => locale.value === "zh" ? zh : en;
+const router = useRouter();
+const catalog = ref<any[]>([]);
+const addons = ref<Addon[]>([]);
+const loading = ref(true);
+const saving = ref(false);
+const error = ref("");
+const notice = ref("");
+const draftKey = ref("");
+const lastSaved = ref("");
+const draft = reactive({ project_name: "", site_address: "", installation_required: false, windows: [] as any[] });
+
+const shutterProducts = computed(() => catalog.value.filter(p => p.category === "shutters" && p.orderable));
+const product = (id: number | "") => catalog.value.find(p => Number(p.id) === Number(id));
+function schemaFields(id: number | "") { return product(id)?.configuration_schema || []; }
+function fieldsFor(window: any) { return schemaFields(window.product_id).filter((f: any) => !["colour", "louver_size", "fitting"].includes(f.key)); }
+function colorChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "colour")?.choices || []; }
+function louverChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "louver_size")?.choices || []; }
+function fittingChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "fitting")?.choices || []; }
+function availableAddons(window: any) { return addons.value.filter(a => !a.exclude?.includes(product(window.product_id)?.source_code || "")); }
+function onSeriesChange(window: any) {
+  const allowed = new Map<string, any>(schemaFields(window.product_id).map((field: any) => [field.key, field]));
+  const excluded = new Set(addons.value.filter(a => a.exclude?.includes(product(window.product_id)?.source_code || "")).map(a => a.key));
+  for (const [key, value] of Object.entries(window.options as Record<string, string>)) {
+    if (excluded.has(key)) { delete window.options[key]; continue; }
+    const field = allowed.get(key);
+    if (field && field.choices?.length && value && !field.choices.includes(value)) delete window.options[key];
+    else if (!field && !addons.value.some(a => a.key === key)) delete window.options[key];
+  }
+  const fields = schemaFields(window.product_id);
+  for (const key of ["colour", "louver_size", "fitting"]) {
+    const field = fields.find((item: any) => item.key === key);
+    if (field?.choices?.length && !field.choices.includes(window.options[key])) window.options[key] = field.choices[0];
+  }
+}
+function setAddon(window: any, key: string, value: string) {
+  if (!value || value === "no" || value === "none") delete window.options[key];
+  else window.options[key] = value;
+}
+function fieldLabel(f: any) { return locale.value === "zh" ? f.label_zh : f.label_en; }
+function productLabel(p: any) { return locale.value === "zh" ? p.name_zh : p.name_en; }
+function newWindow(): any {
+  const first = shutterProducts.value[0];
+  const options: Record<string,string> = {};
+  const colour = first?.configuration_schema?.find((f:any) => f.key === "colour")?.choices?.[0];
+  const louver = first?.configuration_schema?.find((f:any) => f.key === "louver_size")?.choices?.[0];
+  if (colour) options.colour = colour;
+  if (louver) options.louver_size = louver;
+  const fitting = first?.configuration_schema?.find((f:any) => f.key === "fitting")?.choices?.[0];
+  if (fitting) options.fitting = fitting;
+  return { id: crypto.randomUUID(), window_name: "", product_id: first?.id || "", width_mm: "", height_mm: "", quantity: 1, panel_count: 1, options };
+}
+function addWindow() { draft.windows.push(newWindow()); }
+function removeWindow(index: number) { draft.windows.splice(index, 1); }
+function copyWindow(window: any) { draft.windows.push({ ...window, id: crypto.randomUUID(), window_name: "", options: { ...window.options } }); }
+
+function saveDraft() {
+  if (!draftKey.value) return;
+  const data = { ...draft, windows: draft.windows, saved_at: Date.now() };
+  localStorage.setItem(draftKey.value, JSON.stringify(data));
+  lastSaved.value = new Date().toLocaleTimeString();
+}
+watch(draft, saveDraft, { deep: true });
+
+async function load() {
+  if (!portalSession.token) { router.replace("/portal"); return; }
+  loading.value = true;
+  try {
+    const [result, account] = await Promise.all([
+      portalRequest<{ products: any[]; addons?: Addon[] }>("catalog"),
+      portalRequest<{ customer_id: number }>("me"),
+    ]);
+    catalog.value = result.products;
+    addons.value = result.addons || [];
+    draftKey.value = `vera-order-draft:${account.customer_id}`;
+    const saved = localStorage.getItem(draftKey.value);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      Object.assign(draft, parsed);
+      if (!Array.isArray(draft.windows)) draft.windows = [];
+      lastSaved.value = parsed.saved_at ? new Date(parsed.saved_at).toLocaleTimeString() : "";
+    }
+    if (!draft.windows.length) addWindow();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally { loading.value = false; }
+}
+
+function checkWindow(w: any, index: number) {
+  if (!w.window_name.trim()) return tx(`第 ${index + 1} 行请填写窗户名称。`, `Row ${index + 1}: enter a window name.`);
+  if (!w.product_id || !(Number(w.width_mm) > 0) || !(Number(w.height_mm) > 0) || !(Number(w.panel_count) > 0)) return tx(`第 ${index + 1} 行的系列、宽、高和扇数都必须填写。`, `Row ${index + 1}: series, width, height and panels are required.`);
+  for (const f of schemaFields(w.product_id)) {
+    if (f.required && !w.options[f.key]) return tx(`第 ${index + 1} 行请填写${f.label_zh}。`, `Row ${index + 1}: ${f.label_en} is required.`);
+    if (f.choices?.length && w.options[f.key] && !f.choices.includes(w.options[f.key])) return tx(`第 ${index + 1} 行的${f.label_zh}与所选系列不匹配。`, `Row ${index + 1}: ${f.label_en} is not valid for the selected series.`);
+  }
+  const excluded = addons.value.filter(a => a.exclude?.includes(product(w.product_id)?.source_code || ""));
+  if (excluded.some(a => w.options[a.key] && !["no", "none"].includes(w.options[a.key]))) return tx(`第 ${index + 1} 行包含该系列不支持的附加项，请清除后继续。`, `Row ${index + 1} contains an add-on unavailable for this series.`);
+  return "";
+}
+
+async function submit() {
+  error.value = ""; notice.value = "";
+  if (!draft.project_name.trim() || !draft.site_address.trim()) { error.value = tx("请填写订单名称和施工地址。", "Enter the order name and installation address."); return; }
+  if (!draft.windows.length) { error.value = tx("请至少添加一扇窗。", "Add at least one window."); return; }
+  for (let i=0; i<draft.windows.length; i++) { const issue = checkWindow(draft.windows[i], i); if (issue) { error.value=issue; return; } }
+  saving.value = true;
+  try {
+    const saved = await portalRequest<any>("orders", {
+      project_name: draft.project_name.trim(), site_address: draft.site_address.trim(),
+      installation_required: draft.installation_required, submission_key: crypto.randomUUID(),
+      // Each spreadsheet row is one window; the customer template has no repeated-window quantity input.
+      lines: draft.windows.map(w => ({ window_name: w.window_name.trim(), product_id: Number(w.product_id), width_mm: w.width_mm, height_mm: w.height_mm, quantity: 1, panel_count: Number(w.panel_count), options: w.options })),
+    });
+    localStorage.removeItem(draftKey.value);
+    router.push(`/portal/orders/${saved.id}`);
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { saving.value = false; }
+}
+
+load();
+</script>
+
+<template>
+  <div class="excel-order">
+    <header class="table-heading">
+      <div><p class="eyebrow">{{ tx("新增订单", "NEW ORDER") }}</p><h1>{{ tx("订单信息", "Order Details") }}</h1><p>{{ tx("按熟悉的表格方式填写订单；每一行代表一扇窗。", "Enter the order in a familiar spreadsheet layout. Each row is one window.") }}</p></div>
+      <div class="heading-actions"><span v-if="lastSaved" class="saved">{{ tx("已保存", "Saved") }} {{ lastSaved }}</span></div>
+    </header>
+    <div v-if="loading" class="notice">{{ tx("正在加载产品…", "Loading products…") }}</div>
+    <template v-else>
+      <section class="order-fields">
+        <label>{{ tx("订单名称", "Order name") }} *<input v-model="draft.project_name" maxlength="200" :placeholder="tx('例如：Sterling House', 'e.g. Sterling House')" /></label>
+        <label class="address-field">{{ tx("施工地址", "Installation address") }} *<input v-model="draft.site_address" maxlength="1000" /></label>
+        <label class="install-check"><input v-model="draft.installation_required" type="checkbox" />{{ tx("需要安装", "Installation required") }}</label>
+      </section>
+      <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("必填列标有 *。表格可横向滚动。", "Required fields are marked *. Scroll horizontally to see all columns.") }}</p></div><button type="button" class="add-row" @click="addWindow">＋ {{ tx("添加一行", "Add Row") }}</button></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("高 / Drop (mm)", "Height / Drop (mm)") }} *</th><th>{{ tx("产品系列", "Product Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }}</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }}</th><th>{{ tx("安装尺寸", "Fitting") }}</th><th>{{ tx("特殊要求", "Special Request") }}</th><th>{{ tx("附加项", "Add-ons") }}</th><th>{{ tx("操作", "Actions") }}</th></tr></thead>
+          <tbody>
+            <tr v-for="(w,index) in draft.windows" :key="w.id">
+              <td class="row-num">{{ index+1 }}</td>
+              <td><input v-model="w.window_name" :placeholder="tx('例如：Bedroom 1', 'e.g. Bedroom 1')" /></td>
+              <td><input v-model="w.width_mm" type="number" min="1" inputmode="decimal" /></td>
+              <td><input v-model="w.height_mm" type="number" min="1" inputmode="decimal" /></td>
+              <td><select v-model.number="w.product_id" @change="onSeriesChange(w)"><option value="">{{ tx("选择系列", "Select") }}</option><option v-for="p in shutterProducts" :key="p.id" :value="p.id">{{ productLabel(p) }}</option></select></td>
+              <td><input v-model="w.options.opening_style" /></td>
+              <td><input v-model.number="w.panel_count" type="number" min="1" /></td>
+              <td><input v-model="w.options.layout_code" /></td>
+              <td><input v-model="w.options.vt_post" /></td>
+              <td><input v-model="w.options.ht_post" /></td>
+              <td><input v-model="w.options.midrail" /></td>
+              <td><select v-if="schemaFields(w.product_id).find((f:any)=>f.key==='frame')?.choices?.length" v-model="w.options.frame"><option value="">—</option><option v-for="v in schemaFields(w.product_id).find((f:any)=>f.key==='frame').choices" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" /></td>
+              <td><select v-model="w.options.louver_size"><option value="">—</option><option v-for="v in louverChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
+              <td><select v-model="w.options.colour"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
+              <td><input v-model="w.options.control_rod" /></td>
+              <td><select v-model="w.options.fitting"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
+              <td><input v-model="w.options.special_request" /></td>
+              <td class="addons-cell"><label v-for="a in availableAddons(w)" :key="a.key"><span>{{ locale==='zh'?a.label_zh:a.label_en }}</span><select :value="w.options[a.key] || (a.key==='extra_installation'?'none':'no')" @change="setAddon(w,a.key,($event.target as HTMLSelectElement).value)"><option v-for="choice in a.choices" :key="choice.value" :value="choice.value">{{ locale==='zh'?choice.label_zh:choice.label_en }}</option></select></label></td>
+              <td class="row-actions"><button type="button" :title="tx('复制此行','Copy row')" @click="copyWindow(w)">⧉</button><button type="button" :title="tx('删除此行','Delete row')" @click="removeWindow(index)">×</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="table-note">{{ tx("这是网页订单输入表格，字段会按所选产品系列显示并校验。价格由系统根据已发布的价格规则计算。", "This is an online order-entry table. Fields are validated for the selected series, and prices are calculated from the published pricing rules.") }}</p>
+      <div v-if="error" class="error-box" role="alert">{{ error }}</div>
+      <div class="footer-actions"><button type="button" class="switch-button" @click="router.push('/portal/orders')">{{ tx("取消", "Cancel") }}</button><button type="button" class="submit-button" :disabled="saving || loading || !draft.windows.length" @click="submit">{{ saving?tx("提交中…","Submitting…"):tx("提交订单", "Submit Order") }}</button></div>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.excel-order{max-width:100%;color:var(--ink,#1b2421)}.table-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:22px}.eyebrow{margin:0 0 5px;color:var(--cord);font-size:11px;font-weight:700;letter-spacing:.12em}.table-heading h1{margin:0;font-size:26px}.table-heading p{margin:6px 0;color:#62716b}.heading-actions{display:flex;align-items:center;gap:12px}.saved{font-size:12px;color:#62716b;white-space:nowrap}.switch-button,.add-row,.submit-button{min-height:42px;padding:9px 15px;border-radius:5px;font-weight:650;cursor:pointer}.switch-button{border:1px solid #9aac9f;background:#fff;color:#29493d}.order-fields{display:grid;grid-template-columns:1fr 2fr auto;gap:14px;align-items:end;padding:16px;background:#f3f6f3;border:1px solid #dbe4dd;border-radius:8px;margin-bottom:22px}.order-fields label{display:grid;gap:6px;font-size:12px;font-weight:650}.order-fields input:not([type=checkbox]){width:100%;height:40px;box-sizing:border-box;padding:8px 10px;border:1px solid #ccd7cf;border-radius:4px;font:inherit;font-weight:400;background:white}.install-check{display:flex!important;align-items:center;gap:8px;min-height:40px;white-space:nowrap}.sheet-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.sheet-title h2{margin:0;font-size:18px}.sheet-title p{margin:4px 0;color:#718078;font-size:12px}.add-row,.submit-button{border:0;background:var(--cord,#0f6e5c);color:white}.table-wrap{width:100%;overflow:auto;border:1px solid #d7e0d9;border-radius:7px;background:#fff}.table-wrap table{border-collapse:separate;border-spacing:0;min-width:2060px;width:100%;font-size:12px}.table-wrap th{position:sticky;top:0;z-index:1;background:#edf2ee;color:#2c3f35;text-align:left;white-space:nowrap;font-size:11px}.table-wrap td,.table-wrap th{padding:8px 7px;border-right:1px solid #e4eae5;border-bottom:1px solid #e4eae5;vertical-align:top}.table-wrap td input,.table-wrap td select{width:105px;height:34px;box-sizing:border-box;padding:5px 7px;border:1px solid #d0dad2;border-radius:4px;background:#fff;font:inherit}.table-wrap td:nth-child(2) input{width:150px}.table-wrap td:nth-child(3) select{width:145px}.row-num{position:sticky;left:0;z-index:2;min-width:26px;text-align:center;background:#f5f7f5}.table-wrap td.row-num{z-index:0}.addons-cell{min-width:210px}.addons-cell label{display:grid;grid-template-columns:95px 1fr;gap:5px;align-items:center;margin-bottom:5px;font-size:10px}.addons-cell label select{width:100%!important}.row-actions{white-space:nowrap}.row-actions button{width:30px;height:30px;margin-right:3px;border:1px solid #d4ddd6;border-radius:4px;background:#fff;cursor:pointer;font-size:17px}.table-note{font-size:12px;color:#65736c;margin:9px 0 22px}.error-box{padding:12px 14px;margin:14px 0;background:#fff0ed;color:#8f3425;border-radius:6px}.footer-actions{display:flex;justify-content:space-between;padding-top:16px;border-top:1px solid #dce4dd}.submit-button:disabled{opacity:.55;cursor:not-allowed}.notice{padding:18px;color:#65736c}
+@media(max-width:760px){.table-heading{display:block}.heading-actions{justify-content:space-between;margin-top:12px}.order-fields{grid-template-columns:1fr}.install-check{min-height:28px}.sheet-title{align-items:flex-start}.table-wrap table{min-width:1980px}}
+</style>
