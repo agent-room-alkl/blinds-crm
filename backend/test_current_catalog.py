@@ -10,7 +10,9 @@ with tempfile.TemporaryDirectory() as folder:
  r=client.post('/api/auth/login',json={'username':'dylan','password':'vera-demo'});assert r.status_code==200
  client.headers['Authorization']='Bearer '+r.json()['token']
  r=client.post('/api/operations/customers',json={'company':'Source contact without email','contact_name':'Not supplied','email':'','phone':'000','company_address':'Not supplied','username':'missing-email','password':'test-only-password'});assert r.status_code==200,r.text
- r=client.post('/api/operations/template-import',json={'filename':'fixture.xlsx','content_base64':base64.b64encode(fixture()).decode()});assert r.status_code==200,r.text
+ retired=client.post('/api/operations/template-import',json={'filename':'fixture.xlsx','content_base64':base64.b64encode(fixture()).decode()});assert retired.status_code==410,retired.text
+ from _pricing_test_helpers import publish_fixture_knowledge
+ publish_fixture_knowledge(client,fixture(),'fixture.xlsx')
  with db() as c:
   # Canonical rebuild deliberately discards unreferenced initial sample rows.
   c.execute("DELETE FROM products WHERE id IN (1,2,3)")
@@ -20,6 +22,8 @@ with tempfile.TemporaryDirectory() as folder:
  portal.headers['Authorization']='Bearer '+r.json()['token']
  products=portal.get('/api/portal/catalog').json()['products']
  assert [p['name_en'] for p in products]==['VERA Eco','VERA Classic','VERA Natural','VERA Prime','VERA Deluxe']
+ deluxe=next(p for p in products if p['source_code']=='VERA_Ashwood_provisional')
+ assert deluxe['published'] is True and deluxe['orderable'] is False,'Unresolved Deluxe stays visible but cannot be ordered'
  for p in products:assert p['image_url'].startswith('/images/website-')
  with db() as c:c.execute('INSERT INTO products VALUES(?,?)',(999,dump({'id':999,'source_code':'Shutters_Aluminium','category':'shutters','published':True,'orderable':True,'name_en':'Excluded Aluminium'})))
  assert len(portal.get('/api/portal/catalog').json()['products'])==5

@@ -1312,24 +1312,37 @@ def register(app, s):
                 put(c,'template_pointer',{'id':'template-current','template_id':manifest['id'],'activated_at':s.now(),'actor':actor})
             known={r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
             next_id=max(known,default=0)+1
-            mapping={'Shutters_PVC_Eco':('VERA Eco','PVC'),'Shutters_PVC':('VERA Classic','PVC Premium'),
-                     'Shutters_Pinewood':('VERA Natural','Pinewood'),'Shutters_Basswood':('VERA Prime','Basswood'),
-                     'VERA_Ashwood_provisional':('VERA Deluxe','Ashwood')}
+            mapping={'Shutters_PVC_Eco':('VERA Eco','PVC',5),'Shutters_PVC':('VERA Classic','PVC Premium',20),
+                     'Shutters_Pinewood':('VERA Natural','Pinewood',5),'Shutters_Basswood':('VERA Prime','Basswood',10),
+                     'VERA_Ashwood_provisional':('VERA Deluxe','Ashwood',10)}
             for rule in manifest['products']:
                 code=rule.get('source_code')
                 if code not in mapping: continue
+                name,material,warranty=mapping[code]
+                orderable=rule.get('status')=='configured'
+                display_provisional=code=='VERA_Ashwood_provisional' and rule.get('status')=='provisional_placeholder'
                 product=next((p for p in known.values() if p.get('source_code')==code),None)
                 if product:
-                    product.update(name_en=mapping[code][0],name_zh=mapping[code][0],category='shutters',material=mapping[code][1],
-                                   published=rule.get('status')=='configured',orderable=rule.get('status')=='configured',
+                    product.update(name_en=name,name_zh=name,category='shutters',material=material,source_code=code,
+                                   sample=False,published=orderable or display_provisional,portal_only=False,
+                                   scope='website_and_template',orderable=orderable,warranty_years=warranty,
+                                   content_source='https://verashading.com/products',
+                                   image_urls=product.get('image_urls') or [WEBSITE_IMAGES[code]['local']],
                                    configuration_schema=rule.get('schema',product.get('configuration_schema',[])))
                     c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
                 else:
                     product={'id':next_id,'name_en':mapping[code][0],'name_zh':mapping[code][0],'category':'shutters',
-                             'material':mapping[code][1],'source_code':code,'published':rule.get('status')=='configured',
-                             'orderable':rule.get('status')=='configured','orderable_after_login':False,
+                             'material':mapping[code][1],'source_code':code,'sample':False,
+                             'published':orderable or display_provisional,'portal_only':False,'scope':'website_and_template',
+                             'orderable':orderable,'orderable_after_login':False,'warranty_years':warranty,
+                             'content_source':'https://verashading.com/products','image_urls':[WEBSITE_IMAGES[code]['local']],
                              'configuration_schema':rule.get('schema',[]),'display_position':next_id}
-                    put(c,'product',product);known[next_id]=product;next_id+=1
+                    c.execute('INSERT INTO products(id,data) VALUES(?,?)',(next_id,s.dump(product)))
+                    known[next_id]=product;next_id+=1
+            for product in known.values():
+                if product.get('sample') or (product.get('source_code') and product.get('source_code') not in mapping):
+                    product.update(published=False,orderable=False)
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
             return {'active':True,'version':manifest['version'],'already_initialized':False,'supersedes_version':existing_version,
                     'confirmed_series':4,'unresolved_series':['VERA_Ashwood_provisional'],
                     'historical_orders_unchanged':True}
@@ -1546,20 +1559,37 @@ def register(app, s):
                 if code not in code_map: continue
                 product=by_code.get(code)
                 display_provisional = code == 'VERA_Ashwood_provisional' and rule.get('status') == 'provisional_placeholder'
+                name,material=code_map[code]
+                orderable = rule.get('status') == 'configured'
+                warranty={'Shutters_PVC_Eco':5,'Shutters_PVC':20,'Shutters_Pinewood':5,
+                          'Shutters_Basswood':10,'VERA_Ashwood_provisional':10}[code]
                 if product:
-                    product.update(configuration_schema=rule.get('schema',product.get('configuration_schema',[])),
-                                   published=True if rule.get('status')=='configured' or display_provisional else product.get('published',True),
-                    orderable=rule.get('status')=='configured')
+                    product.update(source_code=code,name_zh=name,name_en=name,category='shutters',material=material,
+                                   sample=False,published=orderable or display_provisional,portal_only=False,
+                                   scope='website_and_template',orderable=orderable,warranty_years=warranty,
+                                   content_source='https://verashading.com/products',
+                                   image_urls=product.get('image_urls') or [WEBSITE_IMAGES[code]['local']],
+                                   configuration_schema=rule.get('schema',product.get('configuration_schema',[])),
+                                   rule_version=manifest['version'])
                     c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
                 else:
-                    names=code_map[code]; pid=max(product_rows,default=0)+1
-                    orderable = rule.get('status') == 'configured'
-                    product={'id':pid,'name_zh':names[0],'name_en':names[0],'category':'shutters','material':names[1],
+                    pid=max(product_rows,default=0)+1
+                    product={'id':pid,'name_zh':name,'name_en':name,'category':'shutters','material':material,
                              'source_code':code,'published':orderable or display_provisional,'orderable':orderable,
-                             'orderable_after_login':False,'configuration_schema':rule.get('schema',[]),'display_position':pid}
-                    put(c,'product',product); product_rows[pid]=product
+                             'sample':False,'portal_only':False,'scope':'website_and_template','orderable_after_login':False,
+                             'warranty_years':warranty,'content_source':'https://verashading.com/products',
+                             'image_urls':[WEBSITE_IMAGES[code]['local']],
+                             'configuration_schema':rule.get('schema',[]),'display_position':pid,'rule_version':manifest['version']}
+                    c.execute('INSERT INTO products(id,data) VALUES(?,?)',(pid,s.dump(product)))
+                    product_rows[pid]=product
+                    by_code[code]=product
             for code,product in list(by_code.items()):
                 if code in code_map and code not in products:
+                    product.update(published=False,orderable=False)
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
+            for product in product_rows.values():
+                code=product.get('source_code')
+                if product.get('sample') or (code and code not in code_map):
                     product.update(published=False,orderable=False)
                     c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
             put(c,'template_pointer',{'id':'template-current','template_id':manifest['id'],'activated_at':s.now(),'actor':actor})

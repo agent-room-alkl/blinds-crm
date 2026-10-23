@@ -59,11 +59,14 @@ with tempfile.TemporaryDirectory() as folder:
     profile=post(staff,'operations/customers',dict(company='TEST only',contact_name='Test contact',email='test@example.invalid',phone='123',company_address='Company',username='testclient',password='test-password',customer_type='wholesale',customer_code='TEST'))
     customer.headers['Authorization']='Bearer '+post(customer,'portal/login',{'username':'testclient','password':'test-password'})['token']
     post(customer,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()},401)
-    imported=post(staff,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()})
-    assert imported['products_count']==23
-    # Idempotent import keeps all product identifiers stable.
+    post(staff,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()},410)
+    from _pricing_test_helpers import publish_fixture_knowledge
+    published=publish_fixture_knowledge(staff,raw,'test.xlsm')
+    assert published['active'] is True
+    assert staff.get('/api/operations/template-status').json()['status']=='imported'
+    # Publishing a second fixture version keeps all website product identifiers stable.
     before=customer.get('/api/portal/catalog').json()['products']
-    post(staff,'operations/template-import',{'filename':'test.xlsm','content_base64':base64.b64encode(raw).decode()})
+    publish_fixture_knowledge(staff,raw,'test.xlsm')
     after=customer.get('/api/portal/catalog').json()['products']
     assert [(p['id'],p['source_code']) for p in before]==[(p['id'],p['source_code']) for p in after]
     
@@ -113,7 +116,7 @@ with tempfile.TemporaryDirectory() as folder:
     d=post(customer,'portal/orders',body);oid=d['id']
     assert 'price_snapshot' not in d['lines'][0]
     post(staff,f'operations/orders/{oid}/adjust',{'note':'TEST discount adjustment','lines':[{'line_id':'1','discount':'0.1'}]})
-    reviewed=post(staff,f'operations/orders/{oid}/review')
+    reviewed=post(staff,f'operations/orders/{oid}/review',{'confirm_order_number':True})
     assert reviewed['subtotal']=='90.00' and reviewed['invoices'][0]['amount']=='165.60'
     post(staff,f'operations/orders/{oid}/adjust',{'note':'must stay frozen','lines':[]},409)
     exported=staff.get(f'/api/operations/orders/{oid}/production-sheet')
