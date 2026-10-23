@@ -195,12 +195,13 @@ def up(v, places=2):
     return Decimal(v).quantize(Decimal(1).scaleb(-places), rounding=ROUND_UP)
 
 
-def calculate_line(rule, line, adjustment=None):
+def calculate_line(rule, line, adjustment=None, product_code=None, addon_definitions=None, installation_per_panel=None):
     if rule['status'] not in ('configured', 'provisional_placeholder'):
         raise ValueError(rule.get('reason', 'Product price rule is missing'))
+    from addons import ADDON_KEYS
     supplied = line['options']
     allowed = {f['key']: f for f in rule['schema']}
-    if set(supplied)-allowed.keys():
+    if set(supplied) - allowed.keys() - (ADDON_KEYS if rule.get('kind') == 'shutter' else set()):
         raise ValueError('Unsupported product fields')
     for key, field in allowed.items():
         value = supplied.get(key, '')
@@ -214,20 +215,45 @@ def calculate_line(rule, line, adjustment=None):
     discount = Decimal(a.get('discount', '0'))
     surcharge = Decimal(a.get('product_surcharge', '0'))
     width, height = Decimal(line['width_mm']), Decimal(line['height_mm'])
+    from addons import PANEL_INSTALLATION, addon_totals, compose_unit
     if rule['formula']=='excel_shutter':
         area = max(up(width*height/1000000), Decimal(rule['minimum_area']))
-        base = area * Decimal(rule['rate_per_m2'])
+        if area * Decimal(rule['rate_per_m2']) <= 0:
+            raise ValueError('The selected dimensions have no positive confirmed price')
+        per_sqm, percent, fixed = addon_totals(supplied, rule.get('source_code') or product_code, addon_definitions)
+        unit = compose_unit(area, rule['rate_per_m2'], per_sqm, percent, fixed, surcharge, discount)
     else:
         col = next((i for i,v in enumerate(rule['widths']) if Decimal(v)>=width),None)
         row = next((i for i,v in enumerate(rule['heights']) if Decimal(v)>=height),None)
         if col is None or row is None:
             raise ValueError('Dimensions exceed the confirmed price matrix')
         area, base = Decimal(1), Decimal(rule['matrix'][row][col])
-    if base<=0:
-        raise ValueError('The selected dimensions have no positive confirmed price')
-    unit = up((base+surcharge)*(1-discount))
+        if base<=0:
+            raise ValueError('The selected dimensions have no positive confirmed price')
+        unit = up((base+surcharge)*(1-discount))
     install_rate = Decimal(rule['installation_rate']) if rule['installation_rate'] is not None else None
+    if rule.get('kind') == 'shutter' and install_rate is not None:
+        # The approved business rule is per panel; legacy workbook rates are not authoritative.
+        install_rate = Decimal(installation_per_panel) if installation_per_panel is not None else PANEL_INSTALLATION
     install = None if install_rate is None else up(install_rate*(line.get('panel_count',1) if rule['kind']=='shutter' else 1)+Decimal(a.get('installation_surcharge','0')))
     return {'area': str(area), 'unit_price': str(unit), 'amount': str(unit*line['quantity']),
             'installation_amount': None if install is None else str(install*line['quantity']),
             'discount': str(discount), 'product_surcharge': str(surcharge), 'installation_surcharge': str(a.get('installation_surcharge','0'))}
+
+
+def apply_order_minimum(lines, addon_definitions=None, minimum_area='1'):
+    """Apply a 1 sqm floor across shutters and preserve per-item charges."""
+    area_lines = [line for line in lines if line.get('pricing_status') == 'configured' and line.get('price_snapshot', {}).get('formula') == 'excel_shutter']
+    area = sum((Decimal(line['area']) * int(line['quantity']) for line in area_lines), Decimal(0))
+    minimum_area = Decimal(minimum_area)
+    if not (Decimal(0) < area < minimum_area):
+        return False
+    from addons import addon_totals, compose_unit
+    for line in area_lines:
+        effective_area = Decimal(line['area']) * minimum_area / area
+        rule = line['price_snapshot']
+        per_sqm, percent, fixed = addon_totals(line.get('options') or {}, rule.get('source_code'), addon_definitions)
+        unit = compose_unit(effective_area, rule['rate_per_m2'], per_sqm, percent, fixed, line.get('product_surcharge', '0'), line.get('discount', '0'))
+        line['unit_price'] = str(unit)
+        line['amount'] = str(unit * int(line['quantity']))
+    return True

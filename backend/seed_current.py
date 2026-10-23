@@ -3,7 +3,7 @@ Real contacts and private rates stay in the database; generated orders are expli
 Run: python backend/seed_current.py --workbook <path> --database backend/vera.db
 Existing databases are refused. This script never deletes other databases.
 """
-import argparse,os,json,base64
+import argparse,os,json
 from pathlib import Path
 
 def main():
@@ -20,6 +20,14 @@ def main():
   company=value('B'+str(row))
   if company:people.setdefault(company,dict(company=company,contact_name=value('C'+str(row)),phone=value('D'+str(row)),email=value('E'+str(row)),source_code=value('F'+str(row)),source_row=row))
  if len(people)!=19:raise SystemExit('Expected 19 unique customer companies in source')
+ # Login suffixes are local demo identifiers; customer codes must come from the
+ # authoritative Wholesale Customer sheet, not be inferred from company names.
+ wholesale_codes={}
+ wholesale=sheets.get('Wholesale Customer',{})
+ for row in range(2,1000):
+  company=str(wholesale.get('A'+str(row),{}).get('value') or '').strip()
+  code=str(wholesale.get('D'+str(row),{}).get('value') or '').strip()
+  if company and code: wholesale_codes[company.casefold()]=code
  images=json.loads((root/'website_products.json').read_text(encoding='utf-8'));allowed=set(images)
  os.environ.update(VERA_DB_BACKEND='sqlite',VERA_DB=str(target),VERA_STORAGE_BACKEND='local',SMTP_HOST='',SMTP_FROM='',SMTP_USER='',SMTP_PASSWORD='',VERA_DEMO_PASSWORD='vera-demo')
  from service import app,db,dump,now
@@ -30,7 +38,7 @@ def main():
   if r.status_code!=200:raise RuntimeError(path+': '+str(r.status_code)+' '+r.text)
   return r.json()
  staff.headers['Authorization']='Bearer '+post(staff,'auth/login',{'username':'dylan','password':'vera-demo'})['token']
- imported=post(staff,'operations/template-import',{'filename':source.name,'content_base64':base64.b64encode(raw).decode()})
+ post(staff,'operations/pricing-knowledge/initialize-default',{})
  with db() as c:
   c.execute('BEGIN IMMEDIATE')
   for row in c.execute('SELECT id,data FROM products').fetchall():
@@ -40,9 +48,19 @@ def main():
    item['name_zh']=item['name_en'];c.execute('UPDATE products SET data=? WHERE id=?',(dump(item),row['id']))
  clients=[];profiles=[]
  for index,person in enumerate(people.values()):
-  code=person['source_code'] or str(index+1);username='demo-trade' if index==0 else 'trade-'+code.lower()
-  profile=post(staff,'operations/customers',dict(company=person['company'],contact_name=person['contact_name'] or '未提供联系人',phone=person['phone'],email=person['email']) | dict(company_address='待补充（Excel未提供有效地址）',username=username,password='local-demo-only'))
-  with db() as c:c.execute('UPDATE customers SET notes=? WHERE id=?',(dump({'source_sheet':'In Put','source_row':person['source_row'],'source_code':code,'data_kind':'workbook_contact','address_missing':True}),profile['customer_id']))
+  # In Put codes are useful stable demo usernames, but they are not a
+  # wholesale customer code unless the company is also listed on the
+  # authoritative Wholesale Customer sheet.
+  seed_key=person['source_code'] or 'customer'+str(index+1);username='demo-trade' if index==0 else 'trade-'+seed_key.lower()
+  source_code=wholesale_codes.get(person['company'].casefold())
+  profile_body=dict(company=person['company'],contact_name=person['contact_name'] or '未提供联系人',phone=person['phone'],email=person['email'],company_address='待补充（Excel未提供有效地址）',username=username,password='local-demo-only')
+  if source_code:profile_body.update(customer_type='wholesale',customer_code=source_code)
+  profile=post(staff,'operations/customers',profile_body)
+  with db() as c:
+   if not source_code:
+    unresolved=json.loads(c.execute('SELECT data FROM portal_profiles WHERE customer_id=?',(profile['customer_id'],)).fetchone()['data']);unresolved['customer_type']=None;unresolved['customer_code']=None
+    c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?',(dump(unresolved),profile['customer_id']))
+   c.execute('UPDATE customers SET notes=? WHERE id=?',(dump({'source_sheet':'In Put','source_row':person['source_row'],'source_code':source_code,'data_kind':'workbook_contact','address_missing':True,'customer_type_unresolved':not bool(source_code)}),profile['customer_id']))
   client=TestClient(app);client.headers['Authorization']='Bearer '+post(client,'portal/login',{'username':username,'password':'local-demo-only'})['token'];clients.append(client);profiles.append(profile)
  # Payment/quote issuers are facts, but their role as factory supplier is not established.
  for name,ref in [(value('E33'),'In Put!E33'),(value('C48'),'In Put!C48')]:
@@ -68,8 +86,11 @@ def main():
   post(staff,'operations/transit',{'order_ids':[oid],'operation_key':'simulation-transit-'+str(n)})
   if n==3:continue
   quantities=[{'line_id':str(i+1),'quantity':1} for i in range(len(lines))]
-  post(staff,'operations/fulfilment',dict(order_id=oid,kind='arrival',operation_key='simulation-arrival-'+str(n),lines=quantities[:3] if n==4 else quantities))
-  if n==5:post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='simulation-delivery-'+str(n),lines=quantities))
+  post(staff,'operations/fulfilment',dict(order_id=oid,kind='arrival',operation_key='simulation-arrival-'+str(n),lines=quantities))
+  if n==5:
+   invoice=post(staff,'operations/settlements',dict(order_ids=[oid],operation_key='simulation-balance-'+str(n),rules_evidence='SIMULATED all-arrived balance',billing_basis='all_arrived_remaining_total'))
+   post(staff,f"operations/invoices/{invoice['id']}/received",{'note':'SIMULATION only; not a customer payment'})
+   post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='simulation-delivery-'+str(n),lines=quantities))
  with db() as c:
   marker={'id':'local-current:v1','source_workbook':source.name,'customer_count':len(people),'simulated_order_ids':created,'missing':['客户有效地址','部分客户联系人/邮箱','确认工厂供应商身份','Deluxe正式费率'],'outbound_email':'disabled','created_at':now()}
   c.execute('INSERT INTO operations_records VALUES(?,?,?,?)',(marker['id'],'local_dataset',None,dump(marker)))

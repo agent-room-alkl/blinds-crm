@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import { leadText } from "../../addons";
 import { portalRequest } from "../../portal-api";
 
 const { locale } = useI18n();
@@ -59,7 +60,8 @@ function startNewOrder() {
           <strong>{{ order.project_name }}</strong>
           <span class="order-status">{{ order.status }}</span>
         </div>
-        <p>{{ tx('订单号', 'Order no.') }} {{ order.order_number }}</p>
+        <p>{{ tx('订单号', 'Order no.') }} {{ order.order_number || (order.order_number_confirmed === false ? tx('待管理员确认', 'Pending admin confirmation') : '—') }}</p>
+        <p v-if="leadText(order.lead_time)">{{ tx('预计交期', 'Lead time') }} {{ leadText(order.lead_time) }}</p>
         <p class="order-address">{{ order.site_address }}</p>
         <div class="order-footer">
           <span>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("待定价", "TBC") }}</span>

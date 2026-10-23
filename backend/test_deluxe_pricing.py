@@ -50,12 +50,9 @@ with tempfile.TemporaryDirectory() as folder:
     
     # Import template
     template_bytes = fixture()
-    import_resp = staff.post('/api/operations/template-import', json={
-        'filename': 'test_template.xlsx',
-        'content_base64': base64.b64encode(template_bytes).decode()
-    })
-    assert import_resp.status_code == 200, f'Template import failed: {import_resp.text}'
-    print('✓ Template imported')
+    from _pricing_test_helpers import publish_fixture_knowledge
+    publish_fixture_knowledge(staff, template_bytes, 'test_template.xlsx', confirm_deluxe_fixture=True)
+    print('✓ Fixture pricing knowledge reviewed and published')
     
     # Get catalog
     catalog_resp = portal.get('/api/portal/catalog')
@@ -355,11 +352,7 @@ with tempfile.TemporaryDirectory() as folder:
         portal2.headers['Authorization'] = 'Bearer ' + token2
         
         # Import template
-        import_resp2 = staff2.post('/api/operations/template-import', json={
-            'filename': 'test_template2.xlsx',
-            'content_base64': base64.b64encode(fixture()).decode()
-        })
-        assert import_resp2.status_code == 200
+        publish_fixture_knowledge(staff2, fixture(), 'test_template2.xlsx', confirm_deluxe_fixture=True)
         
         # Manually inject a minimal-schema rule into the template (simulate old code)
         with s_minimal.db() as c:

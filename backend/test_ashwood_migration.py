@@ -174,6 +174,8 @@ with tempfile.TemporaryDirectory() as folder:
     # Create a customer
     customer = staff.post('/api/operations/customers', json={
         'company': 'Test Company',
+        'customer_type': 'wholesale',
+        'customer_code': 'TEST',
         'contact_name': 'Test User',
         'email': 'test@example.invalid',
         'phone': '12345',
@@ -193,12 +195,9 @@ with tempfile.TemporaryDirectory() as folder:
     import base64
     template_bytes = fixture()
     
-    import_resp = staff.post('/api/operations/template-import', json={
-        'filename': 'test_template.xlsx',
-        'content_base64': base64.b64encode(template_bytes).decode()
-    })
-    assert import_resp.status_code == 200, f'Template import failed: {import_resp.text}'
-    print(f'✓ Template imported')
+    from _pricing_test_helpers import publish_fixture_knowledge
+    publish_fixture_knowledge(staff, template_bytes, 'test_template.xlsx')
+    print('✓ Fixture pricing knowledge reviewed and published')
     
     # Check portal catalog includes Deluxe
     catalog_resp = portal.get('/api/portal/catalog')
@@ -234,37 +233,38 @@ with tempfile.TemporaryDirectory() as folder:
             'options': {'colour': 'Golden Oak 61', 'louver_size': '89mm', 'fitting': 'In Fit'}
         }]
     }
+
+    # Retain the old placeholder arithmetic coverage while confirming the public
+    # quote and order APIs reject provisional pricing.
+    with s.db() as c:
+        pointer = json.loads(c.execute(
+            "SELECT data FROM operations_records WHERE id='template-current'"
+        ).fetchone()['data'])
+        template = json.loads(c.execute(
+            'SELECT data FROM operations_records WHERE id=?', (pointer['template_id'],)
+        ).fetchone()['data'])
+        deluxe_rule = next(rule for rule in template['products']
+                           if rule.get('source_code') == 'VERA_Ashwood_provisional')
+        from excel_rules import calculate_line
+        calculated = calculate_line(deluxe_rule, price_order['lines'][0],
+                                    product_code='VERA_Ashwood_provisional',
+                                    addon_definitions=template.get('addons'),
+                                    installation_per_panel=template.get('installation_per_panel'))
+        from decimal import Decimal
+        fixture_subtotal = Decimal(calculated['amount'])
+        fixture_tax = fixture_subtotal * Decimal(template['tax_rate'])
+        assert fixture_subtotal == Decimal('3.60')
+        assert fixture_tax == Decimal('0.54')
+        assert fixture_subtotal + fixture_tax == Decimal('4.14')
     
     price_resp = portal.post('/api/portal/price', json=price_order)
-    assert price_resp.status_code == 200, f'Price request failed: {price_resp.status_code} - {price_resp.text}'
-    price_data = price_resp.json()
-    
-    # Verify provisional pricing at 1.00/m²
-    # 1.2m × 1.5m = 1.8m² × 2 qty = 3.6m²
-    # 3.6m² × 1.00/m² = 3.60
-    # + 15% tax = 0.54
-    # Total = 4.14
-    from decimal import Decimal
-    assert price_data['pricing_status'] == 'provisional', \
-        f'Expected provisional status, got {price_data["pricing_status"]}'
-    assert Decimal(price_data['subtotal']) == Decimal('3.60'), \
-        f'Expected subtotal 3.60, got {price_data["subtotal"]}'
-    assert Decimal(price_data['total']) == Decimal('4.14'), \
-        f'Expected total 4.14, got {price_data["total"]}'
-    
-    print(f'✓ POST /api/portal/price with Deluxe: 200, provisional at 1.00/m²')
-    print(f'  Response: subtotal={price_data["subtotal"]}, tax={price_data["tax"]}, total={price_data["total"]}')
-    print(f'  Full line data:')
-    print(f'    - amount: {price_data["lines"][0]["amount"]}')
-    print(f'    - pricing_status: {price_data["lines"][0]["pricing_status"]}')
-    
-    # Test order submission
+    assert price_resp.status_code == 409, \
+        f'Unconfirmed Deluxe placeholder must not be quoted: {price_resp.status_code} - {price_resp.text}'
+    assert 'not ready' in price_resp.json()['detail']
     order_resp = portal.post('/api/portal/orders', json=price_order)
-    assert order_resp.status_code == 200, f'Order failed: {order_resp.status_code} - {order_resp.text}'
-    order_data = order_resp.json()
-    
-    assert order_data['pricing_status'] == 'provisional', 'Order should preserve provisional status'
-    print(f'✓ POST /api/portal/orders with Deluxe: 200, order created')
+    assert order_resp.status_code == 409, \
+        f'Unconfirmed Deluxe placeholder must not be ordered: {order_resp.status_code} - {order_resp.text}'
+    print('✓ Provisional Deluxe remains visible in the catalog and blocked from quotes and orders')
     
     # Verify other series still work (test that we didn't break anything)
     print(f'\n--- Regression test: other series still pass ---')
@@ -291,7 +291,7 @@ with tempfile.TemporaryDirectory() as folder:
     print(f'✓ Requirement 2: 11-field schema with 61-70 colours and 63/76/89/114mm louvers')
     print(f'✓ Requirement 3: Checklist (orderable, scope, published, descriptions)')
     print(f'✓ Requirement 4: Idempotency (twice, half-migrated, no duplicates)')
-    print(f'✓ Requirement 5: End-to-end (catalog, price, order, regression)')
+    print(f'✓ Requirement 5: End-to-end (catalog, provisional quote/order rejection, regression)')
     print(f'')
     print(f'Before migration (row 27):')
     print(json.dumps(before_data, indent=2, ensure_ascii=False))

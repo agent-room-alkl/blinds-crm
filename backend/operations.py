@@ -9,6 +9,7 @@ import base64
 import json
 import secrets
 import time
+import os
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 from typing import Literal
 from pathlib import Path
@@ -121,9 +122,274 @@ DELUXE_SCHEMA = [
 ]
 
 
-def deposit_amount(total):
+def deposit_amount(total, rate=DEPOSIT_RATE):
     """Matches the 60% output in the supplied workbook, In Put!P51."""
-    return str((Decimal(total) * DEPOSIT_RATE).quantize(Decimal('.01'), rounding=ROUND_UP))
+    return str((Decimal(total) * Decimal(rate)).quantize(Decimal('.01'), rounding=ROUND_UP))
+
+
+def prepare_knowledge_manifest(manifest):
+    """Return a detached editable copy with the current VERA commercial rules."""
+    from addons import ADDONS, ORDER_INSTALLATION_MINIMUM, PANEL_INSTALLATION
+    value = json.loads(json.dumps(manifest))
+    value.setdefault('addons', json.loads(json.dumps(ADDONS)))
+    value.setdefault('installation_per_panel', str(PANEL_INSTALLATION))
+    value.setdefault('minimum_installation', str(ORDER_INSTALLATION_MINIMUM))
+    value.setdefault('order_minimum_area', '1')
+    value.setdefault('deposit_rate', str(DEPOSIT_RATE))
+    value.setdefault('tax_rate', '0.15')
+    value.setdefault('tax_basis', 'GST included in total')
+    value.setdefault('knowledge_sources', [])
+    value.setdefault('knowledge_facts', [])
+    rules = {rule.get('source_code'): rule for rule in value.get('products', [])}
+    basswood = rules.get('Shutters_Basswood')
+    if basswood and 'VERA_Ashwood_provisional' not in rules:
+        value['products'].append({
+            **basswood,
+            'source_code': 'VERA_Ashwood_provisional',
+            'schema': DELUXE_SCHEMA,
+            'rate_per_m2': '1.00',
+            'provisional': True,
+            'status': 'provisional_placeholder',
+            'warnings': ['Unconfirmed placeholder. Map and confirm the source price before publishing.'],
+        })
+    return value
+
+
+def default_pricing_knowledge_manifest(wholesale_bytes, price_list_bytes, price_list_text):
+    """Build a cited, conservative default from the supplied wholesale XLSM and V5 PDF text."""
+    from excel_rules import parse_template, workbook
+    import hashlib
+    from datetime import datetime, timezone
+
+    wholesale = parse_template(wholesale_bytes)
+    sheets, _ = workbook(wholesale_bytes)
+    pricing = sheets['Pricing']
+    manifest = prepare_knowledge_manifest(wholesale)
+    core = {
+        'Shutters_PVC_Eco': ('250', 'Pricing!A486:B486'),
+        'Shutters_PVC': ('280', 'Pricing!A485:B485'),
+        'Shutters_Pinewood': ('320', 'Pricing!A487:B487'),
+        'Shutters_Basswood': ('340', 'Pricing!A488:B488'),
+    }
+    normalized_pdf=' '.join(price_list_text.split())
+    for label,rate in [('PVC Eco','250'),('PVC','280'),('Pinewood','320'),('Basswood','340'),('Ashwood','380')]:
+        if not re.search(r'\b'+re.escape(label)+r'\s+\$\s*'+re.escape(rate)+r'\.00',normalized_pdf,re.I):
+            raise ValueError('The supplied V5 PDF does not contain the expected '+label+' rate text')
+    for required_text in ('Minimum order: 1 sqm per order','Minimum chargeable area: 0.5 sqm per window/item',
+                          '60% deposit required on order'):
+        if required_text not in normalized_pdf:
+            raise ValueError('The supplied V5 PDF is missing an expected pricing term: '+required_text)
+    if not re.search(r'10.\s*12 weeks from order confirmation',normalized_pdf,re.I) or not re.search(r'12.\s*14 weeks from order confirmation',normalized_pdf,re.I):
+        raise ValueError('The supplied V5 PDF is missing the standard or shaped lead-time note')
+    for rule in manifest['products']:
+        code = rule.get('source_code')
+        if code in core:
+            rate, _ = core[code]
+            if str(pricing.get('B'+str({'Shutters_PVC':485,'Shutters_PVC_Eco':486,'Shutters_Pinewood':487,'Shutters_Basswood':488}[code]),{}).get('value')) != rate:
+                raise ValueError('The supplied wholesale workbook does not match the verified four-series source values')
+            rule.update(rate_per_m2=rate, minimum_area='0.5', status='configured', provisional=False,
+                        formula='excel_shutter', kind='shutter')
+        elif code == 'VERA_Ashwood_provisional':
+            rule.update(rate_per_m2='1.00', status='provisional_placeholder', provisional=True,
+                        warnings=['The V5 Ashwood rate has no confirmed mapping to this workbook product code.'])
+    defaults = prepare_knowledge_manifest({})
+    manifest.update(addons=defaults['addons'], installation_per_panel=str(defaults['installation_per_panel']),
+                    minimum_installation=str(defaults['minimum_installation']), order_minimum_area='1',
+                    tax_rate='0.15', deposit_rate='0.60', tax_basis='GST charged on product and installation; included in quoted total',
+                    source='Default pricing knowledge compiled from supplied wholesale XLSM and V5 dealer PDF')
+    # Record only checked, actionable source-backed rules as active knowledge facts.
+    facts = []
+    source_hashes = {'wholesale': hashlib.sha256(wholesale_bytes).hexdigest(),
+                     'v5': hashlib.sha256(price_list_bytes).hexdigest()}
+    for code, (rate, location) in core.items():
+        facts.append({'id':'fact:'+code, 'category':'base_price', 'label':code, 'value':rate,
+                      'unit':'NZD/sqm', 'scope':'Wholesale shutter series', 'status':'confirmed',
+                      'source_id':'source:wholesale-xlsm', 'source_location':location,
+                      'source_excerpt':f'{code} | NZD {rate}/sqm', 'source_sha256':source_hashes['wholesale']})
+    listing=sheets['Product Listing']
+    for col in 'BCDEFGHI':
+        cell=listing.get(col+'102',{})
+        raw=cell.get('value')
+        if raw not in (None,''):
+            facts.append({'id':'fact:discount:'+col,'category':'discount_option','label':'Workbook discount option',
+                          'value':str(raw),'unit':'source value','scope':'Staff adjustment values; source mapping retained from imported workbook',
+                          'status':'configured','source_id':'source:wholesale-xlsm','source_location':f'Product Listing!{col}102',
+                          'source_excerpt':str(raw),'source_sha256':source_hashes['wholesale']})
+    def cite_fact(fid,label,value,unit,location,excerpt,category='pricing_rule',source_id='source:v5-pdf'):
+        source_key='wholesale' if source_id=='source:wholesale-xlsm' else 'v5'
+        facts.append({'id':'fact:'+fid,'category':category,'label':label,'value':value,'unit':unit,
+                      'scope':'VERA wholesale shutter pricing','status':'confirmed',
+                      'source_id':source_id,'source_location':location,
+                      'source_excerpt':excerpt,'source_sha256':source_hashes[source_key]})
+    cite_fact('minimum-window-area','Minimum billable area per window','0.5','sqm','page 1',
+              'Minimum chargeable area: 0.5 sqm per window/item.')
+    cite_fact('minimum-order-area','Minimum order area','1','sqm','page 1','Minimum order: 1 sqm per order.')
+    cite_fact('deposit-rate','Deposit at order','60','%','page 1','Payment terms: 60% deposit required on order, with the remaining 40% payable before pick-up or installation.')
+    cite_fact('gst-rate','GST','15','%','In Put!Q33','(Q31+N(Q32))*0.15',source_id='source:wholesale-xlsm')
+    cite_fact('installation-minimum','Minimum installation charge','150','NZD/order','In Put!Q32','MAX(SUM(Order!X8:X500),150)',source_id='source:wholesale-xlsm')
+    facts.append({'id':'fact:installation-rate','category':'application_parameter','label':'Installation per panel','value':'50','unit':'NZD/panel',
+                  'scope':'Current confirmed VERA application rule','status':'confirmed','source_id':'application-rule',
+                  'source_location':'backend/addons.py:PANEL_INSTALLATION','source_excerpt':'Current application constant PANEL_INSTALLATION = Decimal(50).'})
+    facts.append({'id':'fact:workbook-installation-line','category':'source_conflict','label':'Wholesale workbook installation line','value':'60','unit':'NZD per product line (basis unclear)',
+                  'scope':'Source value retained for review; not used as the panel installation rate','status':'conflicts_with_current_rule',
+                  'source_id':'source:wholesale-xlsm','source_location':'Pricing!A510:B513',
+                  'source_excerpt':'Shutters_PVC, Shutters_PVC_Eco, Shutters_Pinewood and Shutters_Basswood each show 60 in column B.'})
+    v5_rates={'PVC Eco':'250','PVC':'280','Pinewood':'320','Basswood':'340','Ashwood':'380'}
+    for material,value in v5_rates.items():
+        cite_fact('v5-'+material.lower().replace(' ','-'),f'V5 dealer list: {material}',value,'NZD/sqm','page 1',f'{material} $ {value}.00',category='source_fact')
+    for fid,label,value,unit,excerpt in [
+        ('tracked-bifold','Tracked bifold','350','NZD/item','Tracked Bifold (per item): +$350'),
+        ('tracked-sliding','Tracked sliding','400','NZD/item','Tracked Sliding (per item): +$400'),
+        ('stained-colour','Stained colour','20','NZD/sqm','Stained Colour (per sqm): +$20'),
+        ('stainless-hinges','Stainless hinges','10','NZD/sqm','Stainless Hinges (per sqm): +$10'),
+        ('hidden-hinges','Hidden hinges','40','NZD/sqm','Hidden Hinges (per sqm): +$40'),
+        ('hidden-tilt-rod','Hidden tilt rod','40','NZD/sqm','Hidden Tilt Rod (per sqm): +$40'),
+        ('tier-on-tier','Tier on tier','10','%','Tier on Tier (per sqm): +10%'),
+        ('double-closure','Double closure','35','NZD/sqm','Double Closure (per sqm): +$35'),
+        ('shaped-cutout','Shaped / French door cut out','300','NZD/item','Shaped / French Door Cut Out (per item): +$300')]:
+        cite_fact(fid,label,value,unit,'page 1',excerpt,'add_on_price')
+    # The four common prices are corroborated across both sources.
+    for fid,material in [('Shutters_PVC_Eco','PVC Eco'),('Shutters_PVC','PVC'),('Shutters_Pinewood','Pinewood'),('Shutters_Basswood','Basswood')]:
+        facts.append({'id':'corroboration:'+fid,'category':'source_alignment','label':material+' price cross-check',
+                      'value':core[fid][0],'unit':'NZD/sqm','scope':'Wholesale sources agree','status':'corroborated',
+                      'source_id':'source:v5-pdf','source_location':'page 1',
+                      'source_excerpt':f'{material} rate in V5 agrees with wholesale workbook {core[fid][1]}.'})
+    manifest['knowledge_facts']=facts
+    manifest['knowledge_sources']=['source:wholesale-xlsm','source:v5-pdf']
+    manifest['knowledge_warnings']=[
+        {'code':'deluxe_mapping_unconfirmed','message':'V5 lists Ashwood at NZD 380/sqm; workbook has no Ashwood row and no Deluxe label. Do not map or quote Deluxe until the product mapping and rate are confirmed.','status':'needs_confirmation'},
+        {'code':'workbook_installation_rate_conflict','message':'The workbook Pricing rows show NZD 60 per product line; V5 says installation is quoted separately. The current app uses the separately confirmed NZD 50 per shutter panel and NZD 150 minimum. Do not reinterpret the workbook $60 line as the panel rule.','status':'resolved_by_existing_business_confirmation'},
+        {'code':'retail_scope_unconfirmed','message':'The supplied XLSM is a wholesale template. A separate retail price/logo schedule was not found, so this default is wholesale only.','status':'needs_confirmation'},
+    ]
+    manifest['knowledge_rules']=[
+        {'id':'shutter_area_price','formula':'billable area × series rate + selected named surcharges','status':'confirmed','source_id':'source:v5-pdf','source_location':'page 1; minimum-area notes'},
+        {'id':'area_rounding','formula':'each window area rounds up to 0.01 sqm; minimum 0.5 sqm per window; order floor 1 sqm','status':'confirmed','source_id':'source:v5-pdf','source_location':'page 1'},
+        {'id':'gst','formula':'(product subtotal + installation) × 15%','status':'confirmed','source_id':'source:wholesale-xlsm','source_location':'In Put!Q33'},
+        {'id':'deposit','formula':'60% on order; remaining 40% before pickup or installation','status':'confirmed','source_id':'source:v5-pdf','source_location':'page 1'},
+        {'id':'installation','formula':'NZD 50 per panel; order minimum NZD 150 when selected','status':'confirmed','source_id':'application-rule','source_location':'backend/addons.py:PANEL_INSTALLATION; wholesale XLSM In Put!Q32'},
+    ]
+    now=datetime.now(timezone.utc).isoformat()
+    for sid,filename,ext,raw,locs in [
+        ('source:wholesale-xlsm','Shutter Studio Wholesale Order Template - native repaired.xlsm','.xlsm',wholesale_bytes,5),
+        ('source:v5-pdf','VERA Interior Shutters Wholesale Price - V5.pdf','.pdf',price_list_bytes,1)]:
+        manifest.setdefault('source_records',[]).append({'id':sid,'filename':filename,'extension':ext,
+            'sha256':hashlib.sha256(raw).hexdigest(),'source_type':'seeded_reference','section_count':locs,
+            'uploaded_at':now,'analysis_status':'curated','uploaded_by':'system-seed'})
+    manifest['knowledge_curated_at']=now
+    manifest['knowledge_published']=True
+    manifest['version']=hashlib.sha256(json.dumps({k:v for k,v in manifest.items() if k not in ('id','version','actor','imported_at')},sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    manifest.update(id='template:'+manifest['version'],imported_at=now,actor='system-seed')
+    return manifest
+
+
+def pricing_variable_map(manifest):
+    """Describe the real runtime parameter read by each editable pricing input."""
+    products={rule.get('source_code'):rule for rule in manifest.get('products',[])}
+    bindings=[]
+    effects={
+        'rate_per_m2':'重算窗单价与行金额，并传导到商品小计、GST、总价和定金。',
+        'minimum_area':'改变此系列每窗计费面积、行金额与后续合计。',
+        'order_minimum_area':'触发整单面积补足，重算 shutter 行金额与合计。',
+        'installation_per_panel':'改变安装费用、GST、总价和定金。',
+        'minimum_installation':'改变选择安装时的订单最低安装费及后续合计。',
+        'tax_rate':'改变 GST、含税总价与定金。',
+        'deposit_rate':'只改变新订单应付定金金额。',
+        'discounts':'决定员工在报价调整中可选的折扣值；选中后影响行单价。',
+    }
+    for code,rule in products.items():
+        if rule.get('kind')!='shutter': continue
+        bindings.append({'id':'base:'+code,'category':'基础单价','label':code,
+                         'variable':f"products[{code}].rate_per_m2",'field':'rate_per_m2','source_code':code,
+                         'effect':effects['rate_per_m2'],'source':'Pricing 工作簿单元格 + V5 PDF 第1页' if code!='VERA_Ashwood_provisional' else 'V5 Ashwood 来源事实；Deluxe 映射未确认'})
+        bindings.append({'id':'min-window:'+code,'category':'计价面积','label':code+' 单窗最低面积',
+                         'variable':f"products[{code}].minimum_area",'field':'minimum_area','source_code':code,
+                         'effect':effects['minimum_area'],'source':'V5 PDF 第1页；代码按窗面积向上取至0.01㎡'})
+    for addon in manifest.get('addons',[]):
+        for choice in addon.get('choices',[]):
+            if choice.get('value') in ('no','none'): continue
+            for field in ('fixed','per_sqm','percent'):
+                if field not in choice: continue
+                bindings.append({'id':f"addon:{addon['key']}:{choice['value']}:{field}",'category':'附加项',
+                    'label':f"{addon.get('label_zh') or addon['key']} · {choice.get('label_zh') or choice['value']}",
+                    'variable':f"addons[{addon['key']}].choices[{choice['value']}].{field}",
+                    'field':field,'addon_key':addon['key'],'choice_value':choice['value'],
+                    'effect':'改变该附加项对行金额的固定金额、每㎡金额或百分比加价。','source':'V5 PDF 第1页'})
+    for field,label,var in [('order_minimum_area','整单最低计价面积','order_minimum_area'),
+                            ('installation_per_panel','每扇安装费','installation_per_panel'),
+                            ('minimum_installation','最低安装费','minimum_installation'),
+                            ('tax_rate','GST税率','tax_rate'),('deposit_rate','定金比例','deposit_rate')]:
+        bindings.append({'id':'parameter:'+field,'category':'整单参数','label':label,'variable':var,
+                         'field':field,'effect':effects[field],'source':'V5 PDF / wholesale XLSM'})
+    bindings.append({'id':'discounts','category':'员工折扣','label':'模板中的折扣选项','variable':'discounts[]',
+                     'field':'discounts','effect':effects['discounts'],'source':'Product Listing!B102:I102'})
+    bindings.append({'id':'area-rounding','category':'计价规则','label':'面积和金额 ROUNDUP','variable':'excel_rules.up() / code constant',
+                     'field':None,'effect':'面积进位到0.01㎡，金额向上进位到0.01；目前由代码固定，知识库界面不能编辑。',
+                     'source':'backend/excel_rules.py'})
+    return bindings
+
+
+def apply_knowledge_facts(manifest, facts):
+    """Apply only facts an administrator explicitly approved and mapped."""
+    value = prepare_knowledge_manifest(manifest)
+    rules = {rule['source_code']: rule for rule in value['products']}
+    addon_defs = {addon['key']: addon for addon in value['addons']}
+    for fact in facts:
+        if not fact.get('approved'):
+            continue
+        rule_type = fact.get('suggested_rule')
+        if rule_type == 'reference_only':
+            continue
+        if rule_type not in {'base_price_per_sqm','addon_fixed','addon_per_sqm','addon_percent','minimum_area_per_window','minimum_area_per_order','tax_rate','deposit_rate','installation_per_panel','minimum_installation'}:
+            raise HTTPException(422, 'This fact type is not supported for pricing rules')
+        raw = str(fact.get('value', '')).strip().replace('$', '').replace(',', '')
+        try:
+            amount = Decimal(raw.rstrip('%'))
+        except Exception:
+            raise HTTPException(422, 'Approved fact has an invalid numeric value') from None
+        if not amount.is_finite() or amount < 0:
+            raise HTTPException(422, 'Approved fact must be a finite non-negative number')
+        if rule_type == 'base_price_per_sqm':
+            code = fact.get('suggested_product_code')
+            rule = rules.get(code)
+            if not rule:
+                raise HTTPException(422, 'Map this fact to a supported product before approving it')
+            if not raw or amount <= 0:
+                raise HTTPException(422, 'A base price must be greater than zero')
+            rule.update(rate_per_m2=str(amount), status='configured', provisional=False)
+            rule['warnings'] = [w for w in rule.get('warnings', []) if 'placeholder' not in w.lower()]
+        elif rule_type in ('addon_fixed', 'addon_per_sqm', 'addon_percent'):
+            key = fact.get('suggested_option_key')
+            addon = addon_defs.get(key)
+            if not addon:
+                raise HTTPException(422, 'Map this fact to a supported add-on before approving it')
+            value_name = fact.get('choice_value') or 'yes'
+            choice = next((row for row in addon.get('choices', []) if row.get('value') == value_name), None)
+            if not choice:
+                raise HTTPException(422, 'The selected add-on choice does not exist')
+            field = {'addon_fixed': 'fixed', 'addon_per_sqm': 'per_sqm', 'addon_percent': 'percent'}[rule_type]
+            for other in ('fixed', 'per_sqm', 'percent'):
+                choice.pop(other, None)
+            choice[field] = str(amount)
+        elif rule_type in ('minimum_area_per_window', 'minimum_area_per_order', 'tax_rate', 'deposit_rate',
+                           'installation_per_panel', 'minimum_installation'):
+            if rule_type == 'minimum_area_per_window':
+                rule = rules.get(fact.get('suggested_product_code'))
+                if not rule:
+                    raise HTTPException(422, 'Map the minimum area to a supported product')
+                rule['minimum_area'] = str(amount)
+            else:
+                target = {
+                    'minimum_area_per_order': 'order_minimum_area',
+                    'tax_rate': 'tax_rate',
+                    'deposit_rate': 'deposit_rate',
+                    'installation_per_panel': 'installation_per_panel',
+                    'minimum_installation': 'minimum_installation',
+                }[rule_type]
+                rate_is_percent = '%' in str(fact.get('value','')) or str(fact.get('unit','')).strip().lower() in ('%','percent','percentage') or amount > 1
+                value[target] = str(amount / 100 if rule_type in ('tax_rate', 'deposit_rate') and rate_is_percent else amount)
+        else:
+            raise HTTPException(422, 'This fact type is not supported for pricing rules')
+    return value
 
 
 def allocate_order_number(c):
@@ -203,6 +469,8 @@ class Profile(Input):
     company_address: str = Field(min_length=1, max_length=1000)
     username: str = Field(min_length=3, max_length=100, pattern=r'^[A-Za-z0-9_.@-]+$')
     password: str = Field(min_length=8, max_length=200)
+    customer_type: Literal['retail', 'wholesale'] = 'wholesale'
+    customer_code: str | None = Field(default=None, max_length=50)
 
     @field_validator('email')
     @classmethod
@@ -239,12 +507,24 @@ class TemplateUpload(Input):
     content_base64: str = Field(min_length=1,max_length=14000000)
 
 
+class PricingKnowledgeSourceUpload(Input):
+    filename: str = Field(min_length=1,max_length=200)
+    content_base64: str = Field(min_length=1,max_length=7000000)
+
+
+class PricingKnowledgeDraftEdit(Input):
+    manifest: dict
+    facts: list[dict] = Field(default_factory=list, max_length=500)
+
+
 class ProfileEdit(Input):
     company: str = Field(min_length=1,max_length=200)
     contact_name: str = Field(min_length=1,max_length=200)
     email: str
     phone: str = Field(min_length=1,max_length=100)
     company_address: str = Field(min_length=1,max_length=1000)
+    customer_type: Literal['retail', 'wholesale'] | None = None
+    customer_code: str | None = Field(default=None, max_length=50)
 
     @field_validator('email')
     @classmethod
@@ -263,6 +543,15 @@ class LineAdjustment(Input):
 class Adjustments(Input):
     lines: list[LineAdjustment] = Field(max_length=200)
     note: str = Field(min_length=5,max_length=1000)
+
+
+class OrderNumberEdit(Input):
+    order_number: str = Field(min_length=1, max_length=200)
+
+
+class OrderReview(Input):
+    order_number: str | None = Field(default=None, min_length=1, max_length=200)
+    confirm_order_number: bool = False
 
 def column_number(value):
     if not re.fullmatch(r'[A-Z]{1,3}', value):
@@ -320,13 +609,13 @@ class PriceRule(Input):
     max_width_mm: int = Field(gt=0, le=20000)
     max_height_mm: int = Field(gt=0, le=20000)
     options: dict[str, dict[str, dict[str, Decimal]]] = Field(default_factory=dict)
-    # Formula: (area * rate + fixed upgrades) * (1 + summed percentages/100) + installation.
+    # Area charges receive the percentage; fixed per-item charges are added afterward.
     formula: Literal['area_fixed_percent_installation']
     deposit_basis: Literal['order_total']
 
 
 class Supplier(Input):
-    reference: str = Field(min_length=1, max_length=200)
+    reference: str | None = Field(default=None, max_length=200)
 
 
 class Batch(Input):
@@ -357,11 +646,42 @@ class Credit(Input):
 
 class Settlement(Batch):
     rules_evidence: str = Field(min_length=5, max_length=1000)
-    billing_basis: Literal['fully_delivered_remaining_total']
+    billing_basis: Literal['all_arrived_remaining_total']
 
 
 class Receipt(Input):
     note: str = Field(min_length=3,max_length=1000)
+
+
+class ShipmentCosts(Input):
+    freight_land: Decimal = Field(ge=0, allow_inf_nan=False)
+    freight_sea: Decimal = Field(ge=0, allow_inf_nan=False)
+    duty_total: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class PurchaseCost(Input):
+    factory_price_usd: Decimal = Field(ge=0, allow_inf_nan=False)
+    measured_sqm: Decimal | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+DUTY_ESTIMATE_RATE = Decimal('0.15')
+USD_NZD_RATE = Decimal('1.70')
+
+
+def allocate_share(total, weights, amounts):
+    total = Decimal(total)
+    weights, amounts = [Decimal(w) for w in weights], [Decimal(a) for a in amounts]
+    if total == 0:
+        return ['0.00' for _ in weights]
+    weight_sum = sum(weights, Decimal(0))
+    if weight_sum <= 0:
+        raise HTTPException(422, 'Cannot allocate when the weight total is zero')
+    parts = [(total * weight / weight_sum).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) for weight in weights]
+    drift = (total - sum(parts, Decimal(0))).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
+    if drift:
+        idx = max(range(len(amounts)), key=lambda i: amounts[i])
+        parts[idx] += drift
+    return [str(v) for v in parts]
 
 
 def register(app, s):
@@ -370,6 +690,44 @@ def register(app, s):
 
     def bodyhash(body):
         return hashlib.sha256(body.model_dump_json().encode()).hexdigest()
+
+    def assign_business_number(c, customer, project_name):
+        kind = customer.get('customer_type') or 'wholesale'
+        if kind == 'wholesale':
+            code = (customer.get('customer_code') or '').strip()
+            if not code:
+                raise HTTPException(409, 'Add a wholesale customer code to the customer profile before ordering')
+            number = code + '-' + project_name.strip()
+            numbers = [json.loads(row['data']).get('order_number', '') for row in c.execute("SELECT data FROM operations_records WHERE kind='project'")]
+            if any(value.casefold() == number.casefold() for value in numbers):
+                raise HTTPException(409, 'This wholesale order number already exists; use a unique job name')
+            return number
+        day = s.business_now().strftime('%y%m%d')
+        pattern = re.compile(rf'^R{day}(\d{{2}})[A-Z]+$', re.I)
+        numbers = [json.loads(row['data']).get('order_number', '') for row in c.execute("SELECT data FROM operations_records WHERE kind='project'")]
+        sequence = max((int(m.group(1)) for value in numbers if (m := pattern.fullmatch(value))), default=0) + 1
+        if sequence > 99:
+            raise HTTPException(409, 'Daily retail order number sequence is full')
+        return f'R{day}{sequence:02d}A'
+
+    def validate_order_number_unique(c, order_number, order_id):
+        number = order_number.strip()
+        if not number:
+            raise HTTPException(422, 'Order number cannot be empty')
+        rows = c.execute("SELECT id,data FROM operations_records WHERE kind='project'").fetchall()
+        for row in rows:
+            if row['id'] == order_id:
+                continue
+            existing = json.loads(row['data']).get('order_number', '')
+            if existing and existing.casefold() == number.casefold():
+                raise HTTPException(409, 'This order number is already in use')
+        return number
+
+    def lead_time_for(lines):
+        shaped = any(line.get('options', {}).get('shaped_cutout') == 'yes' for line in lines)
+        weeks = '12–14' if shaped else '10–12'
+        return {'weeks': weeks, 'text': weeks + ' calendar weeks from staff acceptance', 'starts_on': 'staff_acceptance', 'calendar_weeks': True,
+                'shaped_cutout': shaped}
 
     def get(c, rid, kind=None):
         row = c.execute('SELECT * FROM operations_records WHERE id=?', (rid,)).fetchone()
@@ -420,7 +778,13 @@ def register(app, s):
 
     def portal_view(d):
         # Customers see their calculated prices, never the complete private source matrix.
-        return {**{k:v for k,v in d.items() if k!='request_hash'},
+        hidden = {'request_hash','freight_cost','duty_cost','duty_estimate','duty_basis','purchase_cost',
+                  'factory_price_usd','usd_nzd_rate','measured_sqm','measured_sqm_source','total_cost',
+                  'gross_profit','cost_per_sqm','shipment_id'}
+        if d.get('order_number_confirmed') is False:
+            hidden.add('order_number')
+        return {**{k:v for k,v in d.items() if k not in hidden},
+                'order_number_confirmed':d.get('order_number_confirmed', True),
                 'lines':[{k:v for k,v in line.items() if k!='price_snapshot'} for line in d['lines']]}
 
     def key(prefix, value):
@@ -439,18 +803,23 @@ def register(app, s):
         active = c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
         if active:
             template_id = json.loads(active['data'])['template_id']
-            template = get(c,template_id,'template')
+            template = prepare_knowledge_manifest(get(c,template_id,'template'))
+            if not template.get('knowledge_published'):
+                # Compatibility for a version that was already active before
+                # the knowledge workflow existed. It was explicitly activated
+                # by an administrator; only configured non-provisional rules
+                # below remain usable. New legacy imports/activations are blocked.
+                template['legacy_previously_activated'] = True
             rules = {p['source_code']:p for p in template['products']}
             product_rows = {r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
             
-            # Synthesize or update provisional Ashwood rule from Basswood template
+            # Keep the confirmed Deluxe rate intact; repair only its config schema.
             basswood_rule = rules.get('Shutters_Basswood')
             if basswood_rule:
                 existing_deluxe = rules.get('VERA_Ashwood_provisional')
-                # Create or update the rule to use the canonical DELUXE_SCHEMA
-                # This ensures product schema and rule schema stay in sync
-                # Also fixes any existing rules that were created with the 2-field minimal schema
-                if not existing_deluxe or existing_deluxe.get('schema') != DELUXE_SCHEMA:
+                if existing_deluxe and existing_deluxe.get('schema') != DELUXE_SCHEMA:
+                    existing_deluxe['schema'] = DELUXE_SCHEMA
+                elif not existing_deluxe:
                     rules['VERA_Ashwood_provisional'] = {
                         **basswood_rule,
                         'source_code': 'VERA_Ashwood_provisional',
@@ -463,7 +832,7 @@ def register(app, s):
                     }
             
             if any(product_rows.get(l.product_id,{}).get('source_code') for l in body.lines):
-                from excel_rules import calculate_line, up
+                from excel_rules import calculate_line, apply_order_minimum
                 lines, subtotal, installation = [], Decimal(0), Decimal(0)
                 for n,line in enumerate(body.lines):
                     p = product_rows.get(line.product_id,{})
@@ -482,12 +851,20 @@ def register(app, s):
                     if selected_adjustment and Decimal(selected_adjustment.get('discount','0')) not in {Decimal(0),*[Decimal(v) for v in template['discounts'] if v is not None]}:
                         raise HTTPException(422,'Select a discount defined by the imported workbook')
                     
-                    # Check orderable status: configured or provisional
-                    if rule['status'] not in ('configured', 'provisional_placeholder'):
+                    # Unconfirmed and placeholder prices never produce a quote.
+                    if rule.get('status') != 'configured' or rule.get('provisional'):
                         raise HTTPException(409, f"Product pricing rule is not ready: {rule.get('status')}")
+                    try:
+                        rate = Decimal(str(rule.get('rate_per_m2', '0')))
+                    except Exception:
+                        rate = Decimal(0)
+                    if rule.get('formula') == 'excel_shutter' and (not rate.is_finite() or rate <= 0):
+                        raise HTTPException(409, 'A positive confirmed price is required for this product')
                     
                     try:
-                        calculated=calculate_line(rule,raw,selected_adjustment)
+                        calculated=calculate_line(rule,raw,selected_adjustment,product_code=p.get('source_code'),
+                                                  addon_definitions=template.get('addons'),
+                                                  installation_per_panel=template.get('installation_per_panel'))
                     except ValueError as e:
                         raise HTTPException(422,str(e)) from None
                     if body.installation_required and calculated['installation_amount'] is None:
@@ -502,6 +879,8 @@ def register(app, s):
                                   'source_code':p['source_code'],'product_name':p.get('name_en'),
                                   'pricing_status':pricing_status,'rule_version':template['version'],
                                   'price_snapshot':rule})
+                order_minimum_applied = apply_order_minimum(lines,template.get('addons'),template.get('order_minimum_area','1'))
+                subtotal = sum((Decimal(line['amount']) for line in lines), Decimal(0))
                 installation=max(installation,Decimal(template['minimum_installation'])) if body.installation_required else Decimal(0)
                 # Excel Q33/P49 retain precision; currency display rounds only at the boundary.
                 tax=(subtotal+installation)*Decimal(template['tax_rate'])
@@ -512,8 +891,16 @@ def register(app, s):
                 return {'lines':lines,'subtotal':money(subtotal),'installation':money(installation),
                         'installation_required':body.installation_required,'tax':money(tax),'tax_rate':template['tax_rate'],
                         'total':money(total),'tax_exact':str(tax),'total_exact':str(total),
-                        'deposit':deposit_amount(total),'currency':'NZD','tax_basis':'GST included in total',
-                        'pricing_status':overall_status,'missing_price_rules':[],'rule_version':template['version']}
+                        'deposit':deposit_amount(total,template.get('deposit_rate',DEPOSIT_RATE)),
+                        'deposit_rate':str(template.get('deposit_rate',DEPOSIT_RATE)),
+                        'currency':'NZD','tax_basis':'GST included in total',
+                        'pricing_status':overall_status,'missing_price_rules':[],'rule_version':template['version'],
+                        'order_minimum_applied':order_minimum_applied}
+        product_rows={r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
+        if any(product_rows.get(line.product_id,{}).get('source_code','').startswith('Shutters_') or
+               product_rows.get(line.product_id,{}).get('source_code') in ('VERA_Ashwood_provisional','VERA_Ashwood_display')
+               for line in body.lines):
+            raise HTTPException(409,'Shutter pricing must be reviewed and published in the pricing knowledge base before quotes can be calculated')
         lines, total, currency, tax_basis, missing = [], Decimal(0), None, None, []
         for n, line in enumerate(body.lines):
             p = c.execute('SELECT data FROM products WHERE id=?', (line.product_id,)).fetchone()
@@ -537,7 +924,7 @@ def register(app, s):
             w = (line.width_mm / step).to_integral_value(rounding=ROUND_CEILING) * step
             h = (line.height_mm / step).to_integral_value(rounding=ROUND_CEILING) * step
             area = max(w * h / Decimal(1000000), Decimal(rule['minimum_area']))
-            fixed = percent = installation = Decimal(0)
+            fixed = per_sqm = percent = installation = Decimal(0)
             if set(line.options) != set(rule['options']):
                 raise HTTPException(422, 'Complete exactly the configured product options')
             for option, value in line.options.items():
@@ -545,11 +932,12 @@ def register(app, s):
                 if charges is None:
                     raise HTTPException(422, 'Unsupported product configuration')
                 fixed += Decimal(charges.get('fixed', '0'))
+                per_sqm += Decimal(charges.get('per_sqm', '0'))
                 percent += Decimal(charges.get('percent', '0'))
                 installation += Decimal(charges.get('installation', '0'))
-            unit = Decimal(money((area * Decimal(rule['rate_per_m2']) + fixed) * (1 + percent / 100) + installation))
+            unit = Decimal(money((area * (Decimal(rule['rate_per_m2']) + per_sqm)) * (1 + percent / 100) + fixed + installation))
             amount = unit * line.quantity
-            d.update(unit_price=money(unit), amount=money(amount), pricing_status='configured', price_snapshot=rule)
+            d.update(area=str(area), unit_price=money(unit), amount=money(amount), pricing_status='configured', price_snapshot=rule)
             total += amount
             lines.append(d)
         return {'lines': lines, 'total': None if missing else money(total), 'currency': currency or 'NZD',
@@ -608,6 +996,124 @@ def register(app, s):
             c.execute('BEGIN IMMEDIATE')
             save(c,d)
         return d
+
+    def shutter_lines(c, order):
+        products = {row['id']: json.loads(row['data']) for row in c.execute('SELECT id,data FROM products')}
+        return [line for line in order.get('lines') or []
+                if products.get(line.get('product_id'), {}).get('category') == 'shutters']
+
+    def set_cost_area(c, order):
+        if order.get('measured_sqm_source') == 'staff':
+            return
+        area = sum((Decimal(line['width_mm']) * Decimal(line['height_mm']) / Decimal(1000000) * int(line.get('quantity') or 1)
+                    for line in shutter_lines(c, order)), Decimal(0))
+        order.update(measured_sqm=str(area.quantize(Decimal('.0001'), rounding=ROUND_HALF_UP)), measured_sqm_source='order_dimensions')
+
+    def refresh_costs(order):
+        purchase = Decimal(order.get('purchase_cost') or '0')
+        if order.get('purchase_cost') is not None:
+            order['duty_estimate'] = money(purchase * DUTY_ESTIMATE_RATE)
+            if order.get('duty_basis') != 'actual':
+                order['duty_cost'], order['duty_basis'] = order['duty_estimate'], 'estimate'
+        freight, duty = Decimal(order.get('freight_cost') or '0'), Decimal(order.get('duty_cost') or '0')
+        total_cost = purchase + freight + duty
+        order['total_cost'] = money(total_cost)
+        order['gross_profit'] = None if order.get('total') is None else money(Decimal(order['total']) - total_cost)
+        sqm = Decimal(order['measured_sqm']) if order.get('measured_sqm') else Decimal(0)
+        order['cost_per_sqm'] = None if sqm <= 0 else money(total_cost / sqm)
+
+    def allocate_shipment(c, shipment):
+        orders = [get(c, oid, 'project') for oid in shipment['order_ids']]
+        for order in orders:
+            set_cost_area(c, order)
+        missing = [order['id'] for order in orders if order.get('purchase_cost') is None]
+        if missing:
+            raise HTTPException(409, 'Record the USD factory price for each shipment order first: ' + ', '.join(missing))
+        costs = [Decimal(order['purchase_cost']) for order in orders]
+        freight = allocate_share(Decimal(shipment['freight_land']) + Decimal(shipment['freight_sea']),
+                                 [Decimal(order['measured_sqm']) for order in orders], costs)
+        actual = shipment.get('duty_total') is not None
+        duties = allocate_share(shipment['duty_total'], costs, costs) if actual else None
+        for i, order in enumerate(orders):
+            order['freight_cost'] = freight[i]
+            if actual:
+                order.update(duty_cost=duties[i], duty_basis='actual')
+            else:
+                order.update(duty_cost=order.get('duty_estimate', '0.00'), duty_basis='estimate')
+            refresh_costs(order)
+            put(c, 'project', order, order['customer_id'])
+        shipment.update(freight_shares=freight, duty_shares=[order['duty_cost'] for order in orders],
+                        duty_basis='actual' if actual else 'estimate')
+
+    @app.post('/api/operations/shipments')
+    def create_shipment(body: Batch, actor=Depends(s.auth)):
+        sid = 'ship-' + hashlib.sha256(body.operation_key.encode()).hexdigest()[:24]
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            old = replay(c, sid, bodyhash(body))
+            if old:
+                return old
+            members, results = [], []
+            for oid in dict.fromkeys(body.order_ids):
+                try:
+                    order = get(c, oid, 'project')
+                    if order['status'] != 'supplier_ordered':
+                        raise HTTPException(409, 'Only supplier-ordered projects can join a sea shipment')
+                    if not shutter_lines(c, order):
+                        raise HTTPException(409, 'Only shutter orders join a sea shipment')
+                    if order.get('shipment_id'):
+                        raise HTTPException(409, 'Order already belongs to a shipment')
+                    order['shipment_id'] = sid
+                    set_cost_area(c, order)
+                    put(c, 'project', order, order['customer_id'])
+                    members.append(oid)
+                    results.append({'order_id': oid, 'status': 'success'})
+                except HTTPException as error:
+                    results.append({'order_id': oid, 'status': 'skipped', 'reason': error.detail})
+            if not members:
+                raise HTTPException(409, 'No eligible shutter orders could join this shipment')
+            shipment = {'id': sid, 'order_ids': members, 'results': results, 'request_hash': bodyhash(body), 'created_at': s.now(), 'actor': actor}
+            put(c, 'shipment', shipment)
+            return shipment
+
+    @app.get('/api/operations/shipments/{sid}')
+    def shipment_detail(sid: str, actor=Depends(s.auth)):
+        with s.db() as c:
+            shipment = get(c, sid, 'shipment')
+            shipment['orders'] = [get(c, oid, 'project') for oid in shipment['order_ids']]
+            return shipment
+
+    @app.post('/api/operations/shipments/{sid}/costs')
+    def shipment_costs(sid: str, body: ShipmentCosts, actor=Depends(s.auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            shipment = get(c, sid, 'shipment')
+            shipment.update(freight_land=money(body.freight_land), freight_sea=money(body.freight_sea),
+                            duty_total=None if body.duty_total is None else money(body.duty_total))
+            allocate_shipment(c, shipment)
+            put(c, 'shipment', shipment)
+            return shipment
+
+    @app.post('/api/operations/orders/{oid}/purchase-cost')
+    def purchase_cost(oid: str, body: PurchaseCost, actor=Depends(s.auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            order = get(c, oid, 'project')
+            order.update(factory_price_usd=money(body.factory_price_usd), usd_nzd_rate=str(USD_NZD_RATE),
+                         purchase_cost=money(body.factory_price_usd * USD_NZD_RATE))
+            if body.measured_sqm is not None:
+                order.update(measured_sqm=str(body.measured_sqm), measured_sqm_source='staff')
+            else:
+                set_cost_area(c, order)
+            refresh_costs(order)
+            put(c, 'project', order, order['customer_id'])
+            shipment = get(c, order['shipment_id'], 'shipment') if order.get('shipment_id') else None
+            if shipment and 'freight_land' in shipment:
+                allocate_shipment(c, shipment)
+                put(c, 'shipment', shipment)
+                order = get(c, oid, 'project')
+            return {key: order.get(key) for key in ('id','factory_price_usd','usd_nzd_rate','purchase_cost','measured_sqm',
+                    'freight_cost','duty_cost','duty_estimate','duty_basis','total_cost','gross_profit','cost_per_sqm')}
 
     @app.post('/api/portal/login')
     def login(body: Login):
@@ -677,10 +1183,18 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             d=profile(c,cid)
-            d.update(body.model_dump(),updated_at=s.now(),updated_by=actor)
+            d.update(body.model_dump(exclude_unset=True),updated_at=s.now(),updated_by=actor)
             c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?',(s.dump(d),cid))
             c.execute('UPDATE customers SET company=? WHERE id=?',(body.company,cid))
             return d
+
+    @app.get('/api/operations/orders/{oid}/lead-time')
+    def accepted_lead_time(oid: str, actor=Depends(s.auth)):
+        with s.db() as c:
+            d = get(c, oid, 'project')
+            if d['status'] == 'pending_review':
+                raise HTTPException(409, 'Lead time starts after staff review accepts the order')
+            return d.get('lead_time') or lead_time_for(d['lines'])
 
     @app.get('/api/operations/pricing-templates')
     def pricing_templates(actor=Depends(s.auth)):
@@ -719,7 +1233,9 @@ def register(app, s):
     def activate_pricing_template(tid:str,actor=Depends(s.require_admin)):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
-            get(c,tid,'template')
+            manifest=get(c,tid,'template')
+            if not manifest.get('knowledge_published'):
+                raise HTTPException(409,'Review and publish pricing through the pricing knowledge base')
             put(c,'template_pointer',{'id':'template-current','template_id':tid,'activated_at':s.now(),'actor':actor})
             return {'template_id':tid,'status':'active','historical_orders_unchanged':True}
 
@@ -733,8 +1249,357 @@ def register(app, s):
             return {'status':'imported','version':d['version'],'products_count':len(d['products']),
                     'warnings':d['warnings'],'imported_at':d['imported_at'],'source':d['source']}
 
+    def knowledge_source_card(source):
+        return {key:source.get(key) for key in (
+            'id','filename','extension','sha256','byte_count','section_count','uploaded_at',
+            'uploaded_by','extraction_truncated','analysis_status','analysis_summary'
+        )}
+
+    @app.get('/api/operations/pricing-knowledge')
+    def pricing_knowledge(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            pointer=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
+            current=None
+            if pointer:
+                current=prepare_knowledge_manifest(get(c,json.loads(pointer['data'])['template_id'],'template'))
+                current.update(active=True)
+                current['knowledge_bindings']=pricing_variable_map(current)
+            sources=[knowledge_source_card(source) for source in records(c,'pricing_knowledge_source')]
+            drafts=records(c,'pricing_knowledge_draft')
+            drafts=[{**(draft if draft.get('status')=='draft' else {**draft,'facts':[]}),
+                     'knowledge_bindings':pricing_variable_map(draft.get('manifest') or {})} for draft in drafts]
+            seeded_sources=(current or {}).get('source_records',[])
+            known_ids={source.get('id') for source in sources}
+            sources.extend({**source,'seeded_reference':True} for source in seeded_sources if source.get('id') not in known_ids)
+            return {'current':current,'sources':sources,'drafts':drafts,
+                    'ai_configured':bool(os.getenv('OPENAI_API_KEY')),
+                    'ai_model':os.getenv('VERA_PRICING_AI_MODEL','gpt-6-astra')}
+
+    @app.post('/api/operations/pricing-knowledge/initialize-default')
+    def initialize_default_pricing_knowledge(actor=Depends(s.require_admin)):
+        """Seed the compiled default from the supplied source files on first use."""
+        from pricing_knowledge import read_default_source_files
+        from pathlib import Path
+        existing_version=None
+        with s.db() as c:
+            pointer=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
+            if pointer:
+                current=get(c,json.loads(pointer['data'])['template_id'],'template')
+                if current.get('knowledge_curated_at'):
+                    return {'active':True,'version':current.get('version'),'already_initialized':True}
+                existing_version=current.get('version')
+        source_root=Path(os.getenv('VERA_PRICING_DEFAULT_SOURCES_DIR') or (Path(__file__).resolve().parents[2]/'vera'))
+        try:
+            wholesale_bytes,price_list_bytes,price_list_text=read_default_source_files(source_root)
+            manifest=default_pricing_knowledge_manifest(wholesale_bytes,price_list_bytes,price_list_text)
+        except (OSError,ValueError) as error:
+            raise HTTPException(422,'Could not initialize default knowledge: '+str(error)) from None
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            pointer=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
+            if pointer:
+                current=get(c,json.loads(pointer['data'])['template_id'],'template')
+                if current.get('knowledge_curated_at'):
+                    return {'active':True,'version':current.get('version'),'already_initialized':True}
+                existing_version=current.get('version')
+                manifest['supersedes_version']=existing_version
+                manifest['version']=hashlib.sha256(s.dump({k:v for k,v in manifest.items() if k not in ('id','version','actor','imported_at')}).encode()).hexdigest()
+                manifest.update(id='template:'+manifest['version'],imported_at=s.now(),actor=actor)
+            if c.execute('SELECT 1 FROM operations_records WHERE id=?',(manifest['id'],)).fetchone():
+                put(c,'template_pointer',{'id':'template-current','template_id':manifest['id'],'activated_at':s.now(),'actor':actor})
+            else:
+                put(c,'template',manifest)
+                put(c,'template_pointer',{'id':'template-current','template_id':manifest['id'],'activated_at':s.now(),'actor':actor})
+            known={r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
+            next_id=max(known,default=0)+1
+            mapping={'Shutters_PVC_Eco':('VERA Eco','PVC',5),'Shutters_PVC':('VERA Classic','PVC Premium',20),
+                     'Shutters_Pinewood':('VERA Natural','Pinewood',5),'Shutters_Basswood':('VERA Prime','Basswood',10),
+                     'VERA_Ashwood_provisional':('VERA Deluxe','Ashwood',10)}
+            for rule in manifest['products']:
+                code=rule.get('source_code')
+                if code not in mapping: continue
+                name,material,warranty=mapping[code]
+                orderable=rule.get('status')=='configured'
+                display_provisional=code=='VERA_Ashwood_provisional' and rule.get('status')=='provisional_placeholder'
+                product=next((p for p in known.values() if p.get('source_code')==code),None)
+                if product:
+                    product.update(name_en=name,name_zh=name,category='shutters',material=material,source_code=code,
+                                   sample=False,published=orderable or display_provisional,portal_only=False,
+                                   scope='website_and_template',orderable=orderable,warranty_years=warranty,
+                                   content_source='https://verashading.com/products',
+                                   image_urls=product.get('image_urls') or [WEBSITE_IMAGES[code]['local']],
+                                   configuration_schema=rule.get('schema',product.get('configuration_schema',[])))
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
+                else:
+                    product={'id':next_id,'name_en':mapping[code][0],'name_zh':mapping[code][0],'category':'shutters',
+                             'material':mapping[code][1],'source_code':code,'sample':False,
+                             'published':orderable or display_provisional,'portal_only':False,'scope':'website_and_template',
+                             'orderable':orderable,'orderable_after_login':False,'warranty_years':warranty,
+                             'content_source':'https://verashading.com/products','image_urls':[WEBSITE_IMAGES[code]['local']],
+                             'configuration_schema':rule.get('schema',[]),'display_position':next_id}
+                    c.execute('INSERT INTO products(id,data) VALUES(?,?)',(next_id,s.dump(product)))
+                    known[next_id]=product;next_id+=1
+            for product in known.values():
+                if product.get('sample') or (product.get('source_code') and product.get('source_code') not in mapping):
+                    product.update(published=False,orderable=False)
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
+            return {'active':True,'version':manifest['version'],'already_initialized':False,'supersedes_version':existing_version,
+                    'confirmed_series':4,'unresolved_series':['VERA_Ashwood_provisional'],
+                    'historical_orders_unchanged':True}
+
+    @app.post('/api/operations/pricing-knowledge/drafts/from-current')
+    def create_pricing_knowledge_draft_from_current(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            pointer=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
+            if not pointer: raise HTTPException(409,'Initialize the default pricing knowledge first')
+            base=prepare_knowledge_manifest(get(c,json.loads(pointer['data'])['template_id'],'template'))
+            did='pricing-draft:'+secrets.token_hex(12)
+            draft={'id':did,'status':'draft','title':'Pricing knowledge edit · '+str(base.get('version',''))[:12],
+                   'summary':'Editable copy of the active version. Existing source citations and knowledge facts are retained.',
+                   'manifest':base,'facts':[],'base_version':base.get('version'),
+                   'source_ids':base.get('knowledge_sources') or [],'created_at':s.now(),'created_by':actor,'updated_at':s.now()}
+            put(c,'pricing_knowledge_draft',draft)
+            return draft
+
+    @app.post('/api/operations/pricing-knowledge/sources')
+    def upload_pricing_knowledge_source(body:PricingKnowledgeSourceUpload,actor=Depends(s.require_admin)):
+        from pricing_knowledge import extract_source
+        try:
+            raw=base64.b64decode(body.content_base64,validate=True)
+            if len(raw) > 5 * 1024 * 1024:
+                raise ValueError('Source file exceeds the 5 MB limit')
+            extracted=extract_source(body.filename,raw)
+        except Exception as error:
+            message=str(error) if isinstance(error,(ValueError,RuntimeError)) else 'Could not read this source file'
+            raise HTTPException(422,message) from None
+        sid='pricing-source:'+secrets.token_hex(12)
+        source={**extracted,'id':sid,'content_base64':base64.b64encode(raw).decode('ascii'),'uploaded_at':s.now(),
+                'uploaded_by':actor,'analysis_status':'not_analyzed'}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            put(c,'pricing_knowledge_source',source)
+        return {**knowledge_source_card(source),'parsed_template_available':bool(source.get('parsed_template'))}
+
+    @app.get('/api/operations/pricing-knowledge/sources/{sid}/file')
+    def download_pricing_knowledge_source(sid:str,actor=Depends(s.require_admin)):
+        import binascii
+        from fastapi.responses import Response
+        source=None
+        with s.db() as c:
+            source=get(c,sid,'pricing_knowledge_source')
+        try: raw=base64.b64decode(source['content_base64'],validate=True)
+        except (KeyError,ValueError,binascii.Error): raise HTTPException(404,'Source file not found') from None
+        mime={'.pdf':'application/pdf','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              '.xlsm':'application/vnd.ms-excel.sheet.macroEnabled.12'}.get(source['extension'],'application/octet-stream')
+        filename=re.sub(r'[^A-Za-z0-9._-]','_',source['filename'])
+        return Response(raw,media_type=mime,headers={'Content-Disposition':f'attachment; filename="{filename}"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'})
+
+    @app.post('/api/operations/pricing-knowledge/sources/{sid}/analyze')
+    def analyze_pricing_knowledge_source(sid:str,actor=Depends(s.require_admin)):
+        from pricing_knowledge import analyze_source
+        with s.db() as c:
+            source=get(c,sid,'pricing_knowledge_source')
+            pointer=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
+            active=prepare_knowledge_manifest(get(c,json.loads(pointer['data'])['template_id'],'template')) if pointer else None
+        base=active or source.get('parsed_template')
+        if not base:
+            raise HTTPException(409,'Upload the existing wholesale pricing workbook first so the knowledge base has product rules to review')
+        if active is None and not source.get('parsed_template'):
+            raise HTTPException(409,'The first pricing source must be the existing wholesale pricing workbook')
+        try:
+            analysis=analyze_source(source['extracted_text'])
+        except RuntimeError as error:
+            raise HTTPException(503,str(error)) from None
+        except ValueError as error:
+            raise HTTPException(422,str(error)) from None
+        draft_id='pricing-draft:'+secrets.token_hex(12)
+        manifest=prepare_knowledge_manifest(base)
+        # A parsed legacy workbook provides the initial price matrix, but old
+        # template pricing options are not part of the public add-on catalogue.
+        # Every publication still goes through explicit review and confirmation.
+        defaults=prepare_knowledge_manifest({})
+        manifest['addons'] = defaults['addons']
+        manifest['installation_per_panel'] = str(defaults['installation_per_panel'])
+        manifest['minimum_installation'] = str(defaults['minimum_installation'])
+        for rule in manifest.get('products', []):
+            if rule.get('source_code') in {'Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood'} and not rule.get('provisional'):
+                rule['status'] = 'configured' if Decimal(str(rule.get('rate_per_m2') or '0')) > 0 else rule.get('status','missing')
+        if active is None:
+            # The legacy workbook initializes the existing four lines; Deluxe
+            # remains blocked until a human confirms its source mapping.
+            for rule in manifest.get('products', []):
+                if rule.get('source_code')=='VERA_Ashwood_provisional':
+                    rule.update(rate_per_m2='1.00',status='provisional_placeholder',provisional=True)
+            for rule in manifest.get('products', []):
+                if rule.get('source_code') in {'Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood'}:
+                    rule['installation_rate']=str(defaults['installation_per_panel'])
+        manifest['knowledge_sources']=list(dict.fromkeys([*manifest.get('knowledge_sources',[]),sid]))
+        facts=[]
+        for fact in analysis['facts']:
+            facts.append({**fact,'approved':False,'source_id':sid})
+        draft={'id':draft_id,'status':'draft','title':source['filename'],'summary':analysis['summary'],
+               'manifest':manifest,'facts':facts,'base_version':(active or {}).get('version'),
+               'source_ids':[sid],'created_at':s.now(),'created_by':actor,'updated_at':s.now()}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            source=get(c,sid,'pricing_knowledge_source')
+            source.update(analysis_status='analyzed',analysis_summary=analysis['summary'],analyzed_at=s.now(),analyzed_by=actor)
+            put(c,'pricing_knowledge_source',source)
+            put(c,'pricing_knowledge_draft',draft)
+        return draft
+
+    @app.put('/api/operations/pricing-knowledge/drafts/{did}')
+    def edit_pricing_knowledge_draft(did:str,body:PricingKnowledgeDraftEdit,actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            draft=get(c,did,'pricing_knowledge_draft')
+            if draft.get('status')!='draft': raise HTTPException(409,'Only draft knowledge can be edited')
+            manifest=body.manifest
+            if not isinstance(manifest.get('products'),list) or not isinstance(manifest.get('addons'),list) or len(manifest['products'])>100 or len(manifest['addons'])>100:
+                raise HTTPException(422,'Draft rule structure exceeds supported limits')
+            try:
+                if len(s.dump(manifest)) > 500_000 or len(s.dump(body.facts)) > 250_000:
+                    raise HTTPException(422,'Draft rule content is too large')
+            except (TypeError,ValueError):
+                raise HTTPException(422,'Draft rule content is invalid') from None
+            source_ids = set(draft.get('source_ids') or [])
+            allowed_codes = {'Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood','VERA_Ashwood_provisional'}
+            for fact in draft['facts']:
+                if fact.get('source_id') not in source_ids or fact.get('suggested_rule') not in {'base_price_per_sqm','addon_fixed','addon_per_sqm','addon_percent','minimum_area_per_window','minimum_area_per_order','tax_rate','deposit_rate','installation_per_panel','minimum_installation','reference_only'}:
+                    raise HTTPException(422,'Draft contains an unsupported or unlinked fact')
+                if fact.get('suggested_product_code') is not None and fact.get('suggested_product_code') not in allowed_codes:
+                    raise HTTPException(422,'Map facts only to supported VERA shutter series')
+                if fact.get('suggested_rule','').startswith('addon_') and fact.get('suggested_option_key') not in {a.get('key') for a in (body.manifest.get('addons') or [])}:
+                    raise HTTPException(422,'Map add-on facts to a supported add-on key')
+            for rule in (body.manifest.get('products') or []):
+                if rule.get('source_code') not in allowed_codes: continue
+                for field in ('rate_per_m2','minimum_area'):
+                    if field in rule:
+                        try: amount=Decimal(str(rule[field]))
+                        except Exception: amount=Decimal(-1)
+                        if not amount.is_finite() or amount<0: raise HTTPException(422,'Invalid product price rule')
+            draft.update(manifest=body.manifest,facts=body.facts,updated_at=s.now(),updated_by=actor)
+            put(c,'pricing_knowledge_draft',draft)
+            return draft
+
+    @app.post('/api/operations/pricing-knowledge/drafts/{did}/publish')
+    def publish_pricing_knowledge_draft(did:str,actor=Depends(s.require_admin)):
+        from addons import ADDONS
+        # Core website rates can be published while the unresolved Deluxe
+        # mapping remains explicitly provisional and unavailable for quoting.
+        required={'Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood'}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            draft=get(c,did,'pricing_knowledge_draft')
+            if draft.get('status')!='draft': raise HTTPException(409,'Only a draft can be published')
+            manifest=apply_knowledge_facts(draft['manifest'],draft.get('facts') or [])
+            products={rule.get('source_code'):rule for rule in manifest.get('products') or []}
+            for code in sorted(required):
+                rule=products.get(code)
+                try: rate=Decimal(str((rule or {}).get('rate_per_m2','0')))
+                except Exception: rate=Decimal(0)
+                if not rule or not rate.is_finite() or rate<=0 or rule.get('status')!='configured' or rule.get('provisional'):
+                    raise HTTPException(422,'Complete and confirm a positive base price for '+code+' before publishing')
+                try:
+                    if Decimal(str(rule.get('minimum_area','0')))<=0: raise ValueError()
+                except Exception: raise HTTPException(422,'Set a positive minimum billable area for '+code) from None
+                if rule.get('kind')=='shutter' and rule.get('formula')!='excel_shutter':
+                    raise HTTPException(422,'Unsupported shutter pricing formula for '+code)
+            for key,minimum,maximum in [('tax_rate',Decimal(0),Decimal(1)),('deposit_rate',Decimal(0),Decimal(1)),
+                                         ('minimum_installation',Decimal(0),Decimal('1000000')),
+                                         ('installation_per_panel',Decimal(0),Decimal('1000000')),
+                                         ('order_minimum_area',Decimal('0.001'),Decimal(1000))]:
+                try: value=Decimal(str(manifest.get(key,'')))
+                except Exception: value=Decimal(-1)
+                if not value.is_finite() or value<minimum or value>maximum:
+                    raise HTTPException(422,'Invalid knowledge base parameter: '+key)
+            addons=manifest.get('addons') or []
+            addon_keys=[item.get('key') for item in addons]
+            if len(set(addon_keys))!=len(addon_keys) or set(addon_keys)!={item['key'] for item in ADDONS}:
+                raise HTTPException(422,'Keep each supported V5 add-on key exactly once')
+            for addon in addons:
+                if not isinstance(addon.get('key'),str) or not isinstance(addon.get('choices'),list) or len(addon['choices'])>30:
+                    raise HTTPException(422,'Invalid add-on structure')
+                if not isinstance(addon.get('label_en'),str) or not isinstance(addon.get('label_zh'),str):
+                    raise HTTPException(422,'Add-on labels must be text')
+                for choice in addon.get('choices') or []:
+                    if not isinstance(choice.get('value'),str) or len(choice['value'])>100:
+                        raise HTTPException(422,'Invalid add-on choice')
+                    if choice.get('value') in ('no','none'): continue
+                    if set(choice)-{'value','label_zh','label_en','fixed','per_sqm','percent'}:
+                        raise HTTPException(422,'Unsupported add-on rule fields')
+                    for field in ('fixed','per_sqm','percent'):
+                        if field in choice:
+                            try: amount=Decimal(str(choice[field]))
+                            except Exception: amount=Decimal(-1)
+                            if not amount.is_finite() or amount<0:
+                                raise HTTPException(422,'Invalid add-on amount for '+addon['key'])
+                    charged=[key for key in ('fixed','per_sqm','percent') if key in choice]
+                    if len(charged)>1:
+                        raise HTTPException(422,'Each add-on choice must use one price method')
+            manifest['warnings']=[]
+            manifest['source']='Pricing knowledge: '+', '.join(draft.get('source_ids') or [])
+            manifest['knowledge_facts']=[*(manifest.get('knowledge_facts') or []),
+                                         *[{**fact,'status':'approved_candidate'} for fact in (draft.get('facts') or []) if fact.get('approved')]]
+            manifest['version']=hashlib.sha256(s.dump({k:v for k,v in manifest.items() if k not in ('id','version','actor','imported_at')}).encode()).hexdigest()
+            manifest.update(id='template:'+manifest['version'],imported_at=s.now(),actor=actor,knowledge_published=True)
+            if c.execute('SELECT 1 FROM operations_records WHERE id=?',(manifest['id'],)).fetchone():
+                raise HTTPException(409,'This exact pricing version already exists; create a new draft to publish changes')
+            put(c,'template',manifest)
+            # Keep product option schemas in sync with the published snapshot.
+            # Existing order snapshots remain independent and are not rewritten.
+            product_rows={r['id']:json.loads(r['data']) for r in c.execute('SELECT * FROM products')}
+            by_code={p.get('source_code'):p for p in product_rows.values()}
+            code_map={'Shutters_PVC_Eco':('VERA Eco','PVC'),'Shutters_PVC':('VERA Classic','PVC Premium'),
+                      'Shutters_Pinewood':('VERA Natural','Pinewood'),'Shutters_Basswood':('VERA Prime','Basswood'),
+                      'VERA_Ashwood_provisional':('VERA Deluxe','Ashwood')}
+            for rule in manifest.get('products',[]):
+                code=rule.get('source_code')
+                if code not in code_map: continue
+                product=by_code.get(code)
+                display_provisional = code == 'VERA_Ashwood_provisional' and rule.get('status') == 'provisional_placeholder'
+                name,material=code_map[code]
+                orderable = rule.get('status') == 'configured'
+                warranty={'Shutters_PVC_Eco':5,'Shutters_PVC':20,'Shutters_Pinewood':5,
+                          'Shutters_Basswood':10,'VERA_Ashwood_provisional':10}[code]
+                if product:
+                    product.update(source_code=code,name_zh=name,name_en=name,category='shutters',material=material,
+                                   sample=False,published=orderable or display_provisional,portal_only=False,
+                                   scope='website_and_template',orderable=orderable,warranty_years=warranty,
+                                   content_source='https://verashading.com/products',
+                                   image_urls=product.get('image_urls') or [WEBSITE_IMAGES[code]['local']],
+                                   configuration_schema=rule.get('schema',product.get('configuration_schema',[])),
+                                   rule_version=manifest['version'])
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
+                else:
+                    pid=max(product_rows,default=0)+1
+                    product={'id':pid,'name_zh':name,'name_en':name,'category':'shutters','material':material,
+                             'source_code':code,'published':orderable or display_provisional,'orderable':orderable,
+                             'sample':False,'portal_only':False,'scope':'website_and_template','orderable_after_login':False,
+                             'warranty_years':warranty,'content_source':'https://verashading.com/products',
+                             'image_urls':[WEBSITE_IMAGES[code]['local']],
+                             'configuration_schema':rule.get('schema',[]),'display_position':pid,'rule_version':manifest['version']}
+                    c.execute('INSERT INTO products(id,data) VALUES(?,?)',(pid,s.dump(product)))
+                    product_rows[pid]=product
+                    by_code[code]=product
+            for code,product in list(by_code.items()):
+                if code in code_map and code not in products:
+                    product.update(published=False,orderable=False)
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
+            for product in product_rows.values():
+                code=product.get('source_code')
+                if product.get('sample') or (code and code not in code_map):
+                    product.update(published=False,orderable=False)
+                    c.execute('UPDATE products SET data=? WHERE id=?',(s.dump(product),product['id']))
+            put(c,'template_pointer',{'id':'template-current','template_id':manifest['id'],'activated_at':s.now(),'actor':actor})
+            draft.update(status='published',published_at=s.now(),published_by=actor,published_version=manifest['version'])
+            put(c,'pricing_knowledge_draft',draft)
+            return {'version':manifest['version'],'active':True,'historical_orders_unchanged':True}
+
     @app.post('/api/operations/template-import')
     def import_template(body:TemplateUpload,actor=Depends(s.require_admin)):
+        raise HTTPException(410,'Immediate template activation is retired. Upload the workbook as pricing knowledge, analyze it, review its rules, and publish a version.')
         from excel_rules import parse_template
         if not body.filename.lower().endswith(('.xlsm','.xlsx')):
             raise HTTPException(422,'Upload the order workbook as xlsm or xlsx')
@@ -827,7 +1692,7 @@ def register(app, s):
                 if not choices:
                     raise HTTPException(422, 'Option choices are required')
                 for charges in choices.values():
-                    if set(charges) - {'fixed', 'percent', 'installation'} or any(not v.is_finite() or v < 0 for v in charges.values()):
+                    if set(charges) - {'fixed', 'percent', 'per_sqm', 'installation'} or any(not v.is_finite() or v < 0 for v in charges.values()):
                         raise HTTPException(422, 'Invalid confirmed option charges')
             d = body.model_dump(mode='json')
             d.update(id='price:'+str(pid), product_id=pid, actor=actor, updated_at=s.now())
@@ -841,19 +1706,20 @@ def register(app, s):
             products = [s.catalog_product(json.loads(r['data'])) for r in c.execute('SELECT data FROM products')]
             active=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
             imported={}
+            template=None
             if active:
-                template=get(c,json.loads(active['data'])['template_id'],'template')
-                imported={r['source_code']:{k:r[k] for k in ('options','formula','status','version') if k in r} for r in template['products']}
-                
-                # Synthesize provisional Ashwood rule for catalog display
-                basswood_rule = next((r for r in template['products'] if r['source_code'] == 'Shutters_Basswood'), None)
-                if basswood_rule and 'VERA_Ashwood_provisional' not in imported:
-                    imported['VERA_Ashwood_provisional'] = {
-                        'options': basswood_rule.get('options', {}),
-                        'formula': basswood_rule.get('formula'),
-                        'status': 'provisional_placeholder',
-                        'version': template['version']
-                    }
+                template=prepare_knowledge_manifest(get(c,json.loads(active['data'])['template_id'],'template'))
+                if active:
+                    # The current legacy pointer represents an already-active
+                    # version. Per-rule configured/provisional checks still gate it.
+                    for rule in template['products']:
+                        if rule.get('status')!='configured' or rule.get('provisional'):
+                            continue
+                        if rule.get('formula')=='excel_shutter':
+                            try: rate=Decimal(str(rule.get('rate_per_m2','0')))
+                            except Exception: rate=Decimal(0)
+                            if not rate.is_finite() or rate<=0: continue
+                        imported[rule['source_code']]={k:rule[k] for k in ('options','formula','status','version') if k in rule}
             
             # Portal catalog allowlist: 5 website series + Aluminium (orderable after login)
             # Exclude all blinds regardless of published/orderable flags
@@ -886,7 +1752,9 @@ def register(app, s):
                 if code in product_map:
                     p = product_map[code]
                     # Check both new and old Ashwood codes for price rules
-                    price_rule = imported.get(code) or imported.get('VERA_Ashwood_display') or prices.get(p['id'])
+                    price_rule = imported.get(code) or imported.get('VERA_Ashwood_display')
+                    if template is None:
+                        price_rule = None
                     # Add affects_price metadata: only series, width, height affect product price
                     # Panel count only affects installation fee. All config options (colour, frame, louver, etc.) do NOT affect price
                     if price_rule and isinstance(price_rule, dict):
@@ -905,10 +1773,21 @@ def register(app, s):
                             'posts': False,
                             'midrail': False,
                         }}
+                    if template:
+                        configured=bool(code in imported)
+                        schema=next((r.get('schema') for r in template['products'] if r.get('source_code')==code),None)
+                        p={**p,'published':True if configured else p.get('published',False),
+                           'orderable':bool(configured),'orderable_after_login':bool(configured),
+                           'configuration_schema':schema or p.get('configuration_schema',[])}
+                    else:
+                        p={**p,'published':False,'orderable':False,'orderable_after_login':False}
                     orderable_products.append({**p, 'price_rule': price_rule})
             
+            current = template if active else None
             return {'products': orderable_products,
-                    'pricing_status': 'configured' if prices or imported else 'rules_required'}
+                    'addons': current.get('addons',[]) if current else [],
+                    'pricing_parameters': {key:current.get(key) for key in ('installation_per_panel','minimum_installation','order_minimum_area','deposit_rate','tax_rate')} if current else {},
+                    'pricing_status': 'configured' if {'Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood'} <= set(imported) else 'rules_required'}
 
     @app.post('/api/portal/price')
     def price(body: Project, cid=Depends(customer_auth)):
@@ -927,11 +1806,13 @@ def register(app, s):
             if old:
                 return portal_view(enrich(c, old))
             p = profile(c, cid)
-            d = {**calculate(c, body), 'id': oid, 'order_number': allocate_order_number(c), 'customer_id': cid, 'company': p['company'],
+            d = {**calculate(c, body), 'id': oid, 'order_number': assign_business_number(c, p, body.project_name), 'order_number_confirmed':False, 'customer_id': cid, 'company': p['company'],
+                 'customer_type': p.get('customer_type') or 'wholesale',
                  'contact_name': p['contact_name'], 'email': p['email'], 'phone': p['phone'],
                  'company_address': p['company_address'], 'project_name': body.project_name, 'site_address': body.site_address,
                  'status': 'pending_review', 'payment_status': 'deposit_unpaid', 'history': [], 'created_at': s.now(),
                  'request_hash': bodyhash(body),'installation_required':body.installation_required,'adjustments':{}}
+            d['lead_time'] = lead_time_for(d['lines'])
             event(d, 'submitted', p['username'])
             put(c, 'project', d, cid)
             return portal_view(enrich(c, d))
@@ -944,15 +1825,38 @@ def register(app, s):
     @app.get('/api/operations/orders')
     def orders(actor=Depends(s.auth)):
         with s.db() as c:
-            return [enrich(c, d) for d in records(c, 'project')]
+            result=[]
+            for d in records(c, 'project'):
+                customer=profile(c,d['customer_id'])
+                result.append({**enrich(c,d),'customer_type':d.get('customer_type') or customer.get('customer_type') or 'wholesale'})
+            return result
+
+    @app.post('/api/operations/orders/{oid}/order-number')
+    def edit_order_number(oid: str, body: OrderNumberEdit, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            d = get(c, oid, 'project')
+            if d.get('status') != 'pending_review' or d.get('order_number_confirmed', True):
+                raise HTTPException(409, 'Only an unconfirmed order number on a pending order can be changed')
+            previous = d.get('order_number')
+            d['order_number'] = validate_order_number_unique(c, body.order_number, oid)
+            event(d, 'order_number_edited', actor, previous=previous, order_number=d['order_number'])
+            put(c, 'project', d, d['customer_id'])
+            return enrich(c, d)
 
     @app.post('/api/operations/orders/{oid}/review')
-    def review(oid: str, actor=Depends(s.auth)):
+    def review(oid: str, body: OrderReview | None = None, actor=Depends(s.require_admin)):
+        body = body or OrderReview()
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             d = get(c, oid, 'project')
             if d['status'] != 'pending_review':
                 return enrich(c, d)
+            number_confirmation_required = d.get('order_number_confirmed') is False
+            if number_confirmation_required and not body.confirm_order_number:
+                raise HTTPException(409, 'Review and confirm the order number before accepting this quote')
+            if body.order_number is not None and number_confirmation_required:
+                d['order_number'] = validate_order_number_unique(c, body.order_number, oid)
             if d['total'] is None:
                 # Re-price only an unreviewed submission; reviewed snapshots stay immutable.
                 b = Project(project_name=d['project_name'], site_address=d['site_address'], submission_key='repricing',
@@ -961,11 +1865,17 @@ def register(app, s):
                 d.update(calculate(c, b))
             if d['total'] is None:
                 raise HTTPException(409, 'Price rules must be confirmed before review acceptance and invoicing')
+            if number_confirmation_required:
+                d['order_number_confirmed'] = True
+                event(d, 'order_number_confirmed', actor, order_number=d.get('order_number'))
             d['status'] = 'accepted'
+            d['accepted_at'] = s.now()
+            d.setdefault('lead_time', lead_time_for(d['lines']))
+            d['lead_time']['starts_at'] = d['accepted_at']
             event(d, 'review_accepted', actor)
             inv = {'id': 'deposit:'+oid, 'invoice_number': (d.get('order_number') or oid[-8:].upper()) + '-D', 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
                    'amount': d.get('deposit') or deposit_amount(d['total']), 'currency': d['currency'], 'tax_basis': d['tax_basis'],
-                   'deposit_rate': str(DEPOSIT_RATE), 'rounding': 'ROUND_UP_2DP',
+                   'deposit_rate': str(d.get('deposit_rate') or DEPOSIT_RATE), 'rounding': 'ROUND_UP_2DP',
                    'rule_source': 'Client reply 2026-10-15; In Put!P51',
                    'status': 'draft', 'created_at': s.now(), 'actor': actor, 'lines': [{'order_id': oid, 'amount': d.get('deposit') or deposit_amount(d['total'])}]}
             put(c, 'invoice', inv, d['customer_id'])
@@ -1007,150 +1917,53 @@ def register(app, s):
             return enrich(c, d)
 
     @app.post('/api/operations/orders/{oid}/supplier-order')
-    def supplier_order(oid: str, body: Supplier, actor=Depends(s.auth)):
+    def supplier_order(oid: str, body: Supplier | None = None, actor=Depends(s.auth)):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             d = get(c, oid, 'project')
             if d['payment_status'] != 'deposit_received':
                 raise HTTPException(409, 'Confirm the deposit before supplier ordering')
             if d['status'] == 'accepted':
-                d.update(status='supplier_ordered', supplier_reference=body.reference)
-                event(d, 'supplier_ordered', actor, reference=body.reference)
+                d['status'] = 'supplier_ordered'
+                if body and body.reference:
+                    d['supplier_reference'] = body.reference
+                event(d, 'supplier_ordered', actor)
                 put(c, 'project', d, d['customer_id'])
-            elif d.get('supplier_reference') != body.reference:
-                raise HTTPException(409, 'Supplier order already recorded with another reference')
+            elif d['status'] != 'supplier_ordered':
+                raise HTTPException(409, 'Supplier ordering can only be recorded after deposit confirmation')
+            elif body and body.reference:
+                if d.get('supplier_reference') and d['supplier_reference'] != body.reference:
+                    raise HTTPException(409, 'Supplier reference is already recorded')
+                d['supplier_reference'] = body.reference
+                put(c, 'project', d, d['customer_id'])
             return enrich(c, d)
 
     @app.get('/api/operations/orders/{oid}/supplier-export')
     def supplier_export(oid: str, provider_id: int | None = None, allow_basic_fallback: bool = False, actor=Depends(s.auth)):
         import json
         from fastapi.responses import Response
-        import io, zipfile
-        from xml.etree import ElementTree as ET
-        from xml.sax.saxutils import quoteattr
-        
+        from supplier_exports import export_supplier
         with s.db() as c:
-            d=get(c,oid,'project')
-            if d['status']=='pending_review':
-                raise HTTPException(409,'Accept technical review before producing supplier documents')
-            
-            # Determine provider: explicit param or first assigned provider
-            template_id=None
-            if not provider_id:
-                assigned=c.execute('SELECT provider_id,template_id FROM order_providers WHERE order_id=? ORDER BY is_preferred DESC,assigned_at LIMIT 1',(oid,)).fetchone()
-                if assigned:
-                    provider_id=assigned['provider_id']
-                    template_id=assigned['template_id']
-            else:
-                # Provider_id provided, look up template
-                assigned=c.execute('SELECT template_id FROM order_providers WHERE order_id=? AND provider_id=?',(oid,provider_id)).fetchone()
-                template_id=assigned['template_id'] if assigned else None
-            
-            # Validate active provider if specified
-            if provider_id:
-                provider=c.execute('SELECT active,name FROM providers WHERE id=?',(provider_id,)).fetchone()
-                if not provider or not provider['active']:
-                    raise HTTPException(404,'Cannot export for inactive provider')
-                provider_name=provider['name']
-            else:
-                provider_name=None
-            
-            # If no provider or no template, check if basic fallback allowed
-            if not provider_id or not template_id:
-                if not allow_basic_fallback:
-                    raise HTTPException(422,'No provider template configured for this order. Use allow_basic_fallback=true for generic template.')
-                # Use basic fallback
-                from order_exports import export_project
-                raw=export_project(d,'production')
-                return Response(raw,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                               headers={'Content-Disposition':f'attachment; filename="vera-supplier-BASIC-NOT-VERIFIED.xlsx"',
-                                       'Cache-Control':'no-store'})
-            
-            # Load custom template
-            template=c.execute('SELECT * FROM provider_templates WHERE id=? AND provider_id=? AND active=1',
-                             (template_id,provider_id)).fetchone()
-            if not template:
-                if allow_basic_fallback:
-                    from order_exports import export_project
-                    raw=export_project(d,'production')
-                    return Response(raw,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                   headers={'Content-Disposition':f'attachment; filename="vera-supplier-BASIC-NOT-VERIFIED.xlsx"',
-                                           'Cache-Control':'no-store'})
-                raise HTTPException(422,'Provider template is inactive or deleted')
-            
-            # Generate custom template export
-            mappings=json.loads(template['column_mappings'])
-            sheet_name=template['sheet_name']
-            validate_template(sheet_name, mappings)
-            ns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-            ET.register_namespace('',ns)
-            
-            # Build header row
-            columns=sorted(mappings.items(),key=lambda x:column_number(x[1]))
-            headers={col:field for field,col in columns}
-            
-            # Build data rows
-            rows=[headers]
-            for line in d['lines']:
-                row_data={}
-                for field,col_letter in mappings.items():
-                    if field in ('order_id','order_number'): row_data[field]=d.get('order_number',d['id'])
-                    elif field=='project_name': row_data[field]=d['project_name']
-                    elif field=='company': row_data[field]=d['company']
-                    elif field=='contact_name': row_data[field]=d['contact_name']
-                    elif field=='company_address': row_data[field]=d['company_address']
-                    elif field=='site_address': row_data[field]=d['site_address']
-                    elif field=='phone': row_data[field]=d['phone']
-                    elif field=='email': row_data[field]=d['email']
-                    elif field=='window_name': row_data[field]=line['window_name']
-                    elif field=='product_id': row_data[field]=str(line['product_id'])
-                    elif field=='width_mm': row_data[field]=line['width_mm']
-                    elif field=='height_mm': row_data[field]=line['height_mm']
-                    elif field=='quantity': row_data[field]=line['quantity']
-                    elif field=='panel_count': row_data[field]=line.get('panel_count',1)
-                    elif field=='options': row_data[field]='; '.join(f"{k}: {v}" for k,v in line['options'].items())
-                    elif field=='arrived': row_data[field]=line['arrived']
-                    elif field=='delivered': row_data[field]=line['delivered']
-                rows.append({col:row_data.get(field,'') for field,col in columns})
-            
-            # Create XLSX
-            sheet=ET.Element('{'+ns+'}worksheet')
-            data=ET.SubElement(sheet,'{'+ns+'}sheetData')
-            for r,values in enumerate(rows,1):
-                row=ET.SubElement(data,'{'+ns+'}row',{'r':str(r)})
-                for col_letter,v in values.items():
-                    numeric=(r>1 and isinstance(v,(int,float)))
-                    cell=ET.SubElement(row,'{'+ns+'}c',{'r':col_letter+str(r),**({} if numeric else {'t':'inlineStr'})})
-                    if numeric:
-                        ET.SubElement(cell,'{'+ns+'}v').text=str(v)
-                    else:
-                        inline=ET.SubElement(cell,'{'+ns+'}is')
-                        ET.SubElement(inline,'{'+ns+'}t').text=str(v)
-            
-            package={
-                '[Content_Types].xml':'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
-                '_rels/.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
-                'xl/workbook.xml':f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name={quoteattr(sheet_name)} sheetId="1" r:id="rId1"/></sheets></workbook>',
-                'xl/_rels/workbook.xml.rels':'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
-                'xl/worksheets/sheet1.xml':ET.tostring(sheet,encoding='utf-8')}
-            
-            out=io.BytesIO()
-            with zipfile.ZipFile(out,'w',compression=zipfile.ZIP_DEFLATED) as z:
-                for name,content in package.items():
-                    z.writestr(name,content)
-            
-            c.execute('BEGIN IMMEDIATE')
-            # Preserve the exact exported revision even if the order is reassigned later.
-            d=get(c,oid,'project')
-            revision_row=c.execute('SELECT data FROM operations_records WHERE id=?',('provider-template-revision:'+str(template_id),)).fetchone()
-            revision=json.loads(revision_row['data']).get('revision') if revision_row else None
-            event(d,'supplier_exported',actor,provider_id=provider_id,template_id=template_id,
-                  template_revision=revision,sheet_name=sheet_name,column_mappings=mappings)
-            put(c,'project',d,d['customer_id'])
-            filename=f"vera-provider-{provider_id}-{d.get('order_number') or d['id'].replace(':','-')}.xlsx"
-            return Response(out.getvalue(),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                           headers={'Content-Disposition':f'attachment; filename="{filename}"','Cache-Control':'no-store'})
-
+            d = get(c, oid, 'project')
+            # A paid order has necessarily had its deposit received.
+            if d.get('payment_status') not in ('deposit_received', 'paid'):
+                raise HTTPException(409, 'Confirm the deposit before exporting the supplier order')
+            customer = profile(c, d['customer_id'])
+            products = {row['id']: json.loads(row['data']) for row in c.execute('SELECT id,data FROM products')}
+            export_lines = []
+            for line in d.get('lines') or []:
+                product = products.get(line.get('product_id'), {})
+                export_lines.append({**line, 'product_category': product.get('category'),
+                                     'source_code': line.get('source_code') or product.get('source_code'),
+                                     'product_name': product.get('name_en')})
+            try:
+                raw = export_supplier({**d, 'lines': export_lines}, customer)
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from None
+            event(d, 'supplier_exported', actor, format='VERA Order')
+            put(c, 'project', d, d['customer_id'])
+        return Response(raw, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        headers={'Content-Disposition': 'attachment; filename="vera-supplier-order.xlsx"', 'Cache-Control': 'no-store'})
     def project_export(oid,kind):
         from fastapi.responses import Response
         from order_exports import export_project
@@ -1209,32 +2022,36 @@ def register(app, s):
             d = get(c, body.order_id, 'project')
             if d['status'] not in ('in_transit', 'partially_arrived', 'arrived', 'partially_delivered', 'delivered'):
                 raise HTTPException(409, 'Record supplier order and transit before fulfilment')
+            if body.kind == 'delivery' and d.get('payment_status') != 'paid':
+                raise HTTPException(409, 'The balance must be paid before any delivery or completion')
             if len({line.line_id for line in body.lines}) != len(body.lines):
                 raise HTTPException(422, 'Each line may occur only once per batch')
             field = 'arrived' if body.kind == 'arrival' else 'delivered'
+            if body.kind == 'delivery' and not all(l['arrived'] == l['quantity'] for l in d['lines']):
+                raise HTTPException(409, 'The whole order must have arrived before delivery')
+            submitted = {q.line_id: q.quantity for q in body.lines}
+            expected = {l['id']: l['quantity'] - l[field] for l in d['lines'] if l['quantity'] > l[field]}
+            if not expected:
+                raise HTTPException(409, 'The whole order is already recorded for this fulfilment step')
+            if submitted != expected:
+                raise HTTPException(422, 'Record the whole order in one arrival or delivery action; partial quantities are not accepted')
             scope = []
-            for q in body.lines:
-                line = next((l for l in d['lines'] if l['id'] == q.line_id), None)
-                if not line or line[field]+q.quantity > (line['quantity'] if field == 'arrived' else line['arrived']):
-                    raise HTTPException(422, 'Quantity exceeds ordered or arrived quantity')
-                line[field] += q.quantity
-                scope.append({'line_id': q.line_id, 'window_name': line['window_name'], 'quantity': q.quantity})
-            if all(l['delivered'] == l['quantity'] for l in d['lines']):
-                d['status'] = 'delivered'
-            elif any(l['delivered'] for l in d['lines']):
-                d['status'] = 'partially_delivered'
-            elif all(l['arrived'] == l['quantity'] for l in d['lines']):
-                d['status'] = 'arrived'
+            for line in d['lines']:
+                quantity = expected.get(line['id'], 0)
+                if quantity:
+                    line[field] += quantity
+                    scope.append({'line_id': line['id'], 'window_name': line['window_name'], 'quantity': quantity})
+            if body.kind == 'arrival':
+                d['status'] = 'delivered' if all(l['delivered'] == l['quantity'] for l in d['lines']) else ('partially_delivered' if any(l['delivered'] for l in d['lines']) else 'arrived')
             else:
-                d['status'] = 'partially_arrived'
-            # Separate progress fields retain arrival state even during partial delivery.
-            d['arrival_status'] = 'arrived' if all(l['arrived'] == l['quantity'] for l in d['lines']) else 'partially_arrived'
+                d['status'] = 'delivered'
+            d['arrival_status'] = 'arrived'
             d['delivery_status'] = 'delivered' if all(l['delivered'] == l['quantity'] for l in d['lines']) else ('partially_delivered' if any(l['delivered'] for l in d['lines']) else 'not_delivered')
             event(d, body.kind, actor, batch_id=rid, lines=scope)
             put(c, 'project', d, d['customer_id'])
             if body.kind == 'arrival':
                 nid = queue(c, d['customer_id'], 'VERA arrival: '+d['project_name'],
-                            'This batch has arrived:\n'+'\n'.join(f"{l['window_name']}: {l['quantity']}" for l in scope)+'\nPlease contact VERA to arrange collection or installation.', 'arrival:'+rid)
+                            'All goods for this order have arrived:\n'+'\n'.join(f"{l['window_name']}: {l['quantity']}" for l in scope)+'\nPlease contact VERA to arrange collection or installation.', 'arrival:'+rid)
             result = {'id': rid, 'request_hash': bodyhash(body), 'order': enrich(c, d), 'notification_id': nid}
             put(c, 'fulfilment', result, d['customer_id'])
         if nid:
@@ -1351,8 +2168,8 @@ def register(app, s):
             orders = [get(c, oid, 'project') for oid in dict.fromkeys(body.order_ids)]
             if len({(d['customer_id'], d['currency'], d['tax_basis']) for d in orders}) != 1:
                 raise HTTPException(422, 'Combine only one company, currency and tax basis')
-            if any(d['status'] != 'delivered' or d['payment_status'] != 'deposit_received' for d in orders):
-                raise HTTPException(409, 'Partial-arrival billing rules are unconfirmed; only fully delivered paid-deposit orders are eligible')
+            if any(d['payment_status'] != 'deposit_received' or not all(line['arrived'] == line['quantity'] for line in d['lines']) for d in orders):
+                raise HTTPException(409, 'Balance invoices are available only after every line has arrived and the deposit is confirmed')
             if any(d.get('balance_invoice_id') for d in orders):
                 raise HTTPException(409, 'An order already has a balance invoice')
             cid, currency = orders[0]['customer_id'], orders[0]['currency']

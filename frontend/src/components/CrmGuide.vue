@@ -34,11 +34,11 @@ const steps = computed(() => [
   {
     icon: Truck,
     name: tx("供应商下单", "Supplier order"),
-    hint: tx("导出 Excel · 记参考号", "Export Excel · log reference"),
+    hint: tx("导出 Excel · 标为已下单", "Export Excel · mark as ordered"),
     path: "/crm/providers",
     points: [
       tx("到“供应商与导出”核对自动带出的供应商和模板，点“下载供应商订单 Excel”，分配同时被保存。", "Under Supplier & files, check the preselected supplier and template, then download the supplier Excel; the assignment is saved at the same time."),
-      tx("供应商回复订单号后，把它填进“供应商参考号”，再点“记录供应商下单”。", "When the supplier replies with an order number, enter it as the supplier reference and click Record supplier order."),
+      tx("定金确认后下载供应商订单，再点“标为已下单”。订单号就是客户订单号，不用另填供应商号。", "After the deposit is confirmed, download the supplier order, then click Mark as ordered. The order number is the customer's; no separate supplier number."),
     ],
     note: tx("没有正式工厂模板时导出的只是通用草稿，需要人工核对；导出本身不会发邮件。", "Without a confirmed factory template the export is a generic draft to be checked by hand; exporting never sends email."),
   },
@@ -60,7 +60,7 @@ const steps = computed(() => [
     hint: tx("合并多单 · 先出草稿", "Combine orders · draft first"),
     path: "/crm/finance",
     points: [
-      tx("在“账款与返利”勾选同一公司、同币种、已全部交付且定金已收的订单，点“生成尾款草稿”。", "Under Accounts & rebates, tick fully delivered, deposit-received orders of one company and currency, then click Create balance draft."),
+      tx("在“账款与返利”勾选同一公司、同币种、每一行都已到货且定金已收的订单，点“生成尾款草稿”。", "Under Accounts & rebates, tick orders of one company and currency where every line has arrived and the deposit is received, then click Create balance draft."),
       tx("金额 = 订单总额 − 已存定金，再扣早于本月的已确认返利；“规则说明”按所选订单自动生成，可以修改。", "Amount = order total − stored deposit, then confirmed rebate balances from earlier months. The rule note is generated from the selected orders and can be edited."),
       tx("草稿检查无误后再单独发送，收到款项后点“确认尾款收款”。", "Review the draft, send it as a separate step, and click Confirm balance receipt once the money has arrived."),
     ],
@@ -83,7 +83,7 @@ const current = ref(0);
 const step = computed(() => steps.value[current.value]);
 const more = computed(() => [
   { label: tx("客户资料", "Customers"), path: "/crm/customers" },
-  { label: tx("定价与模板", "Pricing & templates"), path: "/crm/pricing" },
+  { label: tx("定价知识库", "Pricing knowledge"), path: "/crm/pricing" },
   { label: tx("产品目录", "Product catalogue"), path: "/crm/products" },
   { label: tx("分析看板", "Dashboard"), path: "/crm/dashboard" },
 ]);

@@ -9,8 +9,11 @@ interface Line {
   id: string;
   window_name: string;
   product_id?: number;
+  product_name?: string;
+  source_code?: string;
   width_mm?: string | number;
   height_mm?: string | number;
+  panel_count?: number;
   options?: Record<string, string>;
   quantity: number;
   arrived: number;
@@ -91,18 +94,31 @@ interface OrderProvider {
 interface ProjectOrder {
   history?: {action:string;created_at:string;provider_id?:number;template_id?:number;template_revision?:number}[];
   order_number?: string;
+  order_number_confirmed?: boolean;
   id: string;
   customer_id: number;
   company: string;
+  contact_name?: string;
+  phone?: string;
+  email?: string;
+  company_address?: string;
+  customer_type?: 'retail' | 'wholesale';
   project_name: string;
   site_address: string;
+  created_at?: string;
   status: string;
   payment_status: string;
   arrival_status?: string;
   delivery_status?: string;
+  subtotal?: string | null;
+  installation?: string | null;
+  installation_required?: boolean;
+  tax?: string | null;
   total: string | null;
+  deposit?: string | null;
   currency?: string;
   supplier_reference?: string;
+  lead_time?: { text?: string } | string;
   lines: Line[];
   invoices?: Invoice[];
 }
@@ -114,10 +130,59 @@ interface PricingVersion {id:string;version:string;active:boolean;source?:string
 const pricingVersions = ref<PricingVersion[]>([]);
 const applicability = reactive<Record<string,number[]>>({});
 const financeCustomer = ref(String(route.query.customer || ''));
-const financePane = ref<'balance'|'rebates'|'notifications'>('balance');
-const customers = ref<{customer_id:number;company:string}[]>([]);
+const financePane = ref<'rebates'|'notifications'>('rebates');
+const customers = ref<{customer_id:number;company:string;customer_code?:string;customer_type?:'retail'|'wholesale'}[]>([]);
 const financeOrders = computed(()=>orders.value.filter(o=>!financeCustomer.value || String(o.customer_id)===financeCustomer.value));
 const financeInvoices = computed(()=>invoices.value.filter(i=>!financeCustomer.value || String(i.customer_id)===financeCustomer.value));
+// Finance page work queues: each order or invoice lands in the one step that needs a staff action, or in "waiting"/"done".
+const SENT_INVOICE_STATES = ['sent','demo_sent','demo_suppressed','sending'];
+const invoiceSent = (invoice: Invoice) => SENT_INVOICE_STATES.includes(invoice.status);
+const allLinesArrived = (order: ProjectOrder) => order.lines.every((line) => line.arrived === line.quantity);
+const balanceInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'balance' && invoice.order_ids?.includes(order.id));
+const depositInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'deposit' && invoice.order_ids?.includes(order.id)) || order.invoices?.find((invoice) => invoice.kind === 'deposit');
+const financeQueues = computed(() => {
+  const depositDue = financeOrders.value.filter((order) => order.status !== 'pending_review' && order.payment_status === 'deposit_unpaid');
+  const depositDueIds = new Set(depositDue.map((order) => order.id));
+  const balanceReady = financeOrders.value.filter((order) => order.payment_status === 'deposit_received' && allLinesArrived(order) && !balanceInvoiceFor(order));
+  // A deposit invoice for an order still in step 1 is sent from step 1, so it is not listed twice.
+  const toSend = financeInvoices.value.filter((invoice) => !invoiceSent(invoice) && invoice.payment_status !== 'received' &&
+    !(invoice.kind === 'deposit' && invoice.order_ids?.some((id) => depositDueIds.has(id))));
+  const balanceDue = financeInvoices.value.filter((invoice) => invoice.kind === 'balance' && invoiceSent(invoice) && invoice.payment_status !== 'received');
+  const done = financeInvoices.value.filter((invoice) => invoice.payment_status === 'received');
+  const active = new Set([...depositDue, ...balanceReady].map((order) => order.id));
+  for (const invoice of [...toSend, ...balanceDue]) for (const id of invoice.order_ids || []) active.add(id);
+  const waiting = financeOrders.value.filter((order) => !active.has(order.id));
+  return { depositDue, balanceReady, toSend, balanceDue, done, waiting };
+});
+const financeSteps = computed(() => [
+  { key: 'deposit', no: '1', title: tx('确认定金到账', 'Confirm deposits'), count: financeQueues.value.depositDue.length },
+  { key: 'balance', no: '2', title: tx('开尾款', 'Create balance invoices'), count: financeQueues.value.balanceReady.length },
+  { key: 'send', no: '3', title: tx('发送发票', 'Send invoices'), count: financeQueues.value.toSend.length },
+  { key: 'receipt', no: '4', title: tx('确认尾款收款', 'Confirm balance receipts'), count: financeQueues.value.balanceDue.length },
+]);
+const financeTodoTotal = computed(() => financeSteps.value.reduce((sum, step) => sum + step.count, 0));
+const balancePicked = computed(() => picked.value.filter((id) => financeQueues.value.balanceReady.some((order) => order.id === id)));
+const rebatePick = ref<string[]>([]);
+const sendLabel = computed(() => props.emailMode === 'demo' ? (props.emailEnabled ? tx('发送演示邮件（仅自己）', 'Send demo email to owner only') : tx('记录模拟发送（不投递）', 'Record demo send (no delivery)')) : tx('发送', 'Send'));
+function financeWaitingReason(order: ProjectOrder) {
+  if (order.status === 'pending_review') return tx('待审核，在订单页处理', 'Awaiting review on the orders page');
+  const balance = balanceInvoiceFor(order);
+  if (balance?.payment_status === 'received' || order.payment_status === 'paid') return tx('已结清', 'Settled');
+  if (balance) return tx('尾款已开', 'Balance invoiced');
+  if (order.payment_status === 'deposit_received' && !allLinesArrived(order)) return tx(`定金已收，等待到货（${orderStatus(order.status)}）`, `Deposit received; waiting for arrival (${orderStatus(order.status)})`);
+  return orderStatus(order.status);
+}
+function scrollFinanceStep(key: string) { document.getElementById(`fin-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+function previewOneInvoice(invoice: Invoice) { invoicePick.value = [invoice.id]; return previewInvoiceMail(); }
+function sendOneInvoice(invoice: Invoice) { invoicePick.value = [invoice.id]; return sendSelectedInvoices(); }
+function settleReadyOrders() { picked.value = [...balancePicked.value]; return settleSelected(); }
+async function recordRebateForPick() {
+  const balanceSelection = [...picked.value];
+  picked.value = [...rebatePick.value];
+  await recordRebate();
+  if (!error.value) rebatePick.value = [];
+  picked.value = balanceSelection.filter((id) => financeQueues.value.balanceReady.some((order) => order.id === id));
+}
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const orders = ref<ProjectOrder[]>([]);
@@ -143,8 +208,8 @@ const mailPreview = ref<MailPreview | null>(null);
 const transitRows = ref<{ order_id: string; status: string; reason?: string }[]>([]);
 const arrivalRows = ref<{ order_id: string; status: string; detail: string }[]>([]);
 const batch = reactive<Record<string, number>>({});
+const orderNumberConfirmation = reactive<Record<string, boolean>>({});
 const operationKeys = new Map<string, string>();
-const supplierRef = reactive<Record<string, string>>({});
 const providerForm = reactive({
   name: "",
   contact_email: "",
@@ -177,16 +242,28 @@ const validFields = ["order_number", "order_id", "project_name", "company", "con
 
 const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
 const listPage = ref(0);
-const mobileListOpen = ref(false);
 const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.length / 6)));
 const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 6, (Math.min(listPage.value, pageCount.value - 1) + 1) * 6));
 const selectedId = ref(String(route.query.order || ''));
-const detailSection = ref("fulfilment");
+const detailSection = ref("order");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
-const productPage = ref(0);
-const productPageCount = computed(() => Math.max(1, Math.ceil((selectedOrder.value?.lines.length || 0) / 4)));
-const productPageLines = computed(() => selectedOrder.value?.lines.slice(Math.min(productPage.value, productPageCount.value - 1) * 4, (Math.min(productPage.value, productPageCount.value - 1) + 1) * 4) || []);
-watch(() => selectedOrder.value?.id, () => { productPage.value = 0; });
+const selectedIsWholesale = computed(() => selectedOrder.value?.customer_type === 'wholesale' ||
+  (!selectedOrder.value?.customer_type && customers.value.find(c => c.customer_id === selectedOrder.value?.customer_id)?.customer_type !== 'retail'));
+function quoteMoney(amount?: string | null, currency = "NZD") {
+  if (amount == null || amount === "") return "—";
+  const value = Number(amount);
+  return Number.isFinite(value) ? `${currency} ${value.toFixed(2)}` : `${currency} ${amount}`;
+}
+function quoteDate(value?: string) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(locale.value === "zh" ? "zh-NZ" : "en-NZ", { dateStyle: "medium" }).format(date);
+}
+function quoteBalance(order: ProjectOrder) {
+  if (order.total == null || order.deposit == null) return "—";
+  const amount = Number(order.total) - Number(order.deposit);
+  return Number.isFinite(amount) ? quoteMoney(amount.toFixed(2), order.currency || "NZD") : "—";
+}
 watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[];fulfilError.value=''});
 watch(invoicePick,()=>{mailPreview.value=null});
 watch(picked, () => {
@@ -199,21 +276,23 @@ watch(()=>selectedOrder.value?.invoices?.map(i=>`${i.id}:${i.status}`).join('|')
   invoicePick.value=drafts.length===1?[drafts[0].id]:[];
 },{immediate:true});
 function nextOrderSection(order: ProjectOrder): string {
-  if (order.status === 'pending_review') return 'adjustment';
+  if (order.status === 'pending_review') return 'order';
   if (order.payment_status === 'deposit_unpaid') return 'invoices';
   if (order.status === 'accepted') return 'supplier';
-  return 'fulfilment';
+  return 'order';
 }
 const nextOrderHint = computed(() => {
   const order=selectedOrder.value;
   if (!order) return '';
   if (order.status==='pending_review') return tx('核对价格和配置，再确认接收。','Check price and configuration, then accept review.');
   if (order.payment_status==='deposit_unpaid') return tx('定金发票已生成；核实到账后记录定金已收。','The deposit invoice is ready; record receipt only after funds are confirmed.');
-  if (order.status==='accepted') return tx('确认供应商并导出订单文件，再记录供应商参考号。','Confirm the supplier and export the order file, then record its reference.');
+  if (order.status==='accepted') return tx('定金确认后下载供应商订单，再标为已下单。','After the deposit is confirmed, download the supplier order, then mark it ordered.');
   if (order.status==='supplier_ordered') return tx('供应商下单已记录；可将订单标为在途。','Supplier order recorded; mark it in transit when dispatched.');
-  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('按本批实际数量记录到货。','Record the actual quantities received in this batch.');
-  if (order.status==='arrived'||order.status==='partially_delivered') return tx('按本批实际数量记录交付。','Record the actual quantities delivered in this batch.');
-  return tx('订单已交付；在账款与返利中处理尾款。','Order delivered; complete the balance in Accounts & rebates.');
+  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('所有货物到齐后，记录整单到货。','Record the whole order as arrived once all goods are in.');
+  if (order.status==='arrived'||order.status==='partially_delivered') return order.payment_status==='paid'
+    ? tx('尾款已付，可以记录交付。','The balance is paid; delivery can be recorded.')
+    : tx('每一行到齐后开尾款。尾款付清前不能记录交付。','Invoice the balance once every line has arrived. Delivery stays closed until that balance is paid.');
+  return tx('订单已完成；在账款与返利中处理尾款。','Order completed; complete the balance in Accounts & rebates.');
 });
 watch(()=>[selectedOrder.value?.id,selectedOrder.value?.status,selectedOrder.value?.payment_status],()=>{
   if(selectedOrder.value) detailSection.value=nextOrderSection(selectedOrder.value);
@@ -259,7 +338,7 @@ async function load() {
   customers.value = companies;
   if(props.workspace==='finance' && financeCustomer.value && !picked.value.length) {
     const eligible=listed.filter(order=>String(order.customer_id)===financeCustomer.value &&
-      order.status==='delivered' && order.payment_status==='deposit_received' &&
+      order.payment_status==='deposit_received' && order.lines.every((line) => line.arrived === line.quantity) &&
       !billed.some(invoice=>invoice.kind==='balance' && invoice.order_ids?.includes(order.id)));
     if(eligible.length===1) picked.value=[eligible[0].id];
   }
@@ -268,7 +347,6 @@ async function load() {
   rebateStatus.value = credits.calculation_status;
   const assignmentRequests:Promise<void>[]=[];
   for (const order of props.workspace === 'projects' ? orders.value : []) {
-    supplierRef[order.id] = order.supplier_reference || supplierRef[order.id] || "";
     if (!orderProviderForm[order.id]) {
       orderProviderForm[order.id] = { provider_id: 0, template_id: 0 };
       assignmentRequests.push(loadOrderProviders(order.id));
@@ -283,6 +361,14 @@ async function load() {
 }
 
 function orderLabel(id:string) { return orders.value.find(o=>o.id===id)?.order_number || id.slice(-12); }
+function leadLabel(order: ProjectOrder) {
+  const lead = order.lead_time;
+  if (!lead) return "";
+  return typeof lead === "string" ? lead : lead.text || "";
+}
+function customerCode(order: ProjectOrder) {
+  return customers.value.find((row) => row.customer_id === order.customer_id)?.customer_code || "";
+}
 // Invoices are always shown by their readable number, never by the internal record id.
 function invoiceLabel(invoice: Invoice) { return invoice.invoice_number || `${orderLabel(invoice.order_ids?.[0] || invoice.id)}-${invoice.kind === 'deposit' ? 'D' : 'B'}`; }
 // Notification subjects stored before readable numbers existed still contain record ids; show them readably.
@@ -297,11 +383,17 @@ function allocationLabel(id?: string) {
   return invoice ? invoiceLabel(invoice) : tx('（发票不可用）', '(invoice unavailable)');
 }
 const previewDialog = ref<HTMLDialogElement | null>(null);
+const sheetDialog = ref<HTMLDialogElement | null>(null);
 // A native modal <dialog> traps Tab inside, makes the page behind inert, handles Escape and
 // returns focus to the button that opened it when it closes.
 function closePreview() {
   if (previewDialog.value?.open) previewDialog.value.close();
   mailPreview.value = null;
+}
+function openSheetPreview() { sheetDialog.value?.showModal(); }
+function closeSheetPreview() { sheetDialog.value?.close(); }
+function onSheetDialogClick(event: MouseEvent) {
+  if (event.target === sheetDialog.value) closeSheetPreview();
 }
 function onDialogClosed() { document.body.style.overflow = ''; mailPreview.value = null; }
 function onDialogClick(event: MouseEvent) {
@@ -339,9 +431,9 @@ function orderStatus(value: string) {
   const labels: Record<string, [string, string]> = {
     pending_review: ["待审核", "Review pending"], accepted: ["已接收", "Accepted"],
     deposit_unpaid: ["待收定金", "Deposit unpaid"], deposit_received: ["定金已收", "Deposit received"],
-    supplier_ordered: ["已向供应商下单", "Supplier ordered"], in_transit: ["运输中", "In transit"],
+    supplier_ordered: ["已下单", "Ordered"], in_transit: ["运输中", "In transit"],
     partially_arrived: ["部分到货", "Partly arrived"], arrived: ["已到货", "Arrived"],
-    partially_delivered: ["部分交付", "Partly delivered"], delivered: ["已交付", "Delivered"], paid: ["已结清", "Paid"],
+    partially_delivered: ["部分交付", "Partly delivered"], delivered: ["已完成", "Completed"], paid: ["已结清", "Paid"],
   };
   return labels[value] ? tx(...labels[value]) : value;
 }
@@ -376,8 +468,21 @@ async function act(fn: () => Promise<void>) {
 
 function review(id: string) {
   return act(async () => {
-    await request(`operations/orders/${id}/review`, {});
+    const order = orders.value.find((item) => item.id === id);
+    const body = order?.order_number_confirmed === false
+      ? { order_number: order.order_number, confirm_order_number: orderNumberConfirmation[id] === true }
+      : {};
+    await request(`operations/orders/${id}/review`, body);
     notice.value = tx("已确认接收。定金发票是草稿，发送是另一步。价格未配置时会拒绝。", "Accepted. The deposit invoice is a draft; sending it is a separate step. This is refused when price rules are missing.");
+  });
+}
+
+function saveOrderNumber(id: string) {
+  return act(async () => {
+    const order = orders.value.find((item) => item.id === id);
+    if (!order) throw new Error(tx("未找到此订单。", "Order not found."));
+    await request(`operations/orders/${id}/order-number`, {order_number:order.order_number});
+    notice.value = tx("未确认订单号已保存，客户暂时看不到。", "Unconfirmed order number saved; the customer cannot see it yet.");
   });
 }
 
@@ -390,8 +495,8 @@ function deposit(id: string) {
 
 function supplier(order: ProjectOrder) {
   return act(async () => {
-    await request(`operations/orders/${order.id}/supplier-order`, { reference: supplierRef[order.id] });
-    notice.value = tx("已记录供应商参考号。正式工厂格式仍会拒绝，直到模板确认。生产资料草稿可以下载。", "Supplier reference recorded. The formal factory file is still refused until its template is confirmed. Production drafts can be downloaded.");
+    await request(`operations/orders/${order.id}/supplier-order`, {});
+    notice.value = tx("已标为已下单。", "Marked as ordered.");
   });
 }
 
@@ -436,24 +541,39 @@ function transitOne(id:string) {
   });
 }
 
-function batchLines(order: ProjectOrder, kind: "arrival" | "delivery") {
+function remainingLines(order: ProjectOrder, kind: "arrival" | "delivery") {
   return order.lines
-    .map((line) => ({ line_id: line.id, quantity: Number(batch[`${order.id}:${line.id}:${kind}`] || 0) }))
+    .map((line) => ({ line_id: line.id, quantity: Math.max(0, kind === "arrival" ? line.quantity-line.arrived : line.quantity-line.delivered) }))
     .filter((line) => line.quantity > 0);
 }
 
-function fillRemaining(order:ProjectOrder,kind:'arrival'|'delivery') {
-  fulfilError.value='';
-  for(const line of order.lines) {
-    const key=`${order.id}:${line.id}:${kind}`;
-    const remaining=kind==='arrival' ? Math.max(0,line.quantity-line.arrived) : Math.max(0,line.arrived-line.delivered);
-    if(remaining>0) batch[key]=remaining;
-    else delete batch[key];
-  }
+function cell(line: Line, key: string) {
+  const value = line.options?.[key];
+  return value == null || value === "" ? "—" : String(value);
 }
-
+function addonCell(line: Line) {
+  const keys = ["tracked_bifold", "tracked_sliding", "stained_colour", "stainless_hinges", "hidden_hinges", "hidden_tilt_rod", "tier_on_tier", "double_closure", "shaped_cutout", "extra_installation"];
+  const parts = keys.flatMap((key) => {
+    const value = line.options?.[key];
+    if (!value || value === "no" || value === "none") return [];
+    return [`${key.replaceAll("_", " ")}: ${value}`];
+  });
+  return parts.join(" · ") || "—";
+}
 function optionText(line: Line) {
-  return Object.entries(line.options || {}).map(([name, value]) => `${name}: ${value}`).join(", ");
+  const labels: Record<string, [string, string]> = {
+    opening_style: ["开合方式", "Opening"], layout_code: ["Layout Code", "Layout Code"],
+    vt_post: ["VT Post", "VT Post"], ht_post: ["HT Post", "HT Post"],
+    midrail: ["中横档", "Mid-Rail"], frame: ["框型", "Frame"], louver_size: ["叶片", "Louver"],
+    colour: ["颜色", "Colour"], control_rod: ["控制杆", "Control rod"], fitting: ["内装/外装", "In/Out fit"],
+    special_request: ["备注", "Notes"], tracked_bifold: ["轨道对开", "Tracked bifold"],
+    tracked_sliding: ["轨道推拉", "Tracked sliding"], stained_colour: ["染色", "Stained colour"],
+    stainless_hinges: ["不锈钢合页", "Stainless hinges"], hidden_hinges: ["隐藏合页", "Hidden hinges"],
+    hidden_tilt_rod: ["隐藏拉杆", "Hidden tilt rod"], tier_on_tier: ["上下分段", "Tier on tier"],
+    double_closure: ["双闭合", "Double closure"], shaped_cutout: ["异形开孔", "Shaped cutout"],
+    extra_installation: ["额外安装条件", "Extra installation"],
+  };
+  return Object.entries(line.options || {}).map(([name, value]) => `${labels[name] ? tx(...labels[name]) : name.replaceAll("_", " ")}: ${value}`).join(" · ");
 }
 
 async function arriveSelected() {
@@ -467,9 +587,9 @@ async function arriveSelected() {
   notice.value = "";
   arrivalRows.value = [];
   for (const order of targets) {
-    const lines = batchLines(order, "arrival");
+    const lines = remainingLines(order, "arrival");
     if (!lines.length) {
-      arrivalRows.value.push({ order_id: order.id, status: "skipped", detail: tx("没有填写本批数量", "No quantity entered for this batch") });
+      arrivalRows.value.push({ order_id: order.id, status: "skipped", detail: tx("没有待确认的到货数量", "No outstanding arrival quantities") });
       continue;
     }
     const signature = JSON.stringify({ order_id: order.id, kind: "arrival", lines });
@@ -502,11 +622,19 @@ async function arriveSelected() {
 }
 
 function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
-  const lines = batchLines(order, kind);
+  if (kind === "delivery" && order.payment_status !== "paid") {
+    fulfilError.value = tx("尾款付清后才能记录交付。", "Record delivery only after the balance is paid.");
+    return;
+  }
+  if (kind === "delivery" && !order.lines.every((line) => line.arrived === line.quantity)) {
+    fulfilError.value = tx("全部货物到齐后才能安排整单交付。", "All goods must have arrived before the whole order can be delivered.");
+    return;
+  }
+  const lines = remainingLines(order, kind);
   if (!lines.length) {
     fulfilError.value = kind === 'arrival'
-      ? tx('请先在“本次到货”填写这次实际收到的数量（至少 1），再记录到货。', 'Enter the quantity actually received in “This arrival” (at least 1) before recording arrival.')
-      : tx('请先在“本次交付”填写这次实际交付的数量（至少 1），再记录交付。', 'Enter the quantity actually delivered in “This delivery” (at least 1) before recording delivery.');
+      ? tx('整单已记录到货。', 'The whole order is already recorded as arrived.')
+      : tx('整单已记录交付。', 'The whole order is already recorded as delivered.');
     return;
   }
   fulfilError.value = '';
@@ -520,11 +648,10 @@ function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
       lines,
     });
     operationKeys.delete(signature);
-    for (const line of order.lines) delete batch[`${order.id}:${line.id}:${kind}`];
     const mailed = result.notification ? mailStatus(result.notification.status) : "";
     notice.value = kind === "arrival"
-      ? tx(`已记录本批到货。通知状态：${mailed || "无"}。收款状态不会被覆盖。`, `This arrival batch is recorded. Notification status: ${mailed || "none"}. Payment status is left unchanged.`)
-      : tx("已记录本批交付。交付不能超过已到货。", "This delivery batch is recorded. Delivery cannot exceed what has arrived.");
+      ? tx(`已记录整单到货。通知状态：${mailed || "无"}。收款状态不会被覆盖。`, `The whole order is recorded as arrived. Notification status: ${mailed || "none"}. Payment status is left unchanged.`)
+      : tx("已记录整单交付。", "The whole order is recorded as delivered.");
   });
 }
 
@@ -593,14 +720,14 @@ function autoEvidence(rows: ProjectOrder[]) {
     const ref = order.order_number || order.id;
     const money = `${order.currency || ""} ${order.total ?? "?"}`.trim();
     return tx(
-      `${ref}：订单总额 ${money}，已交付，定金${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""}已收`,
-      `${ref}: order total ${money}, delivered, deposit${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""} received`,
+      `${ref}：订单总额 ${money}，每一行已到货，定金${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""}已收`,
+      `${ref}: order total ${money}, every line arrived, deposit${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""} received`,
     );
   });
   const more = rows.length > AUTO_EVIDENCE_MAX_ORDERS ? tx(`；另有 ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} 单`, `; ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} more orders`) : "";
   return tx(
-    `按系统记录生成：全部交付且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除早于本月、已确认的返利余额；不自动计算返利。`,
-    `Generated from system records: fully delivered orders with deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only confirmed rebate balances from earlier months are deducted; no rebate is calculated automatically.`,
+    `按系统记录生成：每一行都已到货且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除早于本月、已确认的返利余额；不自动计算返利。`,
+    `Generated from system records: orders with every line arrived and the deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only confirmed rebate balances from earlier months are deducted; no rebate is calculated automatically.`,
   );
 }
 let lastAutoEvidence = "";
@@ -614,6 +741,10 @@ function settleSelected() {
   const rows = selectedOrders();
   const customerId = oneCompany(rows);
   if (customerId == null) return;
+  if (rows.some((order) => order.payment_status !== "deposit_received" || order.lines.some((line) => line.arrived !== line.quantity))) {
+    error.value = tx("只能给每一行都已到货且定金已收的订单开尾款。", "A balance invoice needs every line arrived and the deposit received.");
+    return;
+  }
   if (settlementEvidence.value.trim().length < 5) {
     error.value = tx("尾款需要至少 5 个字的已确认规则说明。没有说明不会生成发票。", "A balance invoice needs at least 5 characters of confirmed-rule evidence. Nothing is created without it.");
     return;
@@ -623,7 +754,7 @@ function settleSelected() {
     order_ids: orderIds,
     operation_key: stableKey(JSON.stringify({ settle: orderIds, evidence: settlementEvidence.value.trim() })),
     rules_evidence: settlementEvidence.value.trim(),
-    billing_basis: "fully_delivered_remaining_total" as const,
+    billing_basis: "all_arrived_remaining_total" as const,
   };
   return act(async () => {
     const invoice = await request<Invoice>("operations/settlements", body);
@@ -876,7 +1007,7 @@ async function exportWithProvider(orderId: string, providerId?: number, allowFal
   notice.value = "";
   try {
     if (!allowFallback && (!providerId || !readySupplierExport(orderId))) {
-      throw new Error(tx('请先选择已启用的供应商及其导出模板；也可下载未验证的基本草稿。','Select an active supplier and export template, or download the unverified basic draft.'));
+      throw new Error(tx('请先选择已启用的供应商及其导出模板。定金确认后可以下载供应商订单。','Select an active supplier and its export template. The supplier order can be downloaded after the deposit is confirmed.'));
     }
     if (providerId && !allowFallback) {
       const form = orderProviderForm[orderId];
@@ -940,7 +1071,7 @@ async function loadOrderProviders(orderId: string) {
 
     <p v-if="!loaded" role="status">{{ tx('加载中…','Loading…') }}</p>
     <div v-show="loaded" class="workspace-grid">
-      <aside v-if="workspace === 'projects'" class="card order-list" :class="{ 'mobile-expanded': mobileListOpen }">
+      <aside v-if="workspace === 'projects'" class="card order-list">
         <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
         <label class="filter-row">{{ tx("筛选", "Filter") }}
           <select v-model="statusFilter" @change="listPage = 0">
@@ -950,25 +1081,22 @@ async function loadOrderProviders(orderId: string) {
         </label>
         <div class="mobile-project-picker">
           <label>{{ tx("当前订单", "Current order") }}<select :value="selectedOrder?.id" @change="selectedId = ($event.target as HTMLSelectElement).value"><option v-for="order in visibleOrders" :key="order.id" :value="order.id">{{ order.project_name }}</option></select></label>
-          <button type="button" class="secondary" @click="mobileListOpen = !mobileListOpen">{{ mobileListOpen ? tx("收起列表", "Collapse list") : tx("批量选择", "Select multiple") }}</button>
         </div>
         <div class="order-scroll">
           <div v-for="order in pageOrders" :key="order.id" class="order-row">
-            <label class="pick-mark">
-              <input type="checkbox" :aria-label="tx('批量选择订单','Select order for batch')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" />
-            </label>
             <button type="button" :title="order.project_name" :aria-pressed="selectedOrder?.id === order.id" class="order-pick" :class="{ current: selectedOrder?.id === order.id }" @click="selectedId = order.id">
               <strong>{{ order.project_name }}</strong>
-              <span>{{ order.order_number }}</span>
+              <span>{{ order.order_number_confirmed === false ? tx('订单号待管理员确认','Order number pending admin confirmation') : order.order_number }}</span>
               <span>{{ order.company }}</span>
               <small>{{ orderStatus(order.status) }} · {{ order.total ? `${order.currency || ""} ${order.total}` : tx("待计价", "Unpriced") }}</small>
             </button>
+            <label class="card-pick" @click.stop><input type="checkbox" :aria-label="tx('批量选择订单','Select order for batch')+' '+order.order_number" :checked="picked.includes(order.id)" @click.stop @change="toggleOrder(order.id)" /></label>
           </div>
         </div>
         <div v-if="pageCount > 1" class="list-pagination">
-          <button type="button" :disabled="listPage <= 0" @click="listPage--" :aria-label="tx('上一页订单','Previous order page')">← {{ tx('上页','Previous') }}</button>
-          <span>{{ tx('第','Page') }} {{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }} {{ tx('页','') }} · {{ Math.min(visibleOrders.length, Math.min(listPage,pageCount-1)*6+1) }}–{{ Math.min(visibleOrders.length,(Math.min(listPage,pageCount-1)+1)*6) }} / {{ visibleOrders.length }}</span>
-          <button type="button" :disabled="listPage >= pageCount - 1" @click="listPage++" :aria-label="tx('下一页订单','Next order page')">{{ tx('下页','Next') }} →</button>
+          <button type="button" :disabled="listPage <= 0" @click="listPage--" :aria-label="tx('上一页','Previous page')">‹</button>
+          <span>{{ Math.min(listPage + 1, pageCount) }} / {{ pageCount }}</span>
+          <button type="button" :disabled="listPage >= pageCount - 1" @click="listPage++" :aria-label="tx('下一页','Next page')">›</button>
         </div>
       </aside>
 
@@ -985,7 +1113,7 @@ async function loadOrderProviders(orderId: string) {
               <header class="order-header">
                 <div>
                   <h2>{{ selectedOrder.project_name }}</h2>
-                  <p class="order-identity"><strong>{{ selectedOrder.order_number }}</strong><span>{{ selectedOrder.company }}</span></p>
+                  <p class="order-identity"><strong>{{ selectedOrder.order_number }}</strong><span>{{ selectedOrder.company }}</span><span v-if="customerCode(selectedOrder)">{{ customerCode(selectedOrder) }}</span></p>
                 </div>
                 <div class="status-badges">
                   <span class="badge">{{ orderStatus(selectedOrder.status) }}</span>
@@ -994,48 +1122,79 @@ async function loadOrderProviders(orderId: string) {
                 </div>
               </header>
               <div class="order-meta">
-                <p><strong>{{ tx("施工地址", "Site") }}:</strong> {{ selectedOrder.site_address }}</p>
+                <p v-if="leadLabel(selectedOrder)"><strong>{{ tx("预计交期", "Lead time") }}:</strong> {{ leadLabel(selectedOrder) }}</p>
+                <p><strong>{{ tx("联系人", "Contact") }}:</strong> {{ selectedOrder.contact_name || "—" }} · {{ selectedOrder.phone || "—" }} · {{ selectedOrder.email || "—" }}</p>
+                <p><strong>{{ tx("公司地址", "Company address") }}:</strong> {{ selectedOrder.company_address || "—" }}</p>
+                <p><strong>{{ tx("施工地址", "Site") }}:</strong> {{ selectedOrder.site_address || "—" }}</p>
+                <p><strong>{{ tx("提交日期", "Submitted") }}:</strong> {{ quoteDate(selectedOrder.created_at) }}</p>
+                <p><strong>{{ tx("安装", "Installation") }}:</strong> {{ selectedOrder.installation_required ? tx("需要", "Required") : tx("不需要", "Not required") }}</p>
                 <p><strong>{{ tx("总价", "Total") }}:</strong> {{ selectedOrder.total ? `${selectedOrder.currency || ""} ${selectedOrder.total}` : tx("待计价", "Unpriced") }}</p>
                 <p v-if="selectedOrder.supplier_reference"><strong>{{ tx("供应商参考", "Supplier ref") }}:</strong> {{ selectedOrder.supplier_reference }}</p>
               </div>
               <div class="detail-navigation"><nav class="detail-tabs" aria-label="Project details">
-                <button type="button" :class="{active: detailSection === 'fulfilment'}" @click="detailSection = 'fulfilment'">{{ tx("明细与履约", "Lines & fulfilment") }}</button>
+                <button type="button" :class="{active: detailSection === 'order'}" @click="detailSection = 'order'">{{ tx("订单、报价与履约", "Order, quote & fulfilment") }}</button>
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
-                <button type="button" :class="{active: detailSection === 'adjustment'}" @click="detailSection = 'adjustment'">{{ tx("计价与审核", "Pricing & review") }}</button>
                 <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
                 <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
-              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered'" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
-<div v-show="detailSection === 'fulfilment'">              <h3>{{ tx('产品明细','Product lines') }}</h3>
-              <div class="actions"><button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'arrival')">{{ tx('填入全部未到数量','Fill all remaining arrivals') }}</button><button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" @click="fillRemaining(selectedOrder,'delivery')">{{ tx('填入全部待交付数量','Fill all ready deliveries') }}</button></div>
-              <div class="table-scroll"><table>
-                <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("订购", "Ordered") }}</th><th>{{ tx("累计到货", "Total arrived") }}</th><th>{{ tx("累计交付", "Total delivered") }}</th><th>{{ tx("本次到货", "This arrival") }}</th><th>{{ tx("本次交付", "This delivery") }}</th></tr></thead>
+              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered' || (selectedOrder.payment_status==='deposit_received' && selectedOrder.lines.every(line => line.arrived === line.quantity))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
+<div v-show="detailSection === 'order'">              <div class="section-title-row"><h3>{{ tx('产品明细与客户提交配置','Product details and customer-submitted configuration') }}</h3><button type="button" class="secondary" @click="openSheetPreview">{{ tx('预览整单','Preview whole order') }}</button></div>
+              <div class="table-scroll"><table class="quote-sheet">
+                <thead><tr>
+                  <th>{{ tx("窗位", "Window") }}</th><th>{{ tx("宽", "Width") }}</th><th>Drop</th><th>{{ tx("产品", "Product") }}</th>
+                  <th>{{ tx("开合", "Opening") }}</th><th>Panel Qty</th><th>Layout Code</th><th>VT Post</th><th>HT Post</th><th>Mid-Rail</th>
+                  <th>Frame</th><th>Louver Size</th><th>Colour</th><th>Control Rod</th><th>In/Out Fit</th><th>Special Request</th>
+                  <th>Discount</th><th>Final Price</th><th>{{ tx("附加项", "Add-ons") }}</th>
+                </tr></thead>
                 <tbody>
-                  <tr v-for="line in productPageLines" :key="line.id">
-                    <td>
-                      <strong>{{ line.window_name }}</strong>
-                      <small>{{ tx("系列", "Series") }} {{ line.product_id || "—" }} · {{ line.width_mm || "—" }}×{{ line.height_mm || "—" }} mm<span v-if="optionText(line)"> · {{ optionText(line) }}</span></small>
-                    </td>
-                    <td>{{ line.quantity }}</td>
-                    <td>{{ line.arrived }}</td>
-                    <td>{{ line.delivered }}</td>
-                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:arrival`]" type="number" min="0" step="1" @input="fulfilError=''" /></td>
-                    <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:delivery`]" type="number" min="0" step="1" @input="fulfilError=''" /></td>
+                  <tr v-for="line in selectedOrder.lines" :key="line.id">
+                    <td>{{ line.window_name || "—" }}</td>
+                    <td>{{ line.width_mm || "—" }}</td>
+                    <td>{{ line.height_mm || "—" }}</td>
+                    <td>{{ line.product_name || line.source_code || line.product_id || "—" }}</td>
+                    <td>{{ cell(line, "opening_style") }}</td>
+                    <td>{{ line.panel_count || "—" }}</td>
+                    <td>{{ cell(line, "layout_code") }}</td>
+                    <td>{{ cell(line, "vt_post") }}</td>
+                    <td>{{ cell(line, "ht_post") }}</td>
+                    <td>{{ cell(line, "midrail") }}</td>
+                    <td>{{ cell(line, "frame") }}</td>
+                    <td>{{ cell(line, "louver_size") }}</td>
+                    <td>{{ cell(line, "colour") }}</td>
+                    <td>{{ cell(line, "control_rod") }}</td>
+                    <td>{{ cell(line, "fitting") }}</td>
+                    <td>{{ cell(line, "special_request") }}</td>
+                    <td>{{ Number(line.discount) ? `${Number(line.discount) * 100}%` : "—" }}</td>
+                    <td>{{ quoteMoney(line.amount, selectedOrder.currency || "NZD") }}</td>
+                    <td>{{ addonCell(line) }}</td>
                   </tr>
                 </tbody>
               </table></div>
-              <p class="fulfil-hint">{{ tx('累计列显示已记录数量；右侧输入框只填本次新增的实际数量。提交成功后会清空输入框，累计数量会更新。','Totals show previously recorded quantities. Enter only this batch’s new quantities on the right; a successful submission clears the input and updates the totals.') }}</p>
-              <div v-if="productPageCount > 1" class="list-pagination product-pagination" :aria-label="tx('产品明细分页','Product line pages')"><button type="button" :disabled="productPage === 0" @click="productPage--" :aria-label="tx('上一页产品明细','Previous product lines')">← {{ tx('上页','Previous') }}</button><span>{{ tx('产品','Lines') }} {{ productPage * 4 + 1 }}–{{ Math.min((productPage + 1) * 4, selectedOrder.lines.length) }} / {{ selectedOrder.lines.length }} · {{ productPage + 1 }} / {{ productPageCount }}</span><button type="button" :disabled="productPage >= productPageCount - 1" @click="productPage++" :aria-label="tx('下一页产品明细','Next product lines')">{{ tx('下页','Next') }} →</button></div>
-
+              <p class="fulfil-hint">{{ tx('每一列对应 Wholesale Quote 的一个字段，没填的显示为“—”，方便看出缺项。到货与交付按整单记录。','Each column is one Wholesale Quote field. A blank stays as “—” so a missing item is visible. Arrival and delivery are recorded for the whole order.') }}</p>
+              <p class="hint">{{ tx('本报价 14 天内有效，确认和定金需书面确认。付款请用订单号作为参考。账户名 VCG Group Ltd，GST 139-745-388，ASB 12-3233-0714884-00。','This quotation is valid for 14 days. Confirmation and the deposit need to be in writing. Use the order number as the payment reference. Account name VCG Group Ltd, GST 139-745-388, ASB 12-3233-0714884-00.') }}</p>
+              <div v-if="selectedOrder.status==='pending_review' && selectedIsWholesale" class="wholesale-quote-summary">
+                <h3>{{ tx('批发报价汇总','Wholesale quote summary') }}</h3>
+                <dl class="quote-summary-grid">
+                  <div><dt>{{ tx('客户/联系人','Customer / contact') }}</dt><dd>{{ selectedOrder.company }} · {{ selectedOrder.contact_name || '—' }} · {{ selectedOrder.phone || '—' }} · {{ selectedOrder.email || '—' }}</dd></div>
+                  <div><dt>{{ tx('订单号 / 日期','Order / date') }}</dt><dd>{{ selectedOrder.order_number || '—' }} · {{ quoteDate(selectedOrder.created_at) }}</dd></div>
+                  <div><dt>{{ tx('公司地址','Company address') }}</dt><dd>{{ selectedOrder.company_address || '—' }}</dd></div>
+                  <div><dt>{{ tx('施工地址 / 安装','Site / installation') }}</dt><dd>{{ selectedOrder.site_address || '—' }} · {{ selectedOrder.installation_required ? tx('需要','Required') : tx('仅供货','Supply only') }}</dd></div>
+                  <div><dt>{{ tx('产品小计','Sub total') }}</dt><dd>{{ quoteMoney(selectedOrder.subtotal, selectedOrder.currency || 'NZD') }}</dd></div>
+                  <div><dt>{{ tx('安装费用','Installation') }}</dt><dd>{{ selectedOrder.installation_required ? quoteMoney(selectedOrder.installation, selectedOrder.currency || 'NZD') : tx('仅供货','Supply only') }}</dd></div>
+                  <div><dt>{{ tx('GST / 总额','GST / total') }}</dt><dd>{{ quoteMoney(selectedOrder.tax, selectedOrder.currency || 'NZD') }} · <strong>{{ quoteMoney(selectedOrder.total, selectedOrder.currency || 'NZD') }}</strong></dd></div>
+                  <div><dt>{{ tx('60% 定金 / 40% 尾款','60% deposit / 40% balance') }}</dt><dd>{{ quoteMoney(selectedOrder.deposit, selectedOrder.currency || 'NZD') }} · {{ quoteBalance(selectedOrder) }}</dd></div>
+                </dl>
+              </div>
               <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
               <div class="actions">
                 <button v-if="selectedOrder.status==='supplier_ordered'" type="button" class="secondary" :disabled="busy" @click="transitOne(selectedOrder.id)">{{ tx('标为在途','Mark in transit') }}</button>
-                <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("记录本批到货", "Record arrival") }}</button>
-                <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录本批交付", "Record delivery") }}</button>
+                <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("确认整单货物已到齐", "Confirm all goods arrived") }}</button>
+                <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy || selectedOrder.payment_status!=='paid' || !selectedOrder.lines.every(line=>line.arrived===line.quantity)" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录整单交付", "Record whole-order delivery") }}</button>
               </div>
+              <p v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered) && selectedOrder.payment_status!=='paid'" class="hint">{{ tx('尾款付清后才能记录交付。','Record delivery only after the balance is paid.') }}</p>
               <p v-if="fulfilError" class="fulfil-error" role="alert">{{ fulfilError }}</p>
 
 </div><div v-show="detailSection === 'supplier'">              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
-              <div class="provider-section">
+              <div v-if="orderProviderForm[selectedOrder.id]" class="provider-section">
                 <div class="form-row">
                   <label>{{ tx("选择供应商", "Select provider") }}
                     <select :value="orderProviderForm[selectedOrder.id].provider_id" @change="chooseProvider(selectedOrder.id,Number(($event.target as HTMLSelectElement).value))">
@@ -1054,33 +1213,64 @@ async function loadOrderProviders(orderId: string) {
                 </div>
                 <p class="hint" v-if="!providers.some(p=>p.active)">{{ tx('尚无已启用供应商；先在供应商页面确认并启用。','No active supplier yet. Confirm and activate one under Suppliers.') }}</p>
                 <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providers.some(p=>p.id===orderProviderForm[selectedOrder.id].provider_id && p.active)">{{ tx('原供应商已停用，请重新选择已启用的供应商。','The assigned supplier is inactive; choose an active supplier.') }}</p>
-                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !orderProviderForm[selectedOrder.id].template_id">{{ tx('该供应商还没有可用输出模板；可先下载未验证的基本草稿。','This supplier has no active export template yet; use the unverified basic draft for review.') }}</p>
+                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !orderProviderForm[selectedOrder.id].template_id">{{ tx('没有供应商模板时，定金确认后仍可下载供应商订单。','Without a supplier template, the supplier order can still be downloaded after the deposit is confirmed.') }}</p>
                 <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].template_id && !readySupplierExport(selectedOrder.id)">{{ tx('原输出模板已停用，请选择当前有效版本。','The assigned export template is inactive; choose a current revision.') }}</p>
                 <p class="hint" v-else>{{ tx('已自动选择可用模板；下载时会同时保存本单供应商分配。','An available template is selected automatically; downloading also saves this order’s supplier assignment.') }}</p>
+                <p v-if="selectedOrder.payment_status!=='deposit_received'" class="hint">{{ tx('定金确认后再导出给供应商。','Export the supplier file after the deposit is confirmed.') }}</p>
                 <div class="form-row">
                   <button v-if="readySupplierExport(selectedOrder.id)" type="button" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, orderProviderForm[selectedOrder.id].provider_id, false)">{{ tx("下载供应商订单 Excel（自动保存分配）", "Download supplier order Excel (saves assignment)") }}</button>
-                  <button v-else type="button" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx('下载订单 Excel 草稿（格式未验证）','Download draft order Excel (unverified format)') }}</button>
+                  <button v-else type="button" :disabled="busy || selectedOrder.status==='pending_review' || selectedOrder.payment_status!=='deposit_received'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx('下载供应商订单','Download supplier order') }}</button>
                   <details class="provider-advanced"><summary>{{ tx('其他文件','Other files') }}</summary><div class="form-row"><button v-if="orderProviderForm[selectedOrder.id].template_id" type="button" class="secondary" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx("基本模板草稿", "Basic draft") }}</button><button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button><button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job sheet") }}</button></div></details>
                 </div>
               </div>
-              <div v-if="selectedOrder.status==='accepted' && selectedOrder.payment_status==='deposit_received'" class="actions"><label>{{ tx('供应商参考号','Supplier reference') }}<input v-model="supplierRef[selectedOrder.id]" /></label><button type="button" :disabled="busy || !supplierRef[selectedOrder.id]" @click="supplier(selectedOrder)">{{ tx('记录供应商下单','Record supplier order') }}</button></div>
+              <div v-if="selectedOrder.status==='accepted' && selectedOrder.payment_status==='deposit_received'" class="actions"><button type="button" :disabled="busy" @click="supplier(selectedOrder)">{{ tx('标为已下单','Mark as ordered') }}</button></div>
 
-</div><div v-show="detailSection === 'adjustment'">
+</div><div v-show="detailSection === 'order'">
               <div class="pricing-basis"><h3>{{ tx('本单计价依据','Pricing applied to this order') }}</h3><p v-for="version in [...new Set(selectedOrder.lines.map(l=>l.rule_version).filter(Boolean))]" :key="version"><RouterLink :to="{path:'/crm/pricing',query:{version}}">{{ tx('定价版本','Pricing version') }} {{ version?.slice(0,12) }}</RouterLink></p><span v-if="selectedOrder.status !== 'pending_review'">{{ tx('审核后价格已冻结','Prices frozen after acceptance') }}</span></div>
+              <div v-if="selectedOrder.status === 'pending_review' && selectedOrder.order_number_confirmed === false" class="order-number-confirmation" role="alert">
+                <strong>{{ tx('先确认订单号，再确认接收报价','Confirm the order number before accepting this quote') }}</strong>
+                <p>{{ tx('系统已按客户类型自动生成订单号。确认前客户看不到；管理员可修改并保存。勾选确认后点击“确认接收”，订单接受和订单号确认会一起完成。', 'The system generated this number from the customer type. The customer cannot see it before confirmation. Admins may edit and save it. Check the confirmation box, then accept the quote to confirm both together.') }}</p>
+                <label>{{ tx('待确认订单号','Order number to confirm') }}<input v-model="selectedOrder.order_number" maxlength="200" /></label>
+                <button type="button" class="secondary" :disabled="busy" @click="saveOrderNumber(selectedOrder.id)">{{ tx('保存修改','Save number') }}</button>
+                <label class="number-confirm-check"><input v-model="orderNumberConfirmation[selectedOrder.id]" type="checkbox" />{{ tx('我已核对并确认此订单号；接受报价后该号码将显示给客户。','I have reviewed and confirm this order number; it will be shown to the customer after accepting the quote.') }}</label>
+              </div>
               <div v-if="selectedOrder.status === 'pending_review'" class="adjustment-section">
-                <h3>{{ tx("价格调整", "Price adjustment") }}</h3>
-                <div class="table-scroll"><table>
-                  <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("折扣比例", "Discount") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Install surcharge") }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="line in selectedOrder.lines" :key="line.id">
-                      <td>{{ line.window_name }}</td>
-                      <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:discount`]" type="number" min="0" max="1" step="0.01" /></td>
-                      <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:product_surcharge`]" type="number" min="0" step="0.01" /></td>
-                      <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:installation_surcharge`]" type="number" min="0" step="0.01" /></td>
-                    </tr>
-                  </tbody>
-                </table></div>
-                <div class="review-footer"><label>{{ tx("调整说明（仅改价时填写）", "Adjustment note (only when changing price)") }}<input v-model="adjustNote[selectedOrder.id]" /></label><button type="button" class="secondary" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存调整", "Save adjustment") }}</button><button type="button" :disabled="busy" @click="review(selectedOrder.id)">{{ tx('确认接收并生成定金草稿','Accept and create deposit draft') }}</button></div>
+                <template v-if="selectedIsWholesale">
+                <h3>{{ tx('价格调整与审核','Price adjustments & review') }}</h3>
+                <div class="wholesale-quote-summary">
+                  <p class="hint">{{ tx('付款请用订单号作为参考。账户名 VCG Group Ltd，GST 139-745-388，ASB 12-3233-0714884-00。逐窗配置已在本页上方展示。','Use the order number as the payment reference. Account name VCG Group Ltd, GST 139-745-388, ASB 12-3233-0714884-00. Window configuration is shown above on this page.') }}</p>
+                  <details class="quote-line-details">
+                    <summary>{{ tx('逐窗改价','Window price adjustments') }}</summary>
+                    <div class="table-scroll"><table>
+                      <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("折扣比例", "Discount") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Install surcharge") }}</th></tr></thead>
+                      <tbody>
+                        <tr v-for="line in selectedOrder.lines" :key="line.id">
+                          <td>{{ line.window_name }}</td>
+                          <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:discount`]" type="number" min="0" max="1" step="0.01" /></td>
+                          <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:product_surcharge`]" type="number" min="0" step="0.01" /></td>
+                          <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:installation_surcharge`]" type="number" min="0" step="0.01" /></td>
+                        </tr>
+                      </tbody>
+                    </table></div>
+                    <div class="review-footer"><label>{{ tx("调整说明（仅改价时填写）", "Adjustment note (only when changing price)") }}<input v-model="adjustNote[selectedOrder.id]" /></label><button type="button" class="secondary" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存调整", "Save adjustment") }}</button></div>
+                  </details>
+                  <div class="review-footer"><button type="button" :disabled="busy || (selectedOrder.order_number_confirmed === false && !orderNumberConfirmation[selectedOrder.id])" @click="review(selectedOrder.id)">{{ tx('确认订单号、接收报价并生成定金草稿','Confirm order number, accept quote and create deposit draft') }}</button></div>
+                </div>
+                </template>
+                <template v-else>
+                  <div class="table-scroll"><table>
+                    <thead><tr><th>{{ tx("窗户", "Window") }}</th><th>{{ tx("折扣比例", "Discount") }}</th><th>{{ tx("商品附加", "Product surcharge") }}</th><th>{{ tx("安装附加", "Install surcharge") }}</th></tr></thead>
+                    <tbody>
+                      <tr v-for="line in selectedOrder.lines" :key="line.id">
+                        <td>{{ line.window_name }}</td>
+                        <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:discount` ]" type="number" min="0" max="1" step="0.01" /></td>
+                        <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:product_surcharge` ]" type="number" min="0" step="0.01" /></td>
+                        <td><input v-model.number="batch[`${selectedOrder.id}:${line.id}:installation_surcharge` ]" type="number" min="0" step="0.01" /></td>
+                      </tr>
+                    </tbody>
+                  </table></div>
+                  <div class="review-footer"><label>{{ tx("调整说明（仅改价时填写）", "Adjustment note (only when changing price)") }}<input v-model="adjustNote[selectedOrder.id]" /></label><button type="button" class="secondary" :disabled="busy" @click="adjust(selectedOrder)">{{ tx("保存调整", "Save adjustment") }}</button><button type="button" :disabled="busy || (selectedOrder.order_number_confirmed === false && !orderNumberConfirmation[selectedOrder.id])" @click="review(selectedOrder.id)">{{ tx('确认订单号、接收报价并生成定金草稿','Confirm order number, accept quote and create deposit draft') }}</button></div>
+                </template>
               </div>
 
 </div><div v-show="detailSection === 'invoices'">              <div v-if="selectedOrder.invoices && selectedOrder.invoices.length">
@@ -1099,8 +1289,8 @@ async function loadOrderProviders(orderId: string) {
           </section>
 
           <section v-if="activeSection === 'pricing'" class="card section-card">
-            <h2>{{ tx("共享定价模板", "Shared pricing templates") }}</h2>
-            <p class="hint">{{ tx("在此统一管理价表。新版本影响后续计价，已审核订单保留原价。供应商导出格式在供应商模块单独管理。", "Manage shared pricing versions here. New versions affect future pricing; accepted orders retain their prices. Supplier export formats are managed under Suppliers.") }}</p>
+            <h2>{{ tx("定价知识库", "Pricing knowledge") }}</h2>
+            <p class="hint">{{ tx("维护价格事实、计价规则和来源依据。审核发布后影响新报价，已审核订单保留原价。供应商订单格式在供应商模块独立管理。", "Maintain price facts, calculation rules and their sources. Published versions affect new quotes; accepted orders keep their prices. Supplier order formats stay under Suppliers.") }}</p>
             <label v-if="admin">{{ tx('导入并启用新价表（影响后续计价）','Import & activate a price workbook (affects future pricing)') }}<input type="file" accept=".xlsm,.xlsx" :disabled="busy" @change="importTemplate" /></label>
             <p v-if="templateStatus" class="template-status">{{ templateStatus }}</p>
             <p v-if="!pricingVersions.length">{{ tx('尚未导入定价模板','No pricing workbook imported') }}</p>
@@ -1114,18 +1304,11 @@ async function loadOrderProviders(orderId: string) {
 
           <section v-if="activeSection === 'providers'" class="card section-card">
             <h2>{{ tx("供应商管理", "Provider management") }}</h2>
-            
-            <h3>{{ tx("创建供应商", "Create provider") }}</h3>
-            <form v-if="admin" @submit.prevent="createProvider" class="form-grid">
-              <label>{{ tx("供应商名称", "Provider name") }}<input v-model="providerForm.name" required /></label>
-              <label>{{ tx("联系邮箱", "Contact email") }}<input v-model="providerForm.contact_email" type="email" /></label>
-              <label>{{ tx("备注", "Notes") }}<input v-model="providerForm.notes" /></label>
-              <button :disabled="busy">{{ tx("创建", "Create") }}</button>
-            </form>
+            <p class="hint">{{ tx("先看已启用的供应商和它关联的订单。下载供应商订单仍在订单页，定金确认之后。", "Start with the active supplier and its orders. The supplier file is still downloaded from the order, after the deposit is confirmed.") }}</p>
 
-            <h3>{{ tx("现有供应商", "Existing providers") }}</h3>
+            <h3>{{ tx("已启用供应商", "Active suppliers") }}</h3>
             <div class="provider-list">
-              <div v-for="provider in providers" :key="provider.id" class="provider-card">
+              <div v-for="provider in providers.filter(item => item.active)" :key="provider.id" class="provider-card">
                 <div v-if="editingProvider?.id !== provider.id">
                   <h4>{{ provider.name }} <span :class="{ 'status-active': provider.active, 'status-inactive': !provider.active }">{{ provider.active ? tx("活跃", "Active") : tx("停用", "Inactive") }}</span></h4>
                   <p v-if="provider.contact_email"><strong>{{ tx("邮箱", "Email") }}:</strong> {{ provider.contact_email }}</p>
@@ -1145,10 +1328,45 @@ async function loadOrderProviders(orderId: string) {
                   </div>
                 </form>
               </div>
+              <p v-if="!providers.some(item => item.active)">{{ tx("还没有已启用的供应商。", "No active supplier yet.") }}</p>
             </div>
 
+            <h3>{{ tx("创建供应商", "Create provider") }}</h3>
+            <form v-if="admin" @submit.prevent="createProvider" class="form-grid">
+              <label>{{ tx("供应商名称", "Provider name") }}<input v-model="providerForm.name" required /></label>
+              <label>{{ tx("联系邮箱", "Contact email") }}<input v-model="providerForm.contact_email" type="email" /></label>
+              <label>{{ tx("备注", "Notes") }}<input v-model="providerForm.notes" /></label>
+              <button :disabled="busy">{{ tx("创建", "Create") }}</button>
+            </form>
+
+            <details>
+              <summary>{{ tx("停用的供应商", "Inactive suppliers") }}</summary>
+              <div class="provider-list">
+                <div v-for="provider in providers.filter(item => !item.active)" :key="provider.id" class="provider-card">
+                  <div v-if="editingProvider?.id !== provider.id">
+                    <h4>{{ provider.name }} <span class="status-inactive">{{ tx("停用", "Inactive") }}</span></h4>
+                    <p v-if="provider.contact_email"><strong>{{ tx("邮箱", "Email") }}:</strong> {{ provider.contact_email }}</p>
+                    <button v-if="admin" type="button" class="secondary" @click="startEditProvider(provider)">{{ tx("编辑", "Edit") }}</button>
+                  </div>
+                  <form v-else @submit.prevent="updateProvider" class="edit-form">
+                    <label>{{ tx("名称", "Name") }}<input v-model="editProviderForm.name" required /></label>
+                    <label>{{ tx("邮箱", "Email") }}<input v-model="editProviderForm.contact_email" type="email" /></label>
+                    <label>{{ tx("备注", "Notes") }}<input v-model="editProviderForm.notes" /></label>
+                    <label class="checkbox-label"><input type="checkbox" v-model="editProviderForm.active" /> {{ tx("活跃", "Active") }}</label>
+                    <div class="button-group">
+                      <button type="submit" :disabled="busy">{{ tx("保存", "Save") }}</button>
+                      <button type="button" class="secondary" @click="editingProvider = null">{{ tx("取消", "Cancel") }}</button>
+                    </div>
+                  </form>
+                </div>
+                <p v-if="!providers.some(item => !item.active)">{{ tx("没有停用的供应商。", "No inactive suppliers.") }}</p>
+              </div>
+            </details>
+
+            <details>
+              <summary>{{ tx("字段列映射（不改变当前下载的供应商订单）", "Column mapping (does not change the downloaded supplier order)") }}</summary>
+            <p class="hint">{{ tx("这里的列映射只作记录。订单页下载的供应商订单不读取这张表。ISWELL 原表另做。", "These column mappings are a record only. The supplier file downloaded from an order does not use this table. Filling the ISWELL workbook is separate.") }}</p>
             <h3>{{ tx("配置供应商输出模板", "Configure provider template") }}</h3>
-            <p class="hint">{{ tx("为每个供应商配置专用Excel模板，定义字段到列的映射关系。", "Configure custom Excel templates for each provider with field-to-column mappings.") }}</p>
             <form v-if="admin" @submit.prevent="createTemplate" class="template-form">
               <p v-if="templateForm.supersedes_id">{{ tx('正在创建新版本，历史模板不会修改','Creating a new revision; historical template stays unchanged') }} #{{ templateForm.supersedes_id }} <button type="button" @click="templateForm.supersedes_id=null">{{ tx('改为独立模板','Create a separate template') }}</button></p>
               <div class="form-grid">
@@ -1199,26 +1417,107 @@ async function loadOrderProviders(orderId: string) {
                 </details>
               </div>
             </div>
+            </details>
           </section>
 
           <section v-if="activeSection === 'settlement'" class="card section-card finance-workspace">
-            <header class="finance-header"><h2>{{ tx('账款与返利','Accounts & rebates') }}</h2><label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label></header>
-            <div class="finance-grid">
-              <div class="finance-panel"><div class="finance-panel-head"><h3>{{ tx('来源订单','Source orders') }}</h3><span>{{ tx('已选','Selected') }} {{ picked.length }}</span></div><div class="finance-list">
-                <div v-for="order in financeOrders" :key="order.id" class="finance-order"><label class="checkbox-label"><input type="checkbox" v-model="picked" :value="order.id" /><span>{{ order.order_number }} · {{ orderStatus(order.status) }}</span></label><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.project_name }}</RouterLink></div><p v-if="!financeOrders.length">{{ tx('此客户暂无订单','No orders for this customer') }}</p>
-              </div></div>
-              <div class="finance-panel"><div class="finance-panel-head"><h3>{{ tx('发票与收款','Invoices & receipts') }}</h3><span>{{ financeInvoices.length }}</span></div><div class="finance-list">
-                <div v-for="invoice in financeInvoices" :key="invoice.id" class="invoice"><label class="checkbox-label"><input type="checkbox" v-model="invoicePick" :value="invoice.id" />{{ invoiceLabel(invoice) }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }} · {{ mailStatus(invoice.status) }} · {{ invoice.payment_status === 'received' ? tx('已收','Received') : tx('未收','Unpaid') }}</label><p v-for="oid in invoice.order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><template v-if="invoice.kind==='balance'"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注','Receipt note')" /><button :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></template></div>
-                <p v-if="!financeInvoices.length" class="hint">{{ tx('此客户暂无发票','No invoices for this customer') }}</p>
-              </div><div class="finance-panel-foot"><button type="button" :disabled="busy || !invoicePick.length" @click="previewInvoiceMail">{{ tx('预览邮件','Preview email') }}</button><button :disabled="busy || !invoicePick.length" @click="sendSelectedInvoices">{{ emailMode==='demo' ? (emailEnabled ? tx('发送演示邮件（仅自己）','Send demo email to owner only') : tx('记录模拟发送（不投递）','Record demo send (no delivery)')) : tx('发送勾选发票','Send selected invoices') }}</button></div></div>
-              <div class="finance-panel finance-action-panel"><nav class="finance-pane-tabs" aria-label="Finance actions"><button type="button" :class="{active:financePane==='balance'}" @click="financePane='balance'">{{ tx('尾款','Balance') }}</button><button type="button" :class="{active:financePane==='rebates'}" @click="financePane='rebates'">{{ tx('返利','Rebates') }}</button><button type="button" :class="{active:financePane==='notifications'}" @click="financePane='notifications'">{{ tx('通知','Notices') }}</button></nav>
-                <div v-show="financePane==='balance'" class="finance-action-content"><h3>{{ tx('生成尾款草稿','Create balance draft') }}</h3><p class="hint">{{ tx('仅限同公司、同币种、全部交付且定金已收。金额扣除已保存定金。','Same company and currency, fully delivered with deposit received. Stored deposits are deducted.') }}</p><label>{{ tx('规则说明（按所选订单自动生成，可修改）','Rule note (generated from the selected orders; editable)') }}<textarea v-model="settlementEvidence" rows="4" /></label><p class="hint">{{ tx('生成的只是草稿发票，不会发给客户；检查后再到“发票”里单独点发送。','This only creates a draft invoice. Nothing is sent to the customer; review it, then send it separately from the invoice list.') }}</p><button type="button" :disabled="busy || !picked.length" @click="fillEvidence">{{ tx('按所选订单重新生成说明','Regenerate note from selected orders') }}</button></div>
-                <div v-show="financePane==='rebates'" class="finance-action-content"><h3>{{ tx('已确认返利','Confirmed rebates') }}</h3><p class="hint">{{ tx('只录入已确认月度金额；不自动推算返利。','Record only confirmed monthly amounts; rebate tiers are not inferred.') }}</p><div v-if="admin" class="form-grid"><label>{{ tx('年月','Month') }}<input v-model="rebateForm.month" placeholder="2026-10" /></label><label>{{ tx('金额','Amount') }}<input v-model="rebateForm.amount" inputmode="decimal" /></label><label class="finance-evidence">{{ tx('确认依据','Evidence') }}<input v-model="rebateForm.evidence" /></label></div><div class="finance-list"><div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocationLabel(allocation.invoice_id) }} · {{ allocation.amount }}</p></div></div></div>
-                <div v-show="financePane==='notifications'" class="finance-action-content"><h3>{{ tx('通知记录','Notifications') }}</h3><div class="finance-list"><div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ prettySubject(item.subject) }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div></div></div>
-                <div v-show="financePane==='balance'" class="finance-panel-foot"><button type="button" :disabled="busy || !picked.length" @click="settleSelected">{{ tx('生成尾款草稿','Create balance draft') }}</button></div>
-                <div v-show="financePane==='rebates' && admin" class="finance-panel-foot"><button type="button" :disabled="busy || !picked.length" @click="recordRebate">{{ tx('记入已确认返利','Record confirmed rebate') }}</button></div>
+            <header class="finance-header">
+              <div><h2>{{ tx('账款与返利','Accounts & rebates') }}</h2><p class="fin-sub">{{ financeTodoTotal ? tx(`还有 ${financeTodoTotal} 件事要处理，按 1 → 4 的顺序做。`, `${financeTodoTotal} items need action. Work through steps 1 → 4.`) : tx('没有待处理的账款，全部处理完了。', 'Nothing to do. All accounts are up to date.') }}</p></div>
+              <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[];rebatePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
+            </header>
+            <nav class="fin-steps" :aria-label="tx('账款步骤','Accounts steps')">
+              <button v-for="step in financeSteps" :key="step.key" type="button" class="fin-step" :class="{ idle: !step.count }" @click="scrollFinanceStep(step.key)"><span class="fin-no">{{ step.no }}</span><span class="fin-step-text"><strong>{{ step.title }}</strong><small>{{ step.count ? tx(`${step.count} 项待办`, `${step.count} to do`) : tx('无需处理', 'Nothing to do') }}</small></span></button>
+            </nav>
+
+            <section id="fin-deposit" class="fin-block" :class="{ clear: !financeQueues.depositDue.length }">
+              <header class="fin-block-head"><span class="fin-no">1</span><div><h3>{{ tx('确认定金到账','Confirm deposits') }}</h3><p>{{ tx('先把定金发票发给客户；客户付款后核实到账，再点「记录定金已收」。','Send the deposit invoice first; once the customer pays and the money has arrived, record the deposit.') }}</p></div><span class="fin-count">{{ financeQueues.depositDue.length }}</span></header>
+              <p v-if="!financeQueues.depositDue.length" class="fin-clear">✓ {{ tx('没有等待确认的定金','No deposits waiting') }}</p>
+              <ul v-else class="fin-rows">
+                <li v-for="order in financeQueues.depositDue" :key="order.id" class="fin-row">
+                  <div class="fin-row-main"><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.order_number }} · {{ order.project_name }}</RouterLink><small>{{ order.company }} · {{ tx('定金','Deposit') }} {{ depositInvoiceFor(order) ? `${depositInvoiceFor(order)!.currency} ${depositInvoiceFor(order)!.amount}` : (order.deposit ? `${order.currency || ''} ${order.deposit}` : '—') }}</small></div>
+                  <span class="fin-state" :class="depositInvoiceFor(order) && invoiceSent(depositInvoiceFor(order)!) ? 'wait' : 'todo'">{{ depositInvoiceFor(order) && invoiceSent(depositInvoiceFor(order)!) ? tx('已发发票，等客户付款','Invoice sent; waiting for payment') : tx('定金发票还没发','Deposit invoice not sent') }}</span>
+                  <div class="fin-row-actions">
+                    <template v-if="depositInvoiceFor(order) && !invoiceSent(depositInvoiceFor(order)!)"><button type="button" class="secondary" :disabled="busy" @click="previewOneInvoice(depositInvoiceFor(order)!)">{{ tx('预览邮件','Preview email') }}</button><button type="button" :disabled="busy" @click="sendOneInvoice(depositInvoiceFor(order)!)">{{ sendLabel }}</button></template>
+                    <button type="button" :class="{ secondary: depositInvoiceFor(order) && !invoiceSent(depositInvoiceFor(order)!) }" :disabled="busy" @click="deposit(order.id)">{{ tx('核实到账后记录定金已收','Record deposit after confirming receipt') }}</button>
+                  </div>
+                </li>
+              </ul>
+            </section>
+
+            <section id="fin-balance" class="fin-block" :class="{ clear: !financeQueues.balanceReady.length }">
+              <header class="fin-block-head"><span class="fin-no">2</span><div><h3>{{ tx('开尾款','Create balance invoices') }}</h3><p>{{ tx('整单到货且定金已收的订单可以开尾款。勾选同一客户、同一币种的订单，生成尾款草稿；草稿不会直接发给客户。','Orders with every line arrived and the deposit received can be invoiced. Tick orders from one customer and currency to create a balance draft; drafts are not sent automatically.') }}</p></div><span class="fin-count">{{ financeQueues.balanceReady.length }}</span></header>
+              <p v-if="!financeQueues.balanceReady.length" class="fin-clear">✓ {{ tx('目前没有可以开尾款的订单','No orders ready for a balance invoice') }}</p>
+              <template v-else>
+                <ul class="fin-rows">
+                  <li v-for="order in financeQueues.balanceReady" :key="order.id" class="fin-row">
+                    <label class="checkbox-label fin-check"><input type="checkbox" v-model="picked" :value="order.id" /><span class="fin-row-main"><strong>{{ order.order_number }} · {{ order.project_name }}</strong><small>{{ order.company }} · {{ tx('订单总额','Order total') }} {{ order.currency }} {{ order.total ?? '—' }}<template v-if="order.deposit"> · {{ tx('已收定金','Deposit received') }} {{ order.deposit }}</template></small></span></label>
+                    <span class="fin-state todo">{{ tx('可开尾款','Ready to invoice') }}</span>
+                    <div class="fin-row-actions"><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ tx('查看订单','View order') }}</RouterLink></div>
+                  </li>
+                </ul>
+                <div v-if="balancePicked.length" class="fin-compose">
+                  <label>{{ tx('规则说明（按所选订单自动生成，可修改）','Rule note (generated from the selected orders; editable)') }}<textarea v-model="settlementEvidence" rows="3" /></label>
+                  <div class="fin-row-actions"><button type="button" class="secondary" :disabled="busy" @click="fillEvidence">{{ tx('重新生成说明','Regenerate note') }}</button><button type="button" :disabled="busy" @click="settleReadyOrders">{{ tx(`生成尾款草稿（已选 ${balancePicked.length} 单）`, `Create balance draft (${balancePicked.length} selected)`) }}</button></div>
+                </div>
+                <p v-else class="hint">{{ tx('先勾选要开尾款的订单。','Tick the orders to invoice first.') }}</p>
+              </template>
+            </section>
+
+            <section id="fin-send" class="fin-block" :class="{ clear: !financeQueues.toSend.length }">
+              <header class="fin-block-head"><span class="fin-no">3</span><div><h3>{{ tx('发送发票','Send invoices') }}</h3><p>{{ tx('尾款草稿等还没发出的发票都在这里。可以先预览邮件，确认后发送。','Balance drafts and other unsent invoices. Preview the email, then send.') }}</p></div><span class="fin-count">{{ financeQueues.toSend.length }}</span></header>
+              <p v-if="!financeQueues.toSend.length" class="fin-clear">✓ {{ tx('没有待发送的发票','No invoices to send') }}</p>
+              <template v-else>
+                <ul class="fin-rows">
+                  <li v-for="invoice in financeQueues.toSend" :key="invoice.id" class="fin-row">
+                    <label class="checkbox-label fin-check"><input type="checkbox" v-model="invoicePick" :value="invoice.id" /><span class="fin-row-main"><strong>{{ invoiceLabel(invoice) }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }}</strong><small>{{ (invoice.order_ids || []).map(oid => `${orders.find(o=>o.id===oid)?.order_number ?? ''} · ${orders.find(o=>o.id===oid)?.project_name ?? ''}`).join(', ') }}</small></span></label>
+                    <span class="fin-state todo">{{ mailStatus(invoice.status) }}</span>
+                    <div class="fin-row-actions"><button type="button" class="secondary" :disabled="busy" @click="previewOneInvoice(invoice)">{{ tx('预览邮件','Preview email') }}</button><button type="button" :disabled="busy" @click="sendOneInvoice(invoice)">{{ sendLabel }}</button></div>
+                  </li>
+                </ul>
+                <div v-if="invoicePick.length > 1" class="fin-bulk"><span>{{ tx(`已勾选 ${invoicePick.length} 张`, `${invoicePick.length} selected`) }}</span><button type="button" :disabled="busy" @click="sendSelectedInvoices">{{ tx('一起发送（同一客户）','Send together (one customer)') }}</button></div>
+              </template>
+            </section>
+
+            <section id="fin-receipt" class="fin-block" :class="{ clear: !financeQueues.balanceDue.length }">
+              <header class="fin-block-head"><span class="fin-no">4</span><div><h3>{{ tx('确认尾款收款','Confirm balance receipts') }}</h3><p>{{ tx('尾款发票已发出，客户付款后在这里确认。尾款付清前不能提货或标完成。','Balance invoices that were sent. Confirm once paid; pick-up and completion stay blocked until then.') }}</p></div><span class="fin-count">{{ financeQueues.balanceDue.length }}</span></header>
+              <p v-if="!financeQueues.balanceDue.length" class="fin-clear">✓ {{ tx('没有等待收款的尾款','No balance payments waiting') }}</p>
+              <ul v-else class="fin-rows">
+                <li v-for="invoice in financeQueues.balanceDue" :key="invoice.id" class="fin-row">
+                  <div class="fin-row-main"><strong>{{ invoiceLabel(invoice) }} · {{ invoice.currency }} {{ invoice.amount }}</strong><small>{{ (invoice.order_ids || []).map(oid => `${orders.find(o=>o.id===oid)?.order_number ?? ''} · ${orders.find(o=>o.id===oid)?.project_name ?? ''}`).join(', ') }}</small></div>
+                  <span class="fin-state wait">{{ tx('已发出，等客户付款','Sent; waiting for payment') }}</span>
+                  <div class="fin-row-actions"><input v-model="receiptNote[invoice.id]" :placeholder="tx('收款备注（可选）','Receipt note (optional)')" /><button type="button" :disabled="busy" @click="markBalanceReceived(invoice)">{{ tx('确认尾款收款','Confirm balance receipt') }}</button></div>
+                </li>
+              </ul>
+            </section>
+
+            <details class="fin-more">
+              <summary>{{ tx('已完成','Done') }} <span>{{ financeQueues.done.length }}</span></summary>
+              <p v-if="!financeQueues.done.length" class="hint">{{ tx('还没有已收款的发票。','No paid invoices yet.') }}</p>
+              <ul v-else class="fin-rows compact"><li v-for="invoice in financeQueues.done" :key="invoice.id" class="fin-row"><div class="fin-row-main"><strong>{{ invoiceLabel(invoice) }} · {{ invoice.kind === 'deposit' ? tx('定金','Deposit') : tx('尾款','Balance') }} · {{ invoice.currency }} {{ invoice.amount }}</strong><small>{{ (invoice.order_ids || []).map(oid => orders.find(o=>o.id===oid)?.order_number ?? '').join(', ') }}</small></div><span class="fin-state ok">{{ tx('已收款','Paid') }}</span></li></ul>
+            </details>
+            <details class="fin-more">
+              <summary>{{ tx('暂时不用处理的订单','Orders with nothing to do now') }} <span>{{ financeQueues.waiting.length }}</span></summary>
+              <p v-if="!financeQueues.waiting.length" class="hint">{{ tx('没有。','None.') }}</p>
+              <ul v-else class="fin-rows compact"><li v-for="order in financeQueues.waiting" :key="order.id" class="fin-row"><div class="fin-row-main"><RouterLink :to="{path:'/crm/projects',query:{order:order.id}}">{{ order.order_number }} · {{ order.project_name }}</RouterLink><small>{{ order.company }}</small></div><span class="fin-state idle">{{ financeWaitingReason(order) }}</span></li></ul>
+            </details>
+            <details class="fin-more">
+              <summary>{{ tx('返利与通知记录','Rebates & notifications') }}</summary>
+              <nav class="fin-tabs" role="tablist"><button type="button" role="tab" :aria-selected="financePane==='rebates'" :class="{active:financePane==='rebates'}" @click="financePane='rebates'">{{ tx('返利','Rebates') }}</button><button type="button" role="tab" :aria-selected="financePane==='notifications'" :class="{active:financePane==='notifications'}" @click="financePane='notifications'">{{ tx('通知记录','Notifications') }}</button></nav>
+              <div v-if="financePane==='rebates'" class="fin-pane">
+                <p class="hint">{{ tx('只录入已确认的月度返利金额，系统不自动推算返利。','Record only confirmed monthly amounts; rebate tiers are not inferred.') }}</p>
+                <div v-if="admin" class="fin-rebate-form">
+                  <div class="form-grid"><label>{{ tx('年月','Month') }}<input v-model="rebateForm.month" placeholder="2026-10" /></label><label>{{ tx('金额','Amount') }}<input v-model="rebateForm.amount" inputmode="decimal" /></label><label class="finance-evidence">{{ tx('确认依据','Evidence') }}<input v-model="rebateForm.evidence" /></label></div>
+                  <fieldset class="fin-rebate-orders"><legend>{{ tx('来源订单（同一客户）','Source orders (one customer)') }}</legend><label v-for="order in financeOrders" :key="order.id" class="checkbox-label"><input type="checkbox" v-model="rebatePick" :value="order.id" /><span>{{ order.order_number }} · {{ order.project_name }} <small>{{ order.company }}</small></span></label></fieldset>
+                  <button type="button" :disabled="busy || !rebatePick.length" @click="recordRebateForPick">{{ tx('记入已确认返利','Record confirmed rebate') }}</button>
+                </div>
+                <p v-if="!rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer).length" class="hint">{{ tx('还没有返利记录。','No rebates recorded.') }}</p>
+                <div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocationLabel(allocation.invoice_id) }} · {{ allocation.amount }}</p></div>
               </div>
-            </div>
+              <div v-else class="fin-pane">
+                <p v-if="!notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer).length" class="hint">{{ tx('还没有通知记录。','No notifications yet.') }}</p>
+                <div v-for="item in notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer)" :key="item.id" class="notification-item"><span>{{ prettySubject(item.subject) }} · {{ mailStatus(item.status) }}</span><button v-if="item.status==='not_configured'" type="button" :disabled="busy" @click="retryNotice(item.id)">{{ tx('重试','Retry') }}</button></div>
+              </div>
+            </details>
           </section>
         </div>
       </div>
@@ -1243,6 +1542,74 @@ async function loadOrderProviders(orderId: string) {
           <footer class="mail-modal-foot">
             <button type="button" class="mail-btn primary" @click="openInvoicePdf">{{ tx('打开 PDF 附件','Open PDF attachment') }}</button>
             <button type="button" class="mail-btn" @click="closePreview">{{ tx('关闭','Close') }}</button>
+          </footer>
+        </section>
+      </dialog>
+    </Teleport>
+    <Teleport to="body">
+      <dialog v-if="selectedOrder" ref="sheetDialog" class="sheet-dialog" :aria-label="tx('整单明细预览','Whole-order preview')" @click="onSheetDialogClick">
+        <section class="sheet-card">
+          <header class="quote-doc-head">
+            <dl class="quote-party">
+              <div><dt>To</dt><dd>{{ selectedOrder.company || "—" }}</dd></div>
+              <div><dt>Order ID</dt><dd>{{ selectedOrder.project_name || selectedOrder.order_number || "—" }}</dd></div>
+              <div><dt>Mobile</dt><dd>{{ selectedOrder.phone || "—" }}</dd></div>
+              <div><dt>Address</dt><dd>{{ selectedOrder.company_address || "—" }}</dd></div>
+            </dl>
+            <div class="quote-mark" aria-hidden="true"><strong>VERA</strong><span>SHADING SOLUTIONS</span></div>
+            <div class="quote-title-block">
+              <button type="button" class="mail-x" :aria-label="tx('关闭预览','Close preview')" @click="closeSheetPreview">✕</button>
+              <p>QUOTE</p>
+              <small>Date: {{ quoteDate(selectedOrder.created_at) }}</small>
+            </div>
+          </header>
+          <div class="table-scroll quote-doc-scroll"><table class="quote-doc">
+            <thead><tr>
+              <th>#</th><th>Window Location</th><th>Width (mm)</th><th>Drop (mm)</th><th>Product</th>
+              <th>Opening</th><th>Panel Qty</th><th>Layout Code</th><th>VT Post</th><th>HT Post</th><th>Mid-Rail</th>
+              <th>Frame</th><th>Louver Size</th><th>Colour</th><th>Control Rod</th><th>In/Out Fit</th><th>Special Request</th><th>Final Price</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="(line, index) in selectedOrder.lines" :key="line.id">
+                <td>{{ index + 1 }}</td>
+                <td>{{ line.window_name || "—" }}</td>
+                <td>{{ line.width_mm || "—" }}</td>
+                <td>{{ line.height_mm || "—" }}</td>
+                <td>{{ line.product_name || line.source_code || line.product_id || "—" }}</td>
+                <td>{{ cell(line, "opening_style") }}</td>
+                <td>{{ line.panel_count || "—" }}</td>
+                <td>{{ cell(line, "layout_code") }}</td>
+                <td>{{ cell(line, "vt_post") }}</td>
+                <td>{{ cell(line, "ht_post") }}</td>
+                <td>{{ cell(line, "midrail") }}</td>
+                <td>{{ cell(line, "frame") }}</td>
+                <td>{{ cell(line, "louver_size") }}</td>
+                <td>{{ cell(line, "colour") }}</td>
+                <td>{{ cell(line, "control_rod") }}</td>
+                <td>{{ cell(line, "fitting") }}</td>
+                <td>{{ [cell(line, "special_request"), addonCell(line)].filter((part) => part !== "—").join(" · ") || "—" }}</td>
+                <td class="num">{{ quoteMoney(line.amount, selectedOrder.currency || "NZD") }}</td>
+              </tr>
+            </tbody>
+          </table></div>
+          <p class="quote-note">Note: This quotation is valid for 14 days. The confirmation will need to be in written via email, and deposit is required.</p>
+          <footer class="quote-doc-foot">
+            <section>
+              <h3>Payment Instruction</h3>
+              <dl>
+                <div><dt>Account Name</dt><dd>VCG Group Ltd</dd></div>
+                <div><dt>GST Number</dt><dd>139-745-388</dd></div>
+                <div><dt>Account Number</dt><dd>ASB 12-3233-0714884-00</dd></div>
+              </dl>
+              <p>Please use your Order Number as reference when you pay by online banking.</p>
+            </section>
+            <dl class="quote-totals">
+              <div><dt>Sub Total</dt><dd>{{ quoteMoney(selectedOrder.subtotal, selectedOrder.currency || "NZD") }}</dd></div>
+              <div><dt>Installation</dt><dd>{{ selectedOrder.installation_required ? quoteMoney(selectedOrder.installation, selectedOrder.currency || "NZD") : "Supply Only" }}</dd></div>
+              <div><dt>GST</dt><dd>{{ quoteMoney(selectedOrder.tax, selectedOrder.currency || "NZD") }}</dd></div>
+              <div class="grand"><dt>Total</dt><dd>{{ quoteMoney(selectedOrder.total, selectedOrder.currency || "NZD") }}</dd></div>
+              <div><dt>60% Deposit</dt><dd>{{ quoteMoney(selectedOrder.deposit, selectedOrder.currency || "NZD") }}</dd></div>
+            </dl>
           </footer>
         </section>
       </dialog>
@@ -1451,16 +1818,13 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .provider-section { border: 0; margin-top: 0; padding-top: 0; }
 @media(max-width:600px) { .desk .order-meta { grid-template-columns: 1fr; } }
 
-.list-pagination { display: flex; align-items: center; justify-content: space-between; padding-top: 12px; border-top: 1px solid #edf1ee; margin-top: 8px; color: #52615c; font-size: var(--fs-meta); line-height: var(--lh-meta); }
-.desk .list-pagination button { background: #fff; color: #315844; border-color: #dce5df; padding: 11px 10px; min-height: 44px; font-size: var(--fs-meta); line-height: var(--lh-meta); font-weight: var(--fw-body); }
+.list-pagination { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: nowrap; white-space: nowrap; padding-top: 12px; border-top: 1px solid #edf1ee; margin-top: 8px; color: #52615c; font-size: var(--fs-meta); line-height: var(--lh-meta); }
+.desk .list-pagination button { background: #fff; color: #315844; border-color: #dce5df; width: 44px; min-width: 44px; max-width: 44px; height: 44px; padding: 0; flex: 0 0 44px; font-size: 18px; line-height: 1; font-weight: var(--fw-body); }
 
 .mobile-project-picker { display: none; }
 @media(max-width:600px) {
   .mobile-project-picker { display: grid; gap: 10px; }
-  .order-list:not(.mobile-expanded) .order-scroll, .order-list:not(.mobile-expanded) .list-pagination { display: none; }
-  .order-list:not(.mobile-expanded) .filter-row { display: none; }
   .order-list .filter-row { margin: 0; }
-  .desk .mobile-project-picker button { justify-self: start; font-size: var(--fs-meta); line-height: var(--lh-meta); padding: 11px 10px; min-height: 44px; font-weight: var(--fw-body); }
 }
 
 /* Keep navigation hover colors independent of primary action buttons. */
@@ -1485,7 +1849,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 
 /* Dense, consistent task workspaces. Controls retain a 44px target. */
 .desk .card{padding:16px}
-@media(min-width:1001px){.desk:not(.global-workspace) .workspace-grid{grid-template-columns:285px minmax(0,1fr);gap:12px}.desk .order-list{max-height:none;overflow:visible}.desk .order-scroll{overflow-y:visible;min-height:0}}
+@media(min-width:1001px){.desk:not(.global-workspace) .workspace-grid{grid-template-columns:236px minmax(0,1fr);gap:12px;align-items:stretch}.desk .order-list,.desk:not(.global-workspace) .detail-panel{max-height:none;overflow:visible;min-height:calc(100dvh - 92px)}.desk .order-scroll{overflow-y:visible;min-height:0;gap:8px}.desk:not(.global-workspace) .section-content{display:flex;flex-direction:column}.desk:not(.global-workspace) .section-card{flex:1}}
 .desk .order-list{gap:6px}
 .desk .order-row{position:relative;display:block;min-width:0}
 .desk .pick-mark{position:absolute;z-index:2;left:2px;top:0;bottom:0;width:44px;min-width:44px;padding:0;display:flex;align-items:center;justify-content:center}
@@ -1504,6 +1868,13 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .table-scroll{margin:6px 0}
 .desk th,.desk td{padding:6px 8px}
 .desk .adjustment-section{margin-top:8px;padding-top:8px}
+.order-number-confirmation{margin:12px 0;padding:14px;border:2px solid #c47b17;border-left-width:7px;border-radius:8px;background:#fff6e5;color:#3f2b10}
+.order-number-confirmation>strong{display:block;font-size:16px}
+.order-number-confirmation p{margin:6px 0 10px;line-height:1.5}
+.order-number-confirmation>label:not(.number-confirm-check){display:grid;gap:5px;max-width:520px;margin:8px 0}
+.order-number-confirmation input:not([type=checkbox]){min-height:40px;padding:8px;border:1px solid #cbb98e;border-radius:6px}
+.order-number-confirmation .number-confirm-check{display:flex;align-items:flex-start;gap:9px;margin-top:10px;font-weight:600}
+.order-number-confirmation .number-confirm-check input{width:20px;height:20px;flex:0 0 20px}
 .desk .adjustment-section .table-scroll{max-height:min(205px,calc(100vh - 540px));overflow-y:auto}
 .desk .adjustment-section thead th{position:sticky;top:0;z-index:1}
 .review-footer{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin-top:8px}
@@ -1560,6 +1931,59 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .pricing-basis h3{margin:0;padding:0;border:0}
 .pricing-basis p{margin:0}
 .pricing-basis span{color:#53655d;font-size:12px}
+.desk .order-row{position:relative}
+.desk .order-row > label.card-pick{position:absolute;left:6px;top:7px;z-index:2;display:inline-flex;width:14px;height:14px;min-width:0;min-height:0;margin:0;padding:0}
+.desk .card-pick input[type="checkbox"]{width:14px!important;height:14px!important;min-width:14px!important;max-width:14px!important;min-height:14px!important;flex:0 0 14px!important;margin:0!important;padding:0!important;accent-color:#237356}
+.desk .order-list{padding:14px 12px}
+.desk .order-pick{padding:6px 8px 6px 24px;min-height:0;row-gap:0}
+.section-title-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.section-title-row h3{margin:0}
+.sheet-dialog{padding:0;border:0;background:transparent;width:min(1280px,calc(100vw - 24px));max-width:none;max-height:none;color:#1b2421}
+.sheet-dialog:not([open]){display:none}
+.sheet-dialog::backdrop{background:rgba(16,28,22,.55)}
+.sheet-card{background:#f7f4ee;border-radius:18px;max-height:calc(100vh - 24px);overflow:auto;padding:18px 20px 16px}
+.quote-doc-head{display:grid;grid-template-columns:minmax(180px,1fr) auto minmax(160px,1fr);align-items:center;gap:16px;margin-bottom:12px}
+.quote-party{display:grid;gap:2px;margin:0}
+.quote-party div{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}
+.quote-party dt{color:#6b6258;font-size:11px}
+.quote-party dd{margin:0;font-weight:600;overflow-wrap:anywhere}
+.quote-mark{display:flex;flex-direction:column;align-items:center;justify-content:center;width:148px;height:64px;border:2px solid #1b2421;border-radius:40px;background:#fff}
+.quote-mark strong{font-size:22px;letter-spacing:.18em;line-height:1}
+.quote-mark span{font-size:8px;letter-spacing:.16em}
+.quote-title-block{justify-self:end;text-align:right}
+.quote-title-block p{margin:8px 0 0;font-size:28px;letter-spacing:.14em;line-height:1}
+.quote-title-block small{color:#6b6258}
+.quote-doc-scroll{background:#fff;border:1px solid #e4ddd2;border-radius:12px;overflow-x:auto;max-width:100%}
+.quote-doc{width:max-content;min-width:100%;border-collapse:collapse;font-size:11px}
+.quote-doc th{position:sticky;top:0;background:#1f3d32;color:#fff;font-weight:600;text-align:left;padding:6px 7px;white-space:nowrap}
+.quote-doc td{padding:4px 7px;border-top:1px solid #efe8de;white-space:nowrap;background:#fff}
+.quote-doc tbody tr:nth-child(even) td{background:#fbf8f3}
+.quote-doc td.num{text-align:right;font-variant-numeric:tabular-nums}
+.quote-note{margin:10px 0;padding:8px 10px;background:#fff;border-left:3px solid #1f3d32;font-size:12px}
+.quote-doc-foot{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(220px,.8fr);gap:16px;align-items:start}
+.quote-doc-foot h3{margin:0 0 6px;font-size:13px}
+.quote-doc-foot section{background:#fff;border-radius:12px;padding:12px 14px}
+.quote-doc-foot dl{margin:0}
+.quote-doc-foot section div{display:grid;grid-template-columns:120px minmax(0,1fr);gap:6px;margin-top:4px}
+.quote-doc-foot dt{color:#6b6258;font-size:11px}
+.quote-doc-foot dd,.quote-doc-foot p{margin:4px 0 0;font-size:13px}
+.quote-totals{background:#1f3d32;color:#fff;border-radius:12px;padding:12px 14px}
+.quote-totals div{display:flex;justify-content:space-between;gap:12px;margin-top:4px}
+.quote-totals dt{color:#d7e4dc}
+.quote-totals dd{margin:0;font-variant-numeric:tabular-nums}
+.quote-totals .grand{margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.25);font-size:16px;font-weight:700}
+@media(max-width:800px){.quote-doc-head,.quote-doc-foot{grid-template-columns:minmax(0,1fr)}.quote-title-block,.quote-mark{justify-self:start}}
+.quote-sheet th,.quote-sheet td{white-space:nowrap;vertical-align:top}
+.quote-sheet td:last-child{white-space:normal;min-width:140px}
+.wholesale-quote-summary{margin-top:10px;padding:12px;border:1px solid #dce5df;border-radius:8px;background:#f8faf9}
+.wholesale-quote-summary h4{margin:0 0 10px}
+.quote-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 16px;margin:0}
+.quote-summary-grid div{min-width:0}
+.quote-summary-grid dt{font-size:12px;color:#52615c}
+.quote-summary-grid dd{margin:2px 0 0;overflow-wrap:anywhere;font-weight:600}
+.quote-line-details{margin-top:12px;border-top:1px solid #dce5df;padding-top:10px}
+.quote-line-details summary{cursor:pointer;font-weight:600;min-height:36px}
+@media(max-width:700px){.quote-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .mail-dialog { padding: 0; border: 0; background: transparent; max-width: none; max-height: none; width: min(900px, calc(100% - 48px)); height: min(860px, calc(100% - 48px)); overflow: visible; color: inherit; }
 .mail-dialog:not([open]) { display: none; }
@@ -1586,5 +2010,78 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
   .mail-meta { grid-template-columns: minmax(0, 1fr); }
   .mail-modal-foot { position: sticky; bottom: 0; }
   .mail-modal-foot .mail-btn { flex: 1; }
+}
+
+/* Accounts page: numbered work queues (to do / waiting / done). */
+.fin-sub { margin: 4px 0 0; color: #52635a; font-size: 13px; }
+.fin-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 4px 0 16px; }
+.desk .fin-step { display: flex; align-items: center; justify-content: flex-start; gap: 10px; min-height: 60px; padding: 10px 12px; text-align: left; background: transparent; color: #17462f; border: 1px solid #dce5df; border-left: 4px solid #0f6e5c; border-radius: 12px; font-weight: 400; }
+.desk .fin-step.idle { border-color: #e5eae6; border-left-color: #cbd8cf; color: #52635a; }
+.desk .fin-step:hover:not(:disabled), .desk .fin-step:focus-visible, .desk .fin-step:active { background: #f2f7f3; border-color: #bfd1c5; border-left-color: #0f6e5c; color: #17462f; }
+.desk .fin-step.idle:hover:not(:disabled), .desk .fin-step.idle:focus-visible, .desk .fin-step.idle:active { background: #f7f9f7; border-color: #d5ded8; border-left-color: #b9c8be; color: #52635a; }
+.fin-step-text { display: grid; gap: 2px; min-width: 0; }
+.fin-step-text strong { font-size: 14px; }
+.fin-step-text small { font-size: 12px; }
+.fin-step:not(.idle) .fin-step-text small { color: #8a3b2c; font-weight: 600; }
+.fin-no { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; background: #17523a; color: #fff; font-size: 13px; font-weight: 600; }
+.fin-step.idle .fin-no, .fin-block.clear .fin-no { background: #dce5df; color: #52635a; }
+.fin-block { border: 1px solid #dce5df; border-radius: 8px; background: #fff; padding: 14px 16px; margin-bottom: 12px; scroll-margin-top: 16px; }
+.fin-block:not(.clear) { border-color: #9fbfab; }
+.fin-block.clear { background: #fafbf9; padding-top: 10px; padding-bottom: 10px; }
+.fin-block-head { display: flex; align-items: flex-start; gap: 12px; }
+.fin-block-head > div { flex: 1; min-width: 0; }
+.desk .fin-block-head h3 { margin: 0; padding: 0; border: 0; font-size: 15px; }
+.fin-block-head p { margin: 2px 0 0; color: #52635a; font-size: 13px; line-height: 1.5; }
+.fin-block.clear .fin-block-head p { display: none; }
+.fin-count { flex: none; min-width: 28px; padding: 2px 8px; border-radius: 12px; background: #fbefec; color: #8a3b2c; text-align: center; font-size: 13px; font-weight: 600; }
+.fin-block.clear .fin-count { background: #edf0ec; color: #52635a; }
+.fin-clear { margin: 6px 0 0 38px; color: #52635a; font-size: 13px; }
+.fin-block.clear .fin-clear { margin-top: 0; }
+.fin-rows { list-style: none; margin: 10px 0 0; padding: 0; }
+.fin-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 14px; align-items: center; padding: 10px 0; border-top: 1px solid #edf0ec; }
+.fin-rows.compact .fin-row { grid-template-columns: minmax(0, 1fr) auto; padding: 8px 0; }
+.fin-row-main { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.fin-row-main small { color: #52635a; font-size: 12px; }
+.fin-row-main a, .fin-row-actions a { color: #17523a; }
+.desk .fin-check { min-height: 0; align-items: flex-start; }
+.desk .fin-check input[type=checkbox] { margin-top: 2px; }
+.fin-state { justify-self: start; padding: 3px 10px; border-radius: 4px; font-size: 12px; white-space: nowrap; background: #f5f6f2; color: #3d4a44; }
+.fin-state.todo { background: #fbefec; color: #8a3b2c; }
+.fin-state.wait { background: #fdf5e3; color: #7a5a17; }
+.fin-state.ok { background: #e6f2ea; color: #17523a; }
+.fin-state.idle { background: #f5f6f2; color: #52635a; }
+.fin-row-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+.desk .fin-row-actions button { min-height: 36px; padding: 6px 12px; font-size: 13px; }
+.fin-row-actions input { width: 180px; min-height: 36px; }
+.fin-compose { display: grid; gap: 8px; margin-top: 10px; padding: 12px; background: #f6f9f6; border-radius: 6px; }
+.fin-compose .fin-row-actions { justify-content: flex-start; }
+.fin-bulk { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 8px; font-size: 13px; color: #52635a; }
+.fin-more { border: 1px solid #dce5df; border-radius: 8px; background: #fff; padding: 0 16px; margin-bottom: 10px; }
+.fin-more > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; color: #315844; }
+.fin-more > summary span { padding: 1px 8px; border-radius: 10px; background: #edf0ec; color: #52635a; font-size: 12px; font-weight: 500; }
+.fin-more[open] { padding-bottom: 12px; }
+.fin-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e4eae5; margin-bottom: 10px; }
+.desk .fin-tabs button { min-height: 38px; padding: 0 14px; background: transparent; color: #52635a; border: 0; border-bottom: 2px solid transparent; font-weight: 500; }
+.desk .fin-tabs button.active { color: #17462f; border-bottom-color: #17523a; font-weight: 600; }
+.desk .fin-tabs button:hover:not(:disabled) { background: #f3f6f4; color: #17462f; border-color: transparent; border-bottom-color: #9fbfab; }
+.desk .fin-tabs button.active:hover:not(:disabled) { border-bottom-color: #17523a; }
+.fin-pane { display: grid; gap: 10px; }
+.fin-rebate-form { display: grid; gap: 10px; padding: 12px; background: #f6f9f6; border-radius: 6px; }
+.fin-rebate-form .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.fin-rebate-form .finance-evidence { grid-column: 1 / -1; }
+.fin-rebate-orders { border: 0; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 220px; overflow-y: auto; }
+.fin-rebate-orders legend { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.desk .fin-rebate-orders .checkbox-label { min-height: 34px; }
+.fin-rebate-orders small { color: #52635a; }
+.fin-rebate-form > button { justify-self: start; }
+@media (max-width: 1100px) { .fin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) {
+  .fin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .desk .fin-step { min-height: 48px; padding: 8px; gap: 8px; }
+  .fin-row { grid-template-columns: minmax(0, 1fr); }
+  .fin-row-actions { justify-content: flex-start; }
+  .fin-row-actions input { width: 100%; }
+  .fin-rebate-form .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .fin-clear, .fin-block.clear .fin-clear { margin-left: 0; margin-top: 6px; }
 }
 </style>
