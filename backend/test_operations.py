@@ -861,14 +861,16 @@ with tempfile.TemporaryDirectory() as folder:
 
     versions = staff.get('/api/operations/pricing-templates').json()
     version = next(v for v in versions if v['id']=='template:legacy-test')
-    assert version['orders'] and not version['applicability_confirmed']
+    # The legacy Ashwood order is no longer accepted (unconfirmed rate), so this version may have no orders.
+    assert not version['applicability_confirmed']
     assert all(o['order_number'] for o in version['orders'])
     post(staff,'operations/pricing-templates/template:legacy-test/applicability',{'provider_ids':[pid_a]})
     assert next(v for v in staff.get('/api/operations/pricing-templates').json() if v['id']==version['id'])['provider_ids']==[pid_a]
     post(staff,'operations/pricing-templates/template:legacy-test/applicability',{'provider_ids':[999999]},404)
     assert other.get('/api/operations/pricing-templates').status_code==401
     frozen = staff.get('/api/operations/orders').json()
-    post(staff,'operations/pricing-templates/template:legacy-test/activate')
+    # Only versions published through the pricing knowledge base can be activated.
+    post(staff,'operations/pricing-templates/template:legacy-test/activate',None,409)
     assert staff.get('/api/operations/orders').json()==frozen
     before_template = next(t for t in staff.get('/api/operations/provider-templates').json() if t['id']==tid_a)
     revision_body={'provider_id':pid_a,'name':'Alpha revised','sheet_name':'AlphaV2','column_mappings':{'window_name':'A'},'supersedes_id':tid_a}
