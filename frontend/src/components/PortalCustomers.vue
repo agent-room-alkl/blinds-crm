@@ -16,6 +16,7 @@ interface PortalCustomer {
   customer_code?: string | null;
   customer_type?: CustomerType | null;
   created_at?: string;
+  portal_login?: "active" | "disabled";
 }
 
 const { locale } = useI18n();
@@ -32,6 +33,26 @@ const notice = ref("");
 const typeOf = (row: PortalCustomer): CustomerType => row.customer_type || "wholesale";
 const missingCode = (row: PortalCustomer) => typeOf(row) === "wholesale" && !(row.customer_code || "").trim();
 const typeLabel = (kind: CustomerType) => (kind === "retail" ? tx("零售", "Retail") : tx("批发", "Wholesale"));
+// Logins switched off by the production migration carry portal_login: "disabled" until an admin opens them again.
+const loginActive = (row: PortalCustomer) => row.portal_login !== "disabled";
+const loginForm = reactive({ username: "", password: "" });
+const loginSaving = ref(false);
+async function savePortalLogin() {
+  if (selected.value == null) return;
+  error.value = "";
+  notice.value = "";
+  loginSaving.value = true;
+  try {
+    await request(`operations/customers/${selected.value}/portal-login`, { username: loginForm.username.trim(), password: loginForm.password });
+    loginForm.password = "";
+    notice.value = tx("门户登录已保存。之前的登录会话已失效，请把新的账号和密码告诉客户。", "Portal login saved. Earlier sessions were signed out; share the new username and password with the customer.");
+    await load();
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    loginSaving.value = false;
+  }
+}
 
 const search = ref("");
 const typeFilter = ref<"all" | CustomerType>("all");
@@ -117,6 +138,7 @@ function fillDraft(row: PortalCustomer) {
 
 async function choose(row: PortalCustomer) {
   selected.value = row.customer_id;
+  Object.assign(loginForm, { username: row.username, password: "" });
   creating.value = false;
   editing.value = false;
   detailTab.value = "profile";
@@ -209,7 +231,7 @@ async function save() {
         <p v-else-if="!filteredRows.length" class="hint">{{ tx("没有匹配的客户。", "No matching customers.") }}</p>
         <button v-for="row in shownRows" :key="row.customer_id" type="button" class="customer-row" :aria-pressed="selected === row.customer_id" @click="choose(row)">
           <span class="row-top"><strong>{{ row.company }}</strong><span class="tag" :class="typeOf(row)">{{ typeLabel(typeOf(row)) }}<template v-if="row.customer_code"> · {{ row.customer_code }}</template></span></span>
-          <small>{{ row.contact_name }} · {{ row.username }}</small>
+          <small>{{ row.contact_name }} · {{ loginActive(row) ? row.username : tx("门户未开通", "Portal not open") }}</small>
           <small v-if="missingCode(row)" class="warn-text">{{ tx("缺批发代码，无法下单", "No wholesale code — cannot order") }}</small>
         </button>
         <div v-if="customerPages > 1" class="customer-pagination">
@@ -231,7 +253,8 @@ async function save() {
               <div class="tags">
                 <span class="tag" :class="typeOf(current)">{{ typeLabel(typeOf(current)) }}<template v-if="!current.customer_type"> · {{ tx("未设置，按批发处理", "not set, treated as wholesale") }}</template></span>
                 <span v-if="current.customer_code" class="tag code">{{ tx("代码", "Code") }} {{ current.customer_code }}</span>
-                <span class="tag portal">{{ tx("门户已开通", "Portal active") }} · {{ current.username }}</span>
+                <span v-if="loginActive(current)" class="tag portal">{{ tx("门户已开通", "Portal active") }} · {{ current.username }}</span>
+                <span v-else class="tag off">{{ tx("门户未开通", "Portal not open") }}</span>
               </div>
             </div>
           </header>
@@ -275,10 +298,19 @@ async function save() {
           <section v-if="detailTab === 'account'" class="panel">
             <dl class="facts">
               <div><dt>{{ tx("登录账号", "Username") }}</dt><dd>{{ current.username }}</dd></div>
-              <div><dt>{{ tx("状态", "Status") }}</dt><dd>{{ tx("已开通", "Active") }}</dd></div>
-              <div v-if="current.created_at"><dt>{{ tx("开通时间", "Opened") }}</dt><dd>{{ current.created_at.slice(0, 10) }}</dd></div>
+              <div><dt>{{ tx("状态", "Status") }}</dt><dd :class="{ 'warn-text': !loginActive(current) }">{{ loginActive(current) ? tx("已开通", "Active") : tx("未开通，客户暂时不能登录", "Not open; the customer cannot sign in") }}</dd></div>
+              <div v-if="current.created_at"><dt>{{ tx("建档时间", "Created") }}</dt><dd>{{ current.created_at.slice(0, 10) }}</dd></div>
             </dl>
             <p class="hint">{{ tx("每个客户一个登录账号、一个联系人。现有密码不显示。", "One login and one contact per customer. Existing passwords are never displayed.") }}</p>
+            <form v-if="admin" class="login-form" @submit.prevent="savePortalLogin">
+              <h4>{{ loginActive(current) ? tx("重置门户登录", "Reset portal login") : tx("开通门户登录", "Open portal login") }}</h4>
+              <div class="form-grid">
+                <label>{{ tx("登录账号", "Username") }}<input v-model="loginForm.username" required minlength="3" maxlength="100" pattern="[A-Za-z0-9_.@-]+" autocomplete="off" /></label>
+                <label>{{ tx("新密码（至少 8 位）", "New password (8+ characters)") }}<input v-model="loginForm.password" type="password" required minlength="8" autocomplete="new-password" /></label>
+              </div>
+              <p class="hint">{{ tx("保存后客户之前的登录会话会立即失效。密码不会再显示，请自己记下并告诉客户。", "Saving signs the customer out of earlier sessions. The password is not shown again; note it and share it with the customer.") }}</p>
+              <div class="actions"><button type="submit" :disabled="loginSaving">{{ loginActive(current) ? tx("保存新密码", "Save new password") : tx("开通登录", "Open login") }}</button></div>
+            </form>
           </section>
 
           <section v-if="['orders','finance'].includes(detailTab)" class="panel">
@@ -386,6 +418,9 @@ legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
 .tag.retail { background: #f6ecdf; color: #6b4a1f; }
 .tag.code { background: #edf4ef; color: #17523a; }
 .tag.portal { background: #f5f6f2; color: #3d4a44; }
+.tag.off { background: #fbefec; color: #8a3b2c; }
+.login-form { display: grid; gap: 10px; margin-top: 4px; padding-top: 14px; border-top: 1px solid #edf0ec; }
+.login-form h4 { margin: 0; }
 .customer-pagination { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 4px; }
 .customer-pagination button { min-width: 44px; padding: 0 12px; }
 
