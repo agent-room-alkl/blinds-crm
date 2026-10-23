@@ -101,6 +101,7 @@ const LOUVER_SIZES = computed(() => currentProduct.value?.configuration_schema?.
 const structureFields = computed(() => (currentProduct.value?.configuration_schema || []).filter((f: any) => !['colour', 'louver_size', 'fitting'].includes(f.key)));
 const fittingChoices = computed(() => currentProduct.value?.configuration_schema?.find((f: any) => f.key === 'fitting')?.choices || []);
 const eligibleAddons = computed(() => (props.addons || []).filter((addon) => !addon.exclude?.includes(currentProduct.value?.source_code || "")));
+const excludedAddonKeys = computed(() => (props.addons || []).filter((addon) => addon.exclude?.includes(currentProduct.value?.source_code || "")).map((addon) => addon.key));
 const windowAddons = computed(() => eligibleAddons.value.filter((addon) => addon.key !== "extra_installation"));
 const extraInstall = computed(() => eligibleAddons.value.find((addon) => addon.key === "extra_installation"));
 
@@ -150,6 +151,14 @@ function markConfigured() {
   const w = currentWindow.value;
   if (!availableColors.value.includes(w.options.colour) && availableColors.value.length === 1) {
     updateWindow({ options: { ...w.options, colour: availableColors.value[0] } });
+    return;
+  }
+  // A series switch hides add-ons the new series excludes; drop them so they are not quoted.
+  const hidden = excludedAddonKeys.value.filter((key) => key in w.options);
+  if (hidden.length) {
+    const options = { ...w.options };
+    for (const key of hidden) delete options[key];
+    updateWindow({ options });
     return;
   }
   const isValid = Boolean(

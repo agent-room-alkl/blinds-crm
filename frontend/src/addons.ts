@@ -16,25 +16,26 @@ export interface Addon {
   choices: AddonChoice[];
 }
 
+// Labels for saved orders: amounts are left out because the priced text comes from the published catalog.
 export const ADDONS: Addon[] = [
   { key: "tracked_bifold", label_zh: "轨道对开", label_en: "Tracked bifold", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$350/件", label_en: "Yes, +$350 each" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "tracked_sliding", label_zh: "轨道推拉", label_en: "Tracked sliding", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$400/件", label_en: "Yes, +$400 each" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "stained_colour", label_zh: "染色", label_en: "Stained colour", exclude: ["Shutters_PVC", "Shutters_PVC_Eco", "Shutters_Pinewood"], choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$20/㎡", label_en: "Yes, +$20/sqm" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "stainless_hinges", label_zh: "不锈钢合页", label_en: "Stainless hinges", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$10/㎡", label_en: "Yes, +$10/sqm" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "hidden_hinges", label_zh: "隐藏合页", label_en: "Hidden hinges", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$40/㎡", label_en: "Yes, +$40/sqm" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "hidden_tilt_rod", label_zh: "隐藏拉杆", label_en: "Hidden tilt rod", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$40/㎡", label_en: "Yes, +$40/sqm" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "tier_on_tier", label_zh: "上下分段", label_en: "Tier on tier", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+10%", label_en: "Yes, +10%" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "double_closure", label_zh: "双闭合", label_en: "Double closure", exclude: ["Shutters_PVC", "Shutters_PVC_Eco"], choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$35/㎡", label_en: "Yes, +$35/sqm" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "shaped_cutout", label_zh: "异形/法式门开孔", label_en: "Shaped / French door cut out", choices: [
-    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要，+$300/件", label_en: "Yes, +$300 each" }] },
+    { value: "no", label_zh: "不要", label_en: "No" }, { value: "yes", label_zh: "要", label_en: "Yes" }] },
   { key: "extra_installation", label_zh: "额外安装", label_en: "Extra installation", choices: [
     { value: "none", label_zh: "无", label_en: "None" },
     { value: "concrete", label_zh: "水泥墙", label_en: "Concrete wall" },

@@ -129,9 +129,10 @@ def deposit_amount(total, rate=DEPOSIT_RATE):
 
 def prepare_knowledge_manifest(manifest):
     """Return a detached editable copy with the current VERA commercial rules."""
-    from addons import ADDONS, ORDER_INSTALLATION_MINIMUM, PANEL_INSTALLATION
+    from addons import ADDONS, ORDER_INSTALLATION_MINIMUM, PANEL_INSTALLATION, with_price_labels
     value = json.loads(json.dumps(manifest))
     value.setdefault('addons', json.loads(json.dumps(ADDONS)))
+    with_price_labels(value['addons'])
     value.setdefault('installation_per_panel', str(PANEL_INSTALLATION))
     value.setdefault('minimum_installation', str(ORDER_INSTALLATION_MINIMUM))
     value.setdefault('order_minimum_area', '1')
@@ -1470,6 +1471,8 @@ def register(app, s):
             put(c,'pricing_knowledge_draft',draft)
         return draft
 
+    # The CRM request helper only sends GET/POST, so saving a draft accepts both verbs.
+    @app.post('/api/operations/pricing-knowledge/drafts/{did}')
     @app.put('/api/operations/pricing-knowledge/drafts/{did}')
     def edit_pricing_knowledge_draft(did:str,body:PricingKnowledgeDraftEdit,actor=Depends(s.require_admin)):
         with s.db() as c:
