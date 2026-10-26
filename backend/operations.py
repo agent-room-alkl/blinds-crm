@@ -67,9 +67,9 @@ DELUXE_SCHEMA = [
         'key': 'opening_style',
         'label_zh': '开合方式',
         'label_en': 'Opening style',
-        'choices': [],
+        'choices': ['Hinged', 'Tracked Bifold', 'Tracked Sliding'],
         'required': False,
-        'type': 'text'
+        'type': 'select'
     },
     {
         'key': 'layout_code',
@@ -141,6 +141,9 @@ def prepare_knowledge_manifest(manifest):
     value.setdefault('tax_basis', 'GST included in total')
     value.setdefault('knowledge_sources', [])
     value.setdefault('knowledge_facts', [])
+    from excel_rules import with_opening_styles
+    for rule in value.get('products', []):
+        with_opening_styles(rule.get('schema'))
     rules = {rule.get('source_code'): rule for rule in value.get('products', [])}
     basswood = rules.get('Shutters_Basswood')
     if basswood and 'VERA_Ashwood_provisional' not in rules:
@@ -454,6 +457,13 @@ def migrate(c):
             # Preserve these fields from the original row
             # portal_only, sample, warranty_years, content_source, id stay unchanged
             
+            c.execute('UPDATE products SET data=? WHERE id=?', (json.dumps(product, ensure_ascii=False), row['id']))
+
+    # Opening style used to be free text; give stored products the V5 choices (idempotent).
+    from excel_rules import with_opening_styles
+    for row in c.execute('SELECT id, data FROM products').fetchall():
+        product = json.loads(row['data'])
+        if with_opening_styles(product.get('configuration_schema')):
             c.execute('UPDATE products SET data=? WHERE id=?', (json.dumps(product, ensure_ascii=False), row['id']))
 
 

@@ -115,7 +115,7 @@ with tempfile.TemporaryDirectory() as folder:
         'fitting': 'In Fit',
         'frame': 'L-frame',
         'control_rod': 'Centre',
-        'opening_style': 'Bi-fold',
+        'opening_style': 'Tracked Bifold',
         'layout_code': 'TT',
         'vt_post': '1',
         'ht_post': '0',
