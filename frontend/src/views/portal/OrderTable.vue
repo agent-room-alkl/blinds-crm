@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { portalRequest, portalSession } from "../../portal-api";
 import { describeConfiguredAddons, type Addon } from "../../addons";
+import { Copy, SlidersHorizontal, Trash2 } from "lucide-vue-next";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => locale.value === "zh" ? zh : en;
@@ -45,6 +46,26 @@ function setAddon(window: any, key: string, value: string) {
   if (!value || value === "no" || value === "none") delete window.options[key];
   else window.options[key] = value;
 }
+// Short labels for the add-ons a row has picked; the full choice text is in the dialog.
+function addonChips(window: any) {
+  return availableAddons(window).flatMap(a => {
+    const value = window.options[a.key];
+    if (!value || value === "no" || value === "none") return [];
+    const label = locale.value === "zh" ? a.label_zh : a.label_en;
+    if (value === "yes") return [label];
+    const choice = a.choices.find(c => c.value === value);
+    return [choice ? `${label}: ${locale.value === "zh" ? choice.label_zh : choice.label_en}` : label];
+  });
+}
+// One native modal <dialog> edits the add-ons of whichever row opened it.
+const addonDialog = ref<HTMLDialogElement | null>(null);
+const addonTarget = ref<{ window: any; index: number } | null>(null);
+async function openAddons(window: any, index: number) {
+  addonTarget.value = { window, index };
+  await nextTick();
+  addonDialog.value?.showModal();
+}
+function onAddonDialogClick(event: MouseEvent) { if (event.target === addonDialog.value) addonDialog.value?.close(); }
 function fieldLabel(f: any) { return locale.value === "zh" ? f.label_zh : f.label_en; }
 function productLabel(p: any) { return locale.value === "zh" ? p.name_zh : p.name_en; }
 function newWindow(): any {
@@ -164,11 +185,18 @@ load();
               <td><input v-model="w.options.control_rod" /></td>
               <td><select v-model="w.options.fitting"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><input v-model="w.options.special_request" /></td>
-              <td class="addons-cell"><label v-for="a in availableAddons(w)" :key="a.key"><span>{{ locale==='zh'?a.label_zh:a.label_en }}</span><select :value="w.options[a.key] || (a.key==='extra_installation'?'none':'no')" @change="setAddon(w,a.key,($event.target as HTMLSelectElement).value)"><option v-for="choice in a.choices" :key="choice.value" :value="choice.value">{{ locale==='zh'?choice.label_zh:choice.label_en }}</option></select></label></td>
-              <td class="row-actions"><button type="button" :title="tx('复制此行','Copy row')" @click="copyWindow(w)">⧉</button><button type="button" :title="tx('删除此行','Delete row')" @click="removeWindow(index)">×</button></td>
+              <td class="addons-cell"><button type="button" class="addons-trigger" :title="describeConfiguredAddons(w.options, locale, availableAddons(w)).join(' · ') || undefined" @click="openAddons(w, index)"><SlidersHorizontal :size="14" aria-hidden="true" />{{ addonChips(w).length ? tx(`附加项 · ${addonChips(w).length}`, `Add-ons · ${addonChips(w).length}`) : tx('添加附加项', 'Add add-ons') }}</button><span v-for="chip in addonChips(w)" :key="chip" class="addon-chip">{{ chip }}</span></td>
+              <td class="row-actions"><button type="button" :title="tx('复制此行','Copy row')" @click="copyWindow(w)"><Copy :size="14" aria-hidden="true" />{{ tx('复制','Copy') }}</button><button type="button" class="row-delete" :title="tx('删除此行','Delete row')" @click="removeWindow(index)"><Trash2 :size="14" aria-hidden="true" />{{ tx('删除','Delete') }}</button></td>
             </tr>
           </tbody>
         </table>
+        <dialog ref="addonDialog" class="addon-dialog" :aria-label="tx('附加项','Add-ons')" @close="addonTarget = null" @click="onAddonDialogClick">
+          <form v-if="addonTarget" method="dialog">
+            <header><div><strong>{{ tx("附加项", "Add-ons") }}</strong><span>{{ tx(`第 ${addonTarget.index + 1} 行`, `Row ${addonTarget.index + 1}`) }}<template v-if="addonTarget.window.window_name"> · {{ addonTarget.window.window_name }}</template></span></div></header>
+            <label v-for="a in availableAddons(addonTarget.window)" :key="a.key"><span>{{ locale==='zh'?a.label_zh:a.label_en }}</span><select :value="addonTarget.window.options[a.key] || (a.key==='extra_installation'?'none':'no')" @change="setAddon(addonTarget.window,a.key,($event.target as HTMLSelectElement).value)"><option v-for="choice in a.choices" :key="choice.value" :value="choice.value">{{ locale==='zh'?choice.label_zh:choice.label_en }}</option></select></label>
+            <footer><button type="submit" class="add-row">{{ tx("完成", "Done") }}</button></footer>
+          </form>
+        </dialog>
       </div>
       <p class="table-note">{{ tx("这是网页订单输入表格，字段会按所选产品系列显示并校验。价格由系统根据已发布的价格规则计算。", "This is an online order-entry table. Fields are validated for the selected series, and prices are calculated from the published pricing rules.") }}</p>
       <div v-if="error" class="error-box" role="alert">{{ error }}</div>
@@ -178,6 +206,6 @@ load();
 </template>
 
 <style scoped>
-.excel-order{max-width:100%;color:var(--ink,#1b2421)}.table-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:22px}.eyebrow{margin:0 0 5px;color:var(--cord);font-size:11px;font-weight:700;letter-spacing:.12em}.table-heading h1{margin:0;font-size:26px}.table-heading p{margin:6px 0;color:#62716b}.heading-actions{display:flex;align-items:center;gap:12px}.saved{font-size:12px;color:#62716b;white-space:nowrap}.switch-button,.add-row,.submit-button{min-height:42px;padding:9px 15px;border-radius:5px;font-weight:650;cursor:pointer}.switch-button{border:1px solid #9aac9f;background:#fff;color:#29493d}.order-fields{display:grid;grid-template-columns:1fr 2fr auto;gap:14px;align-items:end;padding:16px;background:#f3f6f3;border:1px solid #dbe4dd;border-radius:8px;margin-bottom:22px}.order-fields label{display:grid;gap:6px;font-size:12px;font-weight:650}.order-fields input:not([type=checkbox]){width:100%;height:40px;box-sizing:border-box;padding:8px 10px;border:1px solid #ccd7cf;border-radius:4px;font:inherit;font-weight:400;background:white}.install-check{display:flex!important;align-items:center;gap:8px;min-height:40px;white-space:nowrap}.sheet-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.sheet-title h2{margin:0;font-size:18px}.sheet-title p{margin:4px 0;color:#718078;font-size:12px}.add-row,.submit-button{border:0;background:var(--cord,#0f6e5c);color:white}.table-wrap{width:100%;overflow:auto;border:1px solid #d7e0d9;border-radius:7px;background:#fff}.table-wrap table{border-collapse:separate;border-spacing:0;min-width:2060px;width:100%;font-size:12px}.table-wrap th{position:sticky;top:0;z-index:1;background:#edf2ee;color:#2c3f35;text-align:left;white-space:nowrap;font-size:11px}.table-wrap td,.table-wrap th{padding:8px 7px;border-right:1px solid #e4eae5;border-bottom:1px solid #e4eae5;vertical-align:top}.table-wrap td input,.table-wrap td select{width:105px;height:34px;box-sizing:border-box;padding:5px 7px;border:1px solid #d0dad2;border-radius:4px;background:#fff;font:inherit}.table-wrap td:nth-child(2) input{width:150px}.table-wrap td:nth-child(3) select{width:145px}.row-num{position:sticky;left:0;z-index:2;min-width:26px;text-align:center;background:#f5f7f5}.table-wrap td.row-num{z-index:0}.addons-cell{min-width:210px}.addons-cell label{display:grid;grid-template-columns:95px 1fr;gap:5px;align-items:center;margin-bottom:5px;font-size:10px}.addons-cell label select{width:100%!important}.row-actions{white-space:nowrap}.row-actions button{width:30px;height:30px;margin-right:3px;border:1px solid #d4ddd6;border-radius:4px;background:#fff;cursor:pointer;font-size:17px}.table-note{font-size:12px;color:#65736c;margin:9px 0 22px}.error-box{padding:12px 14px;margin:14px 0;background:#fff0ed;color:#8f3425;border-radius:6px}.footer-actions{display:flex;justify-content:space-between;padding-top:16px;border-top:1px solid #dce4dd}.submit-button:disabled{opacity:.55;cursor:not-allowed}.notice{padding:18px;color:#65736c}
+.excel-order{max-width:100%;color:var(--ink,#1b2421)}.table-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:22px}.eyebrow{margin:0 0 5px;color:var(--cord);font-size:11px;font-weight:700;letter-spacing:.12em}.table-heading h1{margin:0;font-size:26px}.table-heading p{margin:6px 0;color:#62716b}.heading-actions{display:flex;align-items:center;gap:12px}.saved{font-size:12px;color:#62716b;white-space:nowrap}.switch-button,.add-row,.submit-button{min-height:42px;padding:9px 15px;border-radius:5px;font-weight:650;cursor:pointer}.switch-button{border:1px solid #9aac9f;background:#fff;color:#29493d}.order-fields{display:grid;grid-template-columns:1fr 2fr auto;gap:14px;align-items:end;padding:16px;background:#f3f6f3;border:1px solid #dbe4dd;border-radius:8px;margin-bottom:22px}.order-fields label{display:grid;gap:6px;font-size:12px;font-weight:650}.order-fields input:not([type=checkbox]){width:100%;height:40px;box-sizing:border-box;padding:8px 10px;border:1px solid #ccd7cf;border-radius:4px;font:inherit;font-weight:400;background:white}.install-check{display:flex!important;align-items:center;gap:8px;min-height:40px;white-space:nowrap}.sheet-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.sheet-title h2{margin:0;font-size:18px}.sheet-title p{margin:4px 0;color:#718078;font-size:12px}.add-row,.submit-button{border:0;background:var(--cord,#0f6e5c);color:white}.table-wrap{width:100%;overflow:auto;border:1px solid #d7e0d9;border-radius:7px;background:#fff}.table-wrap table{border-collapse:separate;border-spacing:0;min-width:2060px;width:100%;font-size:12px}.table-wrap th{position:sticky;top:0;z-index:1;background:#edf2ee;color:#2c3f35;text-align:left;white-space:nowrap;font-size:11px}.table-wrap td,.table-wrap th{padding:8px 7px;border-right:1px solid #e4eae5;border-bottom:1px solid #e4eae5;vertical-align:top}.table-wrap td input,.table-wrap td select{width:105px;height:34px;box-sizing:border-box;padding:5px 7px;border:1px solid #d0dad2;border-radius:4px;background:#fff;font:inherit}.table-wrap td:nth-child(2) input{width:150px}.table-wrap td:nth-child(3) select{width:145px}.row-num{position:sticky;left:0;z-index:2;min-width:26px;text-align:center;background:#f5f7f5}.table-wrap td.row-num{z-index:0}.addons-cell{min-width:150px;max-width:220px}.addons-trigger{display:inline-flex;align-items:center;gap:6px;min-height:34px;height:34px;padding:0 10px;border:1px dashed #a9b8ad;border-radius:4px;background:#fff;color:#29493d;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.addons-trigger:hover{border-color:var(--cord,#0f6e5c);background:#f2f7f4}.addon-chip{display:inline-block;margin:5px 4px 0 0;padding:2px 7px;border-radius:999px;background:#e7f0eb;color:#29493d;font-size:11px;line-height:1.5}.addon-dialog{width:min(440px,calc(100vw - 32px));padding:0;border:0;border-radius:8px;box-shadow:0 18px 50px rgba(20,35,30,.25)}.addon-dialog::backdrop{background:rgba(20,30,26,.35)}.addon-dialog form{padding:20px 22px}.addon-dialog header{margin-bottom:14px}.addon-dialog header strong{display:block;font-size:17px}.addon-dialog header span{font-size:12px;color:#62716b}.addon-dialog label{display:grid;grid-template-columns:1fr 170px;gap:12px;align-items:center;padding:4px 0;border-bottom:1px solid #edf1ee;font-size:13px}.addon-dialog select{min-height:0;height:34px;padding:5px 7px;border:1px solid #d0dad2;border-radius:4px;background:#fff;font:inherit}.addon-dialog footer{display:flex;justify-content:flex-end;margin-top:16px}.row-actions{white-space:nowrap}.row-actions button{display:inline-flex;align-items:center;gap:5px;min-height:30px;height:30px;padding:0 9px;margin-right:4px;border:1px solid #c5d0c8;border-radius:4px;background:#fff;color:#29493d;cursor:pointer;font-size:12px;font-weight:600}.row-actions button:hover{border-color:var(--cord,#0f6e5c);background:#f2f7f4}.row-actions .row-delete{color:#9b3a32}.row-actions .row-delete:hover{border-color:#c4655c;background:#fbf1ef}.table-note{font-size:12px;color:#65736c;margin:9px 0 22px}.error-box{padding:12px 14px;margin:14px 0;background:#fff0ed;color:#8f3425;border-radius:6px}.footer-actions{display:flex;justify-content:space-between;padding-top:16px;border-top:1px solid #dce4dd}.submit-button:disabled{opacity:.55;cursor:not-allowed}.notice{padding:18px;color:#65736c}
 @media(max-width:760px){.table-heading{display:block}.heading-actions{justify-content:space-between;margin-top:12px}.order-fields{grid-template-columns:1fr}.install-check{min-height:28px}.sheet-title{align-items:flex-start}.table-wrap table{min-width:1980px}}
 </style>
