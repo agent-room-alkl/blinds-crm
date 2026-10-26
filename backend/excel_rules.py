@@ -121,6 +121,20 @@ def named_values(sheets, names, name, numeric_values=False):
     return rows
 
 
+# The V5 price list prices shutters by these three opening styles.
+OPENING_STYLES = ['Hinged', 'Tracked Bifold', 'Tracked Sliding']
+
+
+def with_opening_styles(schema):
+    """Turn a free-text opening style field (older imports) into the V5 select, in place."""
+    changed = False
+    for field in schema or []:
+        if field.get('key') == 'opening_style' and field.get('choices') != OPENING_STYLES:
+            field.update(choices=list(OPENING_STYLES), type='select')
+            changed = True
+    return changed
+
+
 def parse_template(raw):
     sheets, names = workbook(raw)
     if not {'Product Listing', 'Pricing', 'Order', 'In Put'} <= sheets.keys():
@@ -156,7 +170,7 @@ def parse_template(raw):
             vals = [str(v) for row in named_values(sheets, names, code+suffix) for v in row if v not in (None, '')]
             choices[key] = vals
         fields = [schema(k, v, bool(v)) for k, v in choices.items()]
-        fields += [schema(k) for k in (['opening_style','layout_code','vt_post','ht_post','midrail'] if shutter else ['control_side'])]
+        fields += [schema(k, OPENING_STYLES if k == 'opening_style' else ()) for k in (['opening_style','layout_code','vt_post','ht_post','midrail'] if shutter else ['control_side'])]
         fit = [v for row in named_values(sheets, names, 'Fitting') for v in row if v]
         fields += [schema('fitting', fit, bool(fit)), schema('special_request')]
         install_row = next((row for row in range(491,515) if pricing.get('A'+str(row), {}).get('value') == code), None)

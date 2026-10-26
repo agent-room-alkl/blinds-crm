@@ -26,6 +26,9 @@ function fieldsFor(window: any) { return schemaFields(window.product_id).filter(
 function colorChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "colour")?.choices || []; }
 function louverChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "louver_size")?.choices || []; }
 function fittingChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "fitting")?.choices || []; }
+function choicesFor(window: any, key: string): string[] { return schemaFields(window.product_id).find((f: any) => f.key === key)?.choices || []; }
+// Select fields that start on their first choice, so a new row only needs a name and sizes.
+const DEFAULTED_FIELDS = ["opening_style", "frame", "louver_size", "colour", "control_rod", "fitting"];
 function availableAddons(window: any) { return addons.value.filter(a => !a.exclude?.includes(product(window.product_id)?.source_code || "")); }
 function onSeriesChange(window: any) {
   const allowed = new Map<string, any>(schemaFields(window.product_id).map((field: any) => [field.key, field]));
@@ -37,7 +40,7 @@ function onSeriesChange(window: any) {
     else if (!field && !addons.value.some(a => a.key === key)) delete window.options[key];
   }
   const fields = schemaFields(window.product_id);
-  for (const key of ["colour", "louver_size", "fitting"]) {
+  for (const key of DEFAULTED_FIELDS) {
     const field = fields.find((item: any) => item.key === key);
     if (field?.choices?.length && !field.choices.includes(window.options[key])) window.options[key] = field.choices[0];
   }
@@ -71,12 +74,10 @@ function productLabel(p: any) { return locale.value === "zh" ? p.name_zh : p.nam
 function newWindow(): any {
   const first = shutterProducts.value[0];
   const options: Record<string,string> = {};
-  const colour = first?.configuration_schema?.find((f:any) => f.key === "colour")?.choices?.[0];
-  const louver = first?.configuration_schema?.find((f:any) => f.key === "louver_size")?.choices?.[0];
-  if (colour) options.colour = colour;
-  if (louver) options.louver_size = louver;
-  const fitting = first?.configuration_schema?.find((f:any) => f.key === "fitting")?.choices?.[0];
-  if (fitting) options.fitting = fitting;
+  for (const key of DEFAULTED_FIELDS) {
+    const choice = first?.configuration_schema?.find((f:any) => f.key === key)?.choices?.[0];
+    if (choice) options[key] = choice;
+  }
   return { id: crypto.randomUUID(), window_name: "", product_id: first?.id || "", width_mm: "", height_mm: "", quantity: 1, panel_count: 1, options };
 }
 function addWindow() { draft.windows.push(newWindow()); }
@@ -107,6 +108,7 @@ async function load() {
       const parsed = JSON.parse(saved);
       Object.assign(draft, parsed);
       if (!Array.isArray(draft.windows)) draft.windows = [];
+      draft.windows.forEach(onSeriesChange); // fill fields older drafts left blank
       lastSaved.value = parsed.saved_at ? new Date(parsed.saved_at).toLocaleTimeString() : "";
     }
     if (!draft.windows.length) addWindow();
@@ -165,7 +167,7 @@ load();
       <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("必填列标有 *。表格可横向滚动。", "Required fields are marked *. Scroll horizontally to see all columns.") }}</p></div><button type="button" class="add-row" @click="addWindow">＋ {{ tx("添加一行", "Add Row") }}</button></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("高 / Drop (mm)", "Height / Drop (mm)") }} *</th><th>{{ tx("产品系列", "Product Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }}</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }}</th><th>{{ tx("安装尺寸", "Fitting") }}</th><th>{{ tx("特殊要求", "Special Request") }}</th><th>{{ tx("附加项", "Add-ons") }}</th><th>{{ tx("操作", "Actions") }}</th></tr></thead>
+          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("高 / Drop (mm)", "Height / Drop (mm)") }} *</th><th>{{ tx("产品系列", "Product Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }} *</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }} *</th><th>{{ tx("安装尺寸", "Fitting") }} *</th><th>{{ tx("特殊要求", "Special Request") }}</th><th>{{ tx("附加项", "Add-ons") }}</th><th>{{ tx("操作", "Actions") }}</th></tr></thead>
           <tbody>
             <tr v-for="(w,index) in draft.windows" :key="w.id">
               <td class="row-num">{{ index+1 }}</td>
@@ -173,16 +175,16 @@ load();
               <td><input v-model="w.width_mm" type="number" min="1" inputmode="decimal" /></td>
               <td><input v-model="w.height_mm" type="number" min="1" inputmode="decimal" /></td>
               <td><select v-model.number="w.product_id" @change="onSeriesChange(w)"><option value="">{{ tx("选择系列", "Select") }}</option><option v-for="p in shutterProducts" :key="p.id" :value="p.id">{{ productLabel(p) }}</option></select></td>
-              <td><input v-model="w.options.opening_style" /></td>
+              <td><select v-if="choicesFor(w,'opening_style').length" v-model="w.options.opening_style"><option v-for="v in choicesFor(w,'opening_style')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.opening_style" /></td>
               <td><input v-model.number="w.panel_count" type="number" min="1" /></td>
               <td><input v-model="w.options.layout_code" /></td>
               <td><input v-model="w.options.vt_post" /></td>
               <td><input v-model="w.options.ht_post" /></td>
               <td><input v-model="w.options.midrail" /></td>
-              <td><select v-if="schemaFields(w.product_id).find((f:any)=>f.key==='frame')?.choices?.length" v-model="w.options.frame"><option value="">—</option><option v-for="v in schemaFields(w.product_id).find((f:any)=>f.key==='frame').choices" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" /></td>
+              <td><select v-if="choicesFor(w,'frame').length" v-model="w.options.frame"><option value="">—</option><option v-for="v in choicesFor(w,'frame')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" /></td>
               <td><select v-model="w.options.louver_size"><option value="">—</option><option v-for="v in louverChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><select v-model="w.options.colour"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
-              <td><input v-model="w.options.control_rod" /></td>
+              <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.control_rod" /></td>
               <td><select v-model="w.options.fitting"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><input v-model="w.options.special_request" /></td>
               <td class="addons-cell"><button type="button" class="addons-trigger" :title="describeConfiguredAddons(w.options, locale, availableAddons(w)).join(' · ') || undefined" @click="openAddons(w, index)"><SlidersHorizontal :size="14" aria-hidden="true" />{{ addonChips(w).length ? tx(`附加项 · ${addonChips(w).length}`, `Add-ons · ${addonChips(w).length}`) : tx('添加附加项', 'Add add-ons') }}</button><span v-for="chip in addonChips(w)" :key="chip" class="addon-chip">{{ chip }}</span></td>
