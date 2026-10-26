@@ -198,7 +198,8 @@ const messages = {
 };
 
 const stored = localStorage.getItem("vera-locale");
-const locale = stored === "en" || stored === "zh" ? stored : "zh";
+const locale = stored === "en" || stored === "zh" ? stored : "en";
+document.documentElement.lang = locale;
 
 export const i18n = createI18n({
   legacy: false,
