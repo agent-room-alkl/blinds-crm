@@ -923,12 +923,12 @@ async function importTemplate(event: Event) {
   }
 }
 
-async function downloadSheet(id: string, kind: "production-sheet" | "job-sheet") {
+async function downloadJobSheet(id: string) {
   busy.value = true;
   error.value = "";
   notice.value = "";
   try {
-    const response = await fetch(`/api/operations/orders/${id}/${kind}`, {
+    const response = await fetch(`/api/operations/orders/${id}/job-sheet`, {
       headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
     });
     if (!response.ok) {
@@ -939,10 +939,10 @@ async function downloadSheet(id: string, kind: "production-sheet" | "job-sheet")
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${kind}-draft-${orderLabel(id)}.xlsx`;
+    link.download = `job-sheet-${orderLabel(id)}.xlsx`;
     link.click();
     URL.revokeObjectURL(url);
-    notice.value = tx("已下载生产资料草稿。这还不是已验收的工厂收单格式。", "Downloaded a production draft. This is not a confirmed factory order format.");
+    notice.value = tx("已下载安装工作单。", "Downloaded the job sheet.");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
@@ -1036,38 +1036,19 @@ function reviseTemplate(template:ProviderTemplate) {
 function saveApplicability(version:PricingVersion) { return act(async()=>{ await request(`operations/pricing-templates/${encodeURIComponent(version.id)}/applicability`,{provider_ids:applicability[version.id] || []}); notice.value=tx('已保存此版本的供应商适用范围','Supplier applicability saved for this version'); }); }
 function activateVersion(version:PricingVersion) { return act(async()=>{await request(`operations/pricing-templates/${encodeURIComponent(version.id)}/activate`,{}); notice.value=tx('已启用此价表；历史订单价格保持不变','Pricing version activated; historical prices unchanged');}); }
 
-async function assignProvider(orderId: string) {
-  const form = orderProviderForm[orderId];
-  if (!form || !form.provider_id) {
-    error.value = tx("请选择供应商", "Select a provider");
-    return;
-  }
-  return act(async () => {
-    await request(`operations/orders/${orderId}/assign-provider`, {
-      provider_id: form.provider_id,
-      template_id: form.template_id || null,
-      is_preferred: true,
-    });
-    notice.value = tx("已分配供应商", "Provider assigned to order");
-  });
-}
-
-async function exportWithProvider(orderId: string, providerId?: number, allowFallback = false) {
+// One download for every case: the export is the VERA Order sheet, and a chosen active supplier is saved with it.
+async function exportSupplierOrder(orderId: string) {
   busy.value = true;
   error.value = "";
   notice.value = "";
   try {
-    if (!allowFallback && (!providerId || !readySupplierExport(orderId))) {
-      throw new Error(tx('请先选择已启用的供应商及其导出模板。定金确认后可以下载供应商订单。','Select an active supplier and its export template. The supplier order can be downloaded after the deposit is confirmed.'));
+    const form = orderProviderForm[orderId];
+    const providerId = form?.provider_id && providers.value.some(p => p.id === form.provider_id && p.active) ? form.provider_id : 0;
+    if (providerId) {
+      const templateId = providerTemplates.value.some(t => t.id === form.template_id && t.provider_id === providerId && t.active) ? form.template_id : null;
+      await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: templateId, is_preferred: true });
     }
-    if (providerId && !allowFallback) {
-      const form = orderProviderForm[orderId];
-      await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: form.template_id || null, is_preferred: true });
-    }
-    const params = new URLSearchParams();
-    if (providerId) params.set("provider_id", String(providerId));
-    if (allowFallback) params.set("allow_basic_fallback", "true");
-    const response = await fetch(`/api/operations/orders/${orderId}/supplier-export?${params}`, {
+    const response = await fetch(`/api/operations/orders/${orderId}/supplier-export`, {
       headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
     });
     if (!response.ok) {
@@ -1084,11 +1065,9 @@ async function exportWithProvider(orderId: string, providerId?: number, allowFal
     link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
-    if (filename.includes("BASIC-NOT-VERIFIED")) {
-      notice.value = tx("已下载基本模板（未经供应商验证）", "Downloaded basic template (not supplier-verified)");
-    } else {
-      notice.value = tx("已下载供应商专用模板", "Downloaded provider-specific template");
-    }
+    notice.value = providerId
+      ? tx("已下载供应商订单，并保存了本单供应商。", "Downloaded the supplier order and saved this order's supplier.")
+      : tx("已下载供应商订单。", "Downloaded the supplier order.");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   } finally {
@@ -1247,6 +1226,7 @@ async function loadOrderProviders(orderId: string) {
                 <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy || !selectedOrder.lines.every(line=>line.arrived===line.quantity)" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录整单交付", "Record whole-order completion") }}</button>
               </div>
               <p v-if="fulfilError" class="fulfil-error" role="alert">{{ fulfilError }}</p>
+              <div v-if="selectedOrder.status!=='pending_review'" class="actions"><button type="button" class="secondary" :disabled="busy" @click="downloadJobSheet(selectedOrder.id)">{{ tx('下载安装工作单','Download job sheet') }}</button></div>
 
 </div><div v-show="detailSection === 'supplier'">              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
               <div v-if="orderProviderForm[selectedOrder.id]" class="provider-section">
@@ -1263,19 +1243,15 @@ async function loadOrderProviders(orderId: string) {
                       <option v-for="t in providerTemplates.filter(t => t.provider_id === orderProviderForm[selectedOrder.id].provider_id && t.active)" :key="t.id" :value="t.id">{{ t.name }}</option>
                     </select>
                   </label>
-                  <details class="provider-advanced"><summary>{{ tx('只保存分配，不导出','Save assignment only') }}</summary><button type="button" :disabled="busy || !orderProviderForm[selectedOrder.id].provider_id" @click="assignProvider(selectedOrder.id)">{{ tx("保存分配", "Save assignment") }}</button></details>
                   <RouterLink to="/crm/providers">{{ tx('管理共享供应商','Manage shared suppliers') }}</RouterLink>
                 </div>
                 <p class="hint" v-if="!providers.some(p=>p.active)">{{ tx('尚无已启用供应商；先在供应商页面确认并启用。','No active supplier yet. Confirm and activate one under Suppliers.') }}</p>
                 <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providers.some(p=>p.id===orderProviderForm[selectedOrder.id].provider_id && p.active)">{{ tx('原供应商已停用，请重新选择已启用的供应商。','The assigned supplier is inactive; choose an active supplier.') }}</p>
-                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !orderProviderForm[selectedOrder.id].template_id">{{ tx('没有供应商模板时，定金确认后仍可下载供应商订单。','Without a supplier template, the supplier order can still be downloaded after the deposit is confirmed.') }}</p>
                 <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].template_id && !readySupplierExport(selectedOrder.id)">{{ tx('原输出模板已停用，请选择当前有效版本。','The assigned export template is inactive; choose a current revision.') }}</p>
-                <p class="hint" v-else>{{ tx('已自动选择可用模板；下载时会同时保存本单供应商分配。','An available template is selected automatically; downloading also saves this order’s supplier assignment.') }}</p>
-                <p v-if="selectedOrder.payment_status!=='deposit_received'" class="hint">{{ tx('定金确认后再导出给供应商。','Export the supplier file after the deposit is confirmed.') }}</p>
+                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id">{{ tx('下载供应商订单时会同时保存本单供应商。','Downloading the supplier order also saves this order’s supplier.') }}</p>
+                <p v-if="!['deposit_received','paid'].includes(selectedOrder.payment_status)" class="hint">{{ tx('定金确认后再导出给供应商。','Export the supplier file after the deposit is confirmed.') }}</p>
                 <div class="form-row">
-                  <button v-if="readySupplierExport(selectedOrder.id)" type="button" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, orderProviderForm[selectedOrder.id].provider_id, false)">{{ tx("下载供应商订单 Excel（自动保存分配）", "Download supplier order Excel (saves assignment)") }}</button>
-                  <button v-else type="button" :disabled="busy || selectedOrder.status==='pending_review' || selectedOrder.payment_status!=='deposit_received'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx('下载供应商订单','Download supplier order') }}</button>
-                  <details class="provider-advanced"><summary>{{ tx('其他文件','Other files') }}</summary><div class="form-row"><button v-if="orderProviderForm[selectedOrder.id].template_id" type="button" class="secondary" :disabled="busy || selectedOrder.status==='pending_review'" @click="exportWithProvider(selectedOrder.id, undefined, true)">{{ tx("基本模板草稿", "Basic draft") }}</button><button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'production-sheet')">{{ tx("生产资料草稿", "Production draft") }}</button><button type="button" class="secondary" :disabled="busy" @click="downloadSheet(selectedOrder.id, 'job-sheet')">{{ tx("安装工作单草稿", "Job sheet") }}</button></div></details>
+                  <button type="button" :disabled="busy || selectedOrder.status==='pending_review' || !['deposit_received','paid'].includes(selectedOrder.payment_status)" @click="exportSupplierOrder(selectedOrder.id)">{{ tx('下载供应商订单','Download supplier order') }}</button>
                 </div>
               </div>
               <div v-if="selectedOrder.status==='accepted' && selectedOrder.payment_status==='deposit_received'" class="actions"><button type="button" :disabled="busy" @click="supplier(selectedOrder)">{{ tx('标为已下单','Mark as ordered') }}</button></div>
@@ -1936,7 +1912,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .order-pick>strong,.desk .order-pick>span,.desk .order-pick>small{display:block;width:100%;min-width:0;text-align:left}
 .desk .pick-mark{flex:0 0 44px;justify-content:center}
 .invoice-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:12px}.invoice-actions a{min-height:44px;color:#17523a}.desk .invoice{padding:12px;margin:8px 0}.desk .invoice label{justify-content:flex-start;min-height:44px;gap:10px}.desk .invoice p{margin:4px 0}.desk .section-card h2{margin:0 0 12px}.desk .section-card h3{margin:16px 0 10px}.desk .detail-tabs{gap:6px}.desk .form-grid{gap:12px}.desk .form-grid button{justify-self:start}
-.next-action{background:#eef5ef;border:1px solid #c8ddcd;border-radius:8px;padding:12px 14px;margin:12px 0;display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}.next-action strong{font-size:14px}.next-action p{margin:0;flex:1 1 260px;line-height:1.5}.provider-advanced{align-self:center}.provider-advanced summary{cursor:pointer;min-height:44px;display:flex;align-items:center;color:#17523a}.provider-advanced button{margin-top:8px}
+.next-action{background:#eef5ef;border:1px solid #c8ddcd;border-radius:8px;padding:12px 14px;margin:12px 0;display:flex;align-items:center;flex-wrap:wrap;gap:8px 16px}.next-action strong{font-size:14px}.next-action p{margin:0;flex:1 1 260px;line-height:1.5}
 
 /* Dense, consistent task workspaces. Controls retain a 44px target. */
 .desk .card{padding:16px}
