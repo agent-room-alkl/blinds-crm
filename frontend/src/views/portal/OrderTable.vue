@@ -59,6 +59,13 @@ function addonPriceLabel(addon: Addon) {
   if (!choice || ![choice.fixed, choice.per_sqm, choice.percent].some((amount) => amount !== undefined)) return "";
   return locale.value === "zh" ? choice.label_zh : choice.label_en;
 }
+// Internal Concealed carries the Hidden tilt rod charge; the price comes from the published add-on so it never drifts.
+function isConcealedRod(value: unknown) { return String(value || "").trim().toLowerCase() === "internal concealed"; }
+function rodPriceHint(value: string) {
+  if (!isConcealedRod(value)) return "";
+  const label = addons.value.find((a) => a.key === "hidden_tilt_rod")?.choices.find((c) => c.per_sqm !== undefined)?.per_sqm;
+  return label ? ` (+$${label}/${locale.value === "zh" ? "㎡" : "sqm"})` : "";
+}
 function previewLineAmount(preview: any, window: any, index: number) {
   const line = preview?.lines?.[index];
   return line?.amount ? `${preview.currency || "NZD"} ${line.amount}` : "";
@@ -89,7 +96,8 @@ async function refreshQuote() {
   const body = { project_name: draft.project_name.trim() || "Preview", site_address: draft.site_address.trim() || "Preview",
     installation_required: draft.installation_required, submission_key: "pricing-preview", lines };
   const addonKeys = new Set(addons.value.map((a) => a.key));
-  const baseBody = { ...body, lines: lines.map((line) => ({ ...line, options: Object.fromEntries(Object.entries(line.options).filter(([key]) => !addonKeys.has(key))) })) };
+  // The base price leaves out add-ons and the Internal Concealed rod, so "Extra" shows everything that adds to the plain price.
+  const baseBody = { ...body, lines: lines.map((line) => ({ ...line, options: Object.fromEntries(Object.entries(line.options).filter(([key, value]) => !addonKeys.has(key) && !(key === "control_rod" && isConcealedRod(value)))) })) };
   try {
     const [priced, base] = await Promise.all([
       portalRequest<any>("price", body),
@@ -242,7 +250,7 @@ load();
               <td><select v-if="choicesFor(w,'frame').length" v-model="w.options.frame"><option value="">—</option><option v-for="v in choicesFor(w,'frame')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" /></td>
               <td><select v-model="w.options.louver_size"><option value="">—</option><option v-for="v in louverChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><select v-model="w.options.colour"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
-              <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.control_rod" /></td>
+              <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}{{ rodPriceHint(v) }}</option></select><input v-else v-model="w.options.control_rod" /></td>
               <td><select v-model="w.options.fitting"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td class="addons-cell">
                 <input class="special-request" v-model="w.options.special_request" :placeholder="tx('特殊要求 / 定制边框备注', 'Special request / custom frame notes')" />
