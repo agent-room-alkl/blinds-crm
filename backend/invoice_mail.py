@@ -6,7 +6,7 @@ the footer is configurable with VERA_INVOICE_FOOTER and otherwise only asks the 
 import io
 import os
 import re
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
 BRAND = 'VERA Shading Solutions'
@@ -25,6 +25,8 @@ def money(value):
 def invoice_number(invoice, order_numbers):
     """Deposit V0000101-D, balance V0000105-B. Derived from the order number, so it is stable and needs no migration.
     A balance invoice covering several orders is named after its first order; each order has at most one balance invoice."""
+    if invoice.get('fixed_number'):
+        return invoice['fixed_number']
     letter = 'D' if invoice.get('kind') == 'deposit' else 'B'
     numbers = sorted(order_numbers.get(oid) or '' for oid in invoice.get('order_ids', []))
     first = next((n for n in numbers if n), '')
@@ -33,32 +35,50 @@ def invoice_number(invoice, order_numbers):
     return f'{first}-{letter}'
 
 
-def build(invoice, customer, orders):
-    """invoice: stored invoice dict; customer: portal profile dict; orders: {order_id: project dict}."""
+def payment_lines(payment):
+    """Label/value pairs for the bank details an administrator saved in settings; empty until something is saved."""
+    labels = (('account_name', 'Account name'), ('bank_name', 'Bank'), ('account_number', 'Account number'), ('reference_note', 'Note'))
+    return [(label, str(payment[key]).strip()) for key, label in labels if payment and str(payment.get(key) or '').strip()]
+
+
+def gst_included(amount, rate):
+    """The GST part of a GST-inclusive amount."""
+    rate = Decimal(str(rate))
+    return (Decimal(amount) * rate / (1 + rate)).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
+
+
+def build(invoice, customer, orders, payment=None):
+    """invoice: stored invoice dict; customer: portal profile dict; orders: {order_id: project dict}; payment: saved bank details."""
     numbers = {oid: o.get('order_number') for oid, o in orders.items()}
     number = invoice_number(invoice, numbers)
-    deposit = invoice.get('kind') == 'deposit'
+    kind = invoice.get('kind')
+    deposit = kind == 'deposit'
+    manual = kind == 'manual'
     currency = invoice.get('currency', 'NZD')
     rows = []
     for line in invoice.get('lines', []):
-        order = orders.get(line['order_id'], {})
         amount = Decimal(line['amount'])
+        if manual:
+            rows.append({'order': '', 'project': line.get('description', ''), 'site': '', 'order_total': '', 'amount': money(amount)})
+            continue
+        order = orders.get(line['order_id'], {})
         total = Decimal(order['total']) if order.get('total') not in (None, '') else None
         rows.append({
             'order': order.get('order_number') or line['order_id'],
             'project': order.get('project_name', ''),
             'site': order.get('site_address', ''),
             'order_total': money(total) if total is not None else '',
-            # A balance line is "order total less deposit already paid", so the deposit follows from the stored figures.
-            'deposit_paid': money(total - amount) if (total is not None and not deposit) else '',
             'amount': money(amount),
         })
     due = Decimal(invoice['amount'])
     gross = Decimal(invoice['gross']) if invoice.get('gross') else sum((Decimal(r['amount'].replace(',', '')) for r in rows), Decimal(0))
     rebate = max(gross - due, Decimal(0))
+    rate = invoice.get('tax_rate') or next((o['tax_rate'] for o in orders.values() if o.get('tax_rate')), '0.15')
+    bank = payment_lines(payment)
     model = {
         'number': number,
-        'kind': 'Deposit invoice' if deposit else 'Balance invoice',
+        'kind': 'Deposit invoice' if deposit else ('Invoice' if manual else 'Balance invoice'),
+        'kind_key': kind,
         'is_deposit': deposit,
         'date': str(invoice.get('created_at', ''))[:10],
         'currency': currency,
@@ -70,9 +90,13 @@ def build(invoice, customer, orders):
         'gross': money(gross),
         'rebate': money(rebate) if rebate > 0 else '',
         'due': money(due),
-        'basis': (f"Deposit of {Decimal(invoice.get('deposit_rate', '0.6')) * 100:.0f}% of the order total."
-                  if deposit else 'Balance = order total less the deposit already paid, then any confirmed rebate.'),
-        'footer': footer(),
+        'gst': money(gst_included(due, rate)),
+        'gst_rate': f"{Decimal(str(rate)) * 100:.0f}%",
+        'basis': (f"Deposit of {Decimal(invoice.get('deposit_rate', '0.6')) * 100:.0f}% of the order total." if deposit
+                  else 'Amounts include GST.' if manual
+                  else 'Balance of each order (GST included), after the deposit already paid and any confirmed rebate.'),
+        'payment': bank,
+        'footer': (f'Please pay by bank transfer to the account above and quote {number} as the reference.' if bank else footer()),
     }
     model['subject'] = f"VERA invoice {number}"
     model['text'] = _text(model)
@@ -82,13 +106,15 @@ def build(invoice, customer, orders):
 
 def _columns(m):
     """Amount column labels; the text, HTML and PDF versions share this layout."""
-    return ('Order total', 'Deposit due') if m['is_deposit'] else ('Order total', 'Deposit paid', 'Balance')
+    if m['is_deposit']:
+        return ('Order total', 'Deposit due')
+    return ('Amount incl. GST',) if m['kind_key'] == 'manual' else ('Balance incl. GST',)
 
 
 def _cells(m, r):
     if m['is_deposit']:
         return [r['order_total'], r['amount']]
-    return [r['order_total'], r['deposit_paid'], r['amount']]
+    return [r['amount']]
 
 
 def _text(m):
@@ -99,14 +125,17 @@ def _text(m):
     lines.append('')
     labels = _columns(m)
     for r in m['rows']:
-        lines.append(f"{r['order']}  {r['project']}")
+        lines.append(f"{r['order']}  {r['project']}".strip())
         for label, value in zip(labels, _cells(m, r)):
             if value:
                 lines.append(f"    {label}: {m['currency']} {value}")
     lines.append('')
     if m['rebate']:
         lines += [f"Subtotal: {m['currency']} {m['gross']}", f"Rebate applied: -{m['currency']} {m['rebate']}"]
-    lines += [f"Amount due: {m['currency']} {m['due']}", m['basis'], '', m['footer'], 'The PDF invoice is attached.']
+    lines += [f"Amount due: {m['currency']} {m['due']}", f"Includes GST ({m['gst_rate']}): {m['currency']} {m['gst']}", m['basis'], '']
+    if m['payment']:
+        lines += ['Payment details'] + [f"    {label}: {value}" for label, value in m['payment']] + ['']
+    lines += [m['footer'], 'The PDF invoice is attached.']
     return '\n'.join(lines)
 
 
@@ -120,13 +149,20 @@ def _html(m):
         cells = ''.join(
             f'<td align="right" style="padding:12px 0 12px 12px;border-bottom:1px solid {line};font-size:14px;color:{ink};white-space:nowrap">{e(m["currency"])} {v}</td>' if v
             else f'<td style="border-bottom:1px solid {line}"></td>' for v in _cells(m, r))
-        body += (f'<tr><td style="padding:12px 0;border-bottom:1px solid {line};font-size:14px;color:{ink}"><strong>{e(str(r["order"]))}</strong><br>'
-                 f'<span style="color:#64766b;font-size:12px">{e(r["project"])}{" · " + e(r["site"]) if r["site"] else ""}</span></td>{cells}</tr>')
+        main, sub = (r["order"], r["project"] + (" · " + r["site"] if r["site"] else "")) if r["order"] else (r["project"], "")
+        detail = f'<br><span style="color:#64766b;font-size:12px">{e(sub)}</span>' if sub else ''
+        body += (f'<tr><td style="padding:12px 0;border-bottom:1px solid {line};font-size:14px;color:{ink}"><strong>{e(str(main))}</strong>'
+                 f'{detail}</td>{cells}</tr>')
     span = 1 + len(labels)
     extra = ''
     if m['rebate']:
         extra = (f'<tr><td colspan="{span - 1}" style="padding:10px 0 4px;font-size:13px;color:#64766b">Subtotal</td><td align="right" style="padding:10px 0 4px;font-size:13px;color:#64766b;white-space:nowrap">{e(m["currency"])} {m["gross"]}</td></tr>'
                  f'<tr><td colspan="{span - 1}" style="padding:4px 0 12px;font-size:13px;color:#64766b">Rebate applied</td><td align="right" style="padding:4px 0 12px;font-size:13px;color:#64766b;white-space:nowrap">-{e(m["currency"])} {m["rebate"]}</td></tr>')
+    pay = ''
+    if m['payment']:
+        pay = ('<tr><td style="padding:0 32px 16px"><div style="color:#64766b;font-size:11px;letter-spacing:.1em;margin-bottom:6px">PAYMENT DETAILS</div>'
+               + ''.join(f'<div style="font-size:13px;line-height:1.7;color:{ink}"><span style="color:#64766b">{e(label)}:</span> <strong>{e(value)}</strong></div>' for label, value in m['payment'])
+               + '</td></tr>')
     return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f4f7f5;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:{ink}">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7f5;padding:24px 12px"><tr><td align="center">
 <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid {line}">
@@ -139,9 +175,9 @@ def _html(m):
 <tr><td style="padding:8px 0;border-bottom:2px solid {ink};font-size:11px;letter-spacing:.08em;color:#64766b">ORDER</td>{th}</tr>
 {body}{extra}</table></td></tr>
 <tr><td style="padding:8px 32px 24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef6f2;border-radius:10px"><tr>
-<td style="padding:16px 18px;font-size:13px;color:#34503f">Amount due<br><span style="font-size:11px;color:#64766b">{e(m["basis"])}</span></td>
+<td style="padding:16px 18px;font-size:13px;color:#34503f">Amount due<br><span style="font-size:11px;color:#64766b">{e(m["basis"])} Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {m["gst"]}.</span></td>
 <td align="right" style="padding:16px 18px;font-size:26px;font-weight:700;color:{green};white-space:nowrap">{e(m["currency"])} {m["due"]}</td></tr></table></td></tr>
-<tr><td style="padding:0 32px 28px;font-size:13px;line-height:1.7;color:#4d6256">{e(m["footer"])}<br><span style="color:#64766b">The PDF invoice is attached to this email.</span></td></tr>
+{pay}<tr><td style="padding:0 32px 28px;font-size:13px;line-height:1.7;color:#4d6256">{e(m["footer"])}<br><span style="color:#64766b">The PDF invoice is attached to this email.</span></td></tr>
 </table></td></tr></table></body></html>'''
 
 
@@ -203,12 +239,15 @@ def render_pdf(m):
     if m['rebate']:
         totals += [[P('Subtotal', base), P(f"{m['currency']} {m['gross']}", right)], [P('Rebate applied', base), P(f"-{m['currency']} {m['rebate']}", right)]]
     totals.append([P('Amount due', bold), P(f"{m['currency']} {m['due']}", due_right)])
+    totals.append([P(f"Includes GST ({m['gst_rate']})", small), P(f"{m['currency']} {m['gst']}", small_right)])
     t = Table(totals, colWidths=[134 * mm, 40 * mm])
-    t.setStyle(TableStyle([('LINEABOVE', (0, -1), (-1, -1), 1, green), ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    t.setStyle(TableStyle([('LINEABOVE', (0, -2), (-1, -2), 1, green), ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
                            ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
     story += [t, Spacer(1, 3 * mm), P(m['basis'], small)]
     if m['tax_basis']:
         story.append(P(f"Pricing basis: {m['tax_basis']}", small))
-    story += [Spacer(1, 12 * mm), P(m['footer'], base)]
+    if m['payment']:
+        story += [Spacer(1, 8 * mm), P('PAYMENT DETAILS', small)] + [P(f"{label}: {value}", base) for label, value in m['payment']]
+    story += [Spacer(1, 8 * mm), P(m['footer'], base)]
     doc.build(story)
     return buf.getvalue()

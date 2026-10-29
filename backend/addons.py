@@ -4,6 +4,7 @@ Area charges (per sqm and percent) use the billable area. Per-item amounts are
 added afterwards, so a percentage never magnifies them. Extra installation
 choices are recorded; V5 does not price concrete, height or tile.
 """
+import json
 from decimal import Decimal, ROUND_UP
 
 
@@ -39,6 +40,10 @@ ADDONS = [
     {'key': 'shaped_cutout', 'label_zh': '异形/法式门开孔', 'label_en': 'Shaped / French door cut out',
      'choices': [{'value': 'no', 'label_zh': '不要', 'label_en': 'No'},
                  {'value': 'yes', 'label_zh': '要，+$300/件', 'label_en': 'Yes, +$300 each', 'fixed': '300'}]},
+    # Robin, 28 Oct: a customised frame adds 10% to the window. The size change itself goes in the special request.
+    {'key': 'custom_frame', 'label_zh': '定制边框', 'label_en': 'Customised frame',
+     'choices': [{'value': 'no', 'label_zh': '不要', 'label_en': 'No'},
+                 {'value': 'yes', 'label_zh': '要，+10%', 'label_en': 'Yes, +10%', 'percent': '10'}]},
     {'key': 'extra_installation', 'label_zh': '额外安装', 'label_en': 'Extra installation',
      'choices': [{'value': 'none', 'label_zh': '无', 'label_en': 'None'},
                  {'value': 'concrete', 'label_zh': '水泥墙', 'label_en': 'Concrete wall'},
@@ -47,6 +52,15 @@ ADDONS = [
 ]
 
 ADDON_KEYS = {item['key'] for item in ADDONS}
+
+
+def with_default_addons(addons):
+    """Append any supported add-on a stored manifest predates, so older published versions offer it too."""
+    present = {item.get('key') for item in addons if isinstance(item, dict)}
+    for item in ADDONS:
+        if item['key'] not in present:
+            addons.append(json.loads(json.dumps(item)))
+    return addons
 
 
 def _amount(value, money=True):

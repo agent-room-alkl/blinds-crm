@@ -15,6 +15,10 @@ const loading = ref(true);
 const saving = ref(false);
 const error = ref("");
 const notice = ref("");
+const quotePreview = ref<any>(null);
+const basePreview = ref<any>(null);
+const quoteLoading = ref(false);
+const quoteError = ref("");
 const draftKey = ref("");
 const lastSaved = ref("");
 const draft = reactive({ project_name: "", site_address: "", installation_required: false, windows: [] as any[] });
@@ -49,6 +53,59 @@ function setAddon(window: any, key: string, value: string) {
   if (!value || value === "no" || value === "none") delete window.options[key];
   else window.options[key] = value;
 }
+function addonSelected(window: any, key: string) { return Boolean(window.options[key] && !["no", "none"].includes(window.options[key])); }
+function addonPriceLabel(addon: Addon) {
+  const choice = addon.choices.find((item) => item.value !== "no" && item.value !== "none");
+  if (!choice || ![choice.fixed, choice.per_sqm, choice.percent].some((amount) => amount !== undefined)) return "";
+  return locale.value === "zh" ? choice.label_zh : choice.label_en;
+}
+function previewLineAmount(preview: any, window: any, index: number) {
+  const line = preview?.lines?.[index];
+  return line?.amount ? `${preview.currency || "NZD"} ${line.amount}` : "";
+}
+function addonIncrement(window: any, index: number) {
+  const withAddons = Number(quotePreview.value?.lines?.[index]?.amount);
+  const withoutAddons = Number(basePreview.value?.lines?.[index]?.amount);
+  if (!Number.isFinite(withAddons) || !Number.isFinite(withoutAddons) || withAddons <= withoutAddons) return "";
+  return `${quotePreview.value?.currency || "NZD"} ${(withAddons - withoutAddons).toFixed(2)}`;
+}
+let quoteTimer: ReturnType<typeof setTimeout> | undefined;
+let quoteTicket = 0;
+async function refreshQuote() {
+  const ticket = ++quoteTicket;
+  quoteError.value = "";
+  quotePreview.value = null;
+  basePreview.value = null;
+  if (!draft.windows.length || draft.windows.some((w) => !w.product_id || !(Number(w.width_mm) > 0) || !(Number(w.height_mm) > 0))) {
+    quoteLoading.value = false;
+    return;
+  }
+  quoteLoading.value = true;
+  const lines = draft.windows.map((w) => ({
+    window_name: w.window_name || tx("新窗户", "New window"),
+    product_id: Number(w.product_id), width_mm: w.width_mm, height_mm: w.height_mm,
+    quantity: 1, panel_count: Number(w.panel_count) || 1, options: { ...w.options },
+  }));
+  const body = { project_name: draft.project_name.trim() || "Preview", site_address: draft.site_address.trim() || "Preview",
+    installation_required: draft.installation_required, submission_key: "pricing-preview", lines };
+  const addonKeys = new Set(addons.value.map((a) => a.key));
+  const baseBody = { ...body, lines: lines.map((line) => ({ ...line, options: Object.fromEntries(Object.entries(line.options).filter(([key]) => !addonKeys.has(key))) })) };
+  try {
+    const [priced, base] = await Promise.all([
+      portalRequest<any>("price", body),
+      portalRequest<any>("price", baseBody),
+    ]);
+    if (ticket === quoteTicket) { quotePreview.value = priced; basePreview.value = base; }
+  } catch (cause) {
+    if (ticket === quoteTicket) quoteError.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    if (ticket === quoteTicket) quoteLoading.value = false;
+  }
+}
+watch([() => draft.windows, () => draft.installation_required, () => draft.project_name, () => draft.site_address], () => {
+  if (quoteTimer) clearTimeout(quoteTimer);
+  quoteTimer = setTimeout(() => void refreshQuote(), 350);
+}, { deep: true });
 // Short labels for the add-ons a row has picked; the full choice text is in the dialog.
 function addonChips(window: any) {
   return availableAddons(window).flatMap(a => {
@@ -131,13 +188,13 @@ function checkWindow(w: any, index: number) {
 
 async function submit() {
   error.value = ""; notice.value = "";
-  if (!draft.project_name.trim() || !draft.site_address.trim()) { error.value = tx("请填写订单名称和施工地址。", "Enter the order name and installation address."); return; }
+  if (!draft.project_name.trim() || (draft.installation_required && !draft.site_address.trim())) { error.value = tx("请填写订单名称；需要安装时请填写施工地址。", "Enter the order name; add the installation address when installation is selected."); return; }
   if (!draft.windows.length) { error.value = tx("请至少添加一扇窗。", "Add at least one window."); return; }
   for (let i=0; i<draft.windows.length; i++) { const issue = checkWindow(draft.windows[i], i); if (issue) { error.value=issue; return; } }
   saving.value = true;
   try {
     const saved = await portalRequest<any>("orders", {
-      project_name: draft.project_name.trim(), site_address: draft.site_address.trim(),
+      project_name: draft.project_name.trim(), site_address: draft.installation_required ? draft.site_address.trim() : "",
       installation_required: draft.installation_required, submission_key: crypto.randomUUID(),
       // Each spreadsheet row is one window; the customer template has no repeated-window quantity input.
       lines: draft.windows.map(w => ({ window_name: w.window_name.trim(), product_id: Number(w.product_id), width_mm: w.width_mm, height_mm: w.height_mm, quantity: 1, panel_count: Number(w.panel_count), options: w.options })),
@@ -161,22 +218,23 @@ load();
     <template v-else>
       <section class="order-fields">
         <label>{{ tx("订单名称", "Order name") }} *<input v-model="draft.project_name" maxlength="200" :placeholder="tx('例如：Sterling House', 'e.g. Sterling House')" /></label>
-        <label class="address-field">{{ tx("施工地址", "Installation address") }} *<input v-model="draft.site_address" maxlength="1000" /></label>
+        <label v-if="draft.installation_required" class="address-field">{{ tx("施工地址", "Installation address") }} *<input v-model="draft.site_address" maxlength="1000" required /></label>
+        <label v-else class="address-field address-optional">{{ tx("施工地址", "Installation address") }} · {{ tx("仅安装时填写", "Only needed for installation") }}<input v-model="draft.site_address" maxlength="1000" :placeholder="tx('无需安装可留空', 'Leave blank for supply-only orders')" /></label>
         <label class="install-check"><input v-model="draft.installation_required" type="checkbox" />{{ tx("需要安装", "Installation required") }}</label>
       </section>
       <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("必填列标有 *。表格可横向滚动。", "Required fields are marked *. Scroll horizontally to see all columns.") }}</p></div><button type="button" class="add-row" @click="addWindow">＋ {{ tx("添加一行", "Add Row") }}</button></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("高 / Drop (mm)", "Height / Drop (mm)") }} *</th><th>{{ tx("产品系列", "Product Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }} *</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }} *</th><th>{{ tx("安装尺寸", "Fitting") }} *</th><th>{{ tx("特殊要求", "Special Request") }}</th><th>{{ tx("附加项", "Add-ons") }}</th><th>{{ tx("操作", "Actions") }}</th></tr></thead>
+          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("高 / Drop (mm)", "Height / Drop (mm)") }} *</th><th>{{ tx("产品系列", "Product Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }} *</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }} *</th><th>{{ tx("安装尺寸", "Fitting") }} *</th><th>{{ tx("附加项 / 特殊要求", "Add-ons / Special Request") }}</th><th>{{ tx("操作", "Actions") }}</th></tr></thead>
           <tbody>
             <tr v-for="(w,index) in draft.windows" :key="w.id">
               <td class="row-num">{{ index+1 }}</td>
               <td><input v-model="w.window_name" :placeholder="tx('例如：Bedroom 1', 'e.g. Bedroom 1')" /></td>
-              <td><input v-model="w.width_mm" type="number" min="1" inputmode="decimal" /></td>
-              <td><input v-model="w.height_mm" type="number" min="1" inputmode="decimal" /></td>
+              <td><input v-model="w.width_mm" inputmode="decimal" /></td>
+              <td><input v-model="w.height_mm" inputmode="decimal" /></td>
               <td><select v-model.number="w.product_id" @change="onSeriesChange(w)"><option value="">{{ tx("选择系列", "Select") }}</option><option v-for="p in shutterProducts" :key="p.id" :value="p.id">{{ productLabel(p) }}</option></select></td>
               <td><select v-if="choicesFor(w,'opening_style').length" v-model="w.options.opening_style"><option v-for="v in choicesFor(w,'opening_style')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.opening_style" /></td>
-              <td><input v-model.number="w.panel_count" type="number" min="1" /></td>
+              <td><input v-model.number="w.panel_count" type="text" inputmode="numeric" /></td>
               <td><input v-model="w.options.layout_code" /></td>
               <td><input v-model="w.options.vt_post" /></td>
               <td><input v-model="w.options.ht_post" /></td>
@@ -186,8 +244,14 @@ load();
               <td><select v-model="w.options.colour"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.control_rod" /></td>
               <td><select v-model="w.options.fitting"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
-              <td><input v-model="w.options.special_request" /></td>
-              <td class="addons-cell"><button type="button" class="addons-trigger" :title="describeConfiguredAddons(w.options, locale, availableAddons(w)).join(' · ') || undefined" @click="openAddons(w, index)"><SlidersHorizontal :size="14" aria-hidden="true" />{{ addonChips(w).length ? tx(`附加项 · ${addonChips(w).length}`, `Add-ons · ${addonChips(w).length}`) : tx('添加附加项', 'Add add-ons') }}</button><span v-for="chip in addonChips(w)" :key="chip" class="addon-chip">{{ chip }}</span></td>
+              <td class="addons-cell">
+                <input class="special-request" v-model="w.options.special_request" :placeholder="tx('特殊要求 / 定制边框备注', 'Special request / custom frame notes')" />
+                <button type="button" class="addons-trigger" :title="describeConfiguredAddons(w.options, locale, availableAddons(w)).join(' · ') || undefined" @click="openAddons(w, index)"><SlidersHorizontal :size="14" aria-hidden="true" />{{ addonChips(w).length ? tx(`附加项 · ${addonChips(w).length}`, `Add-ons · ${addonChips(w).length}`) : tx('选择附加项', 'Choose add-ons') }}</button>
+                <span v-for="chip in addonChips(w)" :key="chip" class="addon-chip">{{ chip }}</span>
+                <span v-if="addonIncrement(w,index)" class="addon-total">{{ tx('额外', 'Extra') }} {{ addonIncrement(w,index) }}</span>
+                <span v-if="previewLineAmount(quotePreview,w,index)" class="line-price">{{ tx('行金额', 'Line total') }} {{ previewLineAmount(quotePreview,w,index) }}</span>
+                <span v-else-if="quoteLoading" class="line-price muted">{{ tx('计算中…', 'Calculating…') }}</span>
+              </td>
               <td class="row-actions"><button type="button" :title="tx('复制此行','Copy row')" @click="copyWindow(w)"><Copy :size="14" aria-hidden="true" />{{ tx('复制','Copy') }}</button><button type="button" class="row-delete" :title="tx('删除此行','Delete row')" @click="removeWindow(index)"><Trash2 :size="14" aria-hidden="true" />{{ tx('删除','Delete') }}</button></td>
             </tr>
           </tbody>
@@ -195,7 +259,13 @@ load();
         <dialog ref="addonDialog" class="addon-dialog" :aria-label="tx('附加项','Add-ons')" @close="addonTarget = null" @click="onAddonDialogClick">
           <form v-if="addonTarget" method="dialog">
             <header><div><strong>{{ tx("附加项", "Add-ons") }}</strong><span>{{ tx(`第 ${addonTarget.index + 1} 行`, `Row ${addonTarget.index + 1}`) }}<template v-if="addonTarget.window.window_name"> · {{ addonTarget.window.window_name }}</template></span></div></header>
-            <label v-for="a in availableAddons(addonTarget.window)" :key="a.key"><span>{{ locale==='zh'?a.label_zh:a.label_en }}</span><select :value="addonTarget.window.options[a.key] || (a.key==='extra_installation'?'none':'no')" @change="setAddon(addonTarget.window,a.key,($event.target as HTMLSelectElement).value)"><option v-for="choice in a.choices" :key="choice.value" :value="choice.value">{{ locale==='zh'?choice.label_zh:choice.label_en }}</option></select></label>
+            <label v-for="a in availableAddons(addonTarget.window)" :key="a.key" :class="{ 'priced-addon': addonPriceLabel(a) }">
+              <span><strong>{{ locale==='zh'?a.label_zh:a.label_en }}</strong><small v-if="addonPriceLabel(a)">{{ addonPriceLabel(a) }}</small></span>
+              <select v-if="a.key==='extra_installation'" :value="addonTarget.window.options[a.key] || 'none'" @change="setAddon(addonTarget.window,a.key,($event.target as HTMLSelectElement).value)"><option v-for="choice in a.choices" :key="choice.value" :value="choice.value">{{ locale==='zh'?choice.label_zh:choice.label_en }}</option></select>
+              <input v-else type="checkbox" :checked="addonSelected(addonTarget.window,a.key)" @change="setAddon(addonTarget.window,a.key,($event.target as HTMLInputElement).checked?'yes':'no')" />
+            </label>
+            <p v-if="quoteError" class="quote-error" role="status">{{ tx('价格预览暂不可用，提交时服务器仍会校验价格。','Price preview is unavailable. The server will validate pricing at submission.') }}</p>
+            <p v-else-if="addonTarget && addonIncrement(addonTarget.window,addonTarget.index)" class="quote-total">{{ tx('已选附加项额外金额','Selected add-ons extra') }}: {{ addonIncrement(addonTarget.window,addonTarget.index) }}</p>
             <footer><button type="submit" class="add-row">{{ tx("完成", "Done") }}</button></footer>
           </form>
         </dialog>
@@ -210,4 +280,5 @@ load();
 <style scoped>
 .excel-order{max-width:100%;color:var(--ink,#1b2421)}.table-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:22px}.eyebrow{margin:0 0 5px;color:var(--cord);font-size:11px;font-weight:700;letter-spacing:.12em}.table-heading h1{margin:0;font-size:26px}.table-heading p{margin:6px 0;color:#62716b}.heading-actions{display:flex;align-items:center;gap:12px}.saved{font-size:12px;color:#62716b;white-space:nowrap}.switch-button,.add-row,.submit-button{min-height:42px;padding:9px 15px;border-radius:5px;font-weight:650;cursor:pointer}.switch-button{border:1px solid #9aac9f;background:#fff;color:#29493d}.order-fields{display:grid;grid-template-columns:1fr 2fr auto;gap:14px;align-items:end;padding:16px;background:#f3f6f3;border:1px solid #dbe4dd;border-radius:8px;margin-bottom:22px}.order-fields label{display:grid;gap:6px;font-size:12px;font-weight:650}.order-fields input:not([type=checkbox]){width:100%;height:40px;box-sizing:border-box;padding:8px 10px;border:1px solid #ccd7cf;border-radius:4px;font:inherit;font-weight:400;background:white}.install-check{display:flex!important;align-items:center;gap:8px;min-height:40px;white-space:nowrap}.sheet-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.sheet-title h2{margin:0;font-size:18px}.sheet-title p{margin:4px 0;color:#718078;font-size:12px}.add-row,.submit-button{border:0;background:var(--cord,#0f6e5c);color:white}.table-wrap{width:100%;overflow:auto;border:1px solid #d7e0d9;border-radius:7px;background:#fff}.table-wrap table{border-collapse:separate;border-spacing:0;min-width:2060px;width:100%;font-size:12px}.table-wrap th{position:sticky;top:0;z-index:1;background:#edf2ee;color:#2c3f35;text-align:left;white-space:nowrap;font-size:11px}.table-wrap td,.table-wrap th{padding:8px 7px;border-right:1px solid #e4eae5;border-bottom:1px solid #e4eae5;vertical-align:top}.table-wrap td input,.table-wrap td select{width:105px;height:34px;box-sizing:border-box;padding:5px 7px;border:1px solid #d0dad2;border-radius:4px;background:#fff;font:inherit}.table-wrap td:nth-child(2) input{width:150px}.table-wrap td:nth-child(3) select{width:145px}.row-num{position:sticky;left:0;z-index:2;min-width:26px;text-align:center;background:#f5f7f5}.table-wrap td.row-num{z-index:0}.addons-cell{min-width:150px;max-width:220px}.addons-trigger{display:inline-flex;align-items:center;gap:6px;min-height:34px;height:34px;padding:0 10px;border:1px dashed #a9b8ad;border-radius:4px;background:#fff;color:#29493d;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}.addons-trigger:hover{border-color:var(--cord,#0f6e5c);background:#f2f7f4}.addon-chip{display:inline-block;margin:5px 4px 0 0;padding:2px 7px;border-radius:999px;background:#e7f0eb;color:#29493d;font-size:11px;line-height:1.5}.addon-dialog{width:min(440px,calc(100vw - 32px));padding:0;border:0;border-radius:8px;box-shadow:0 18px 50px rgba(20,35,30,.25)}.addon-dialog::backdrop{background:rgba(20,30,26,.35)}.addon-dialog form{padding:20px 22px}.addon-dialog header{margin-bottom:14px}.addon-dialog header strong{display:block;font-size:17px}.addon-dialog header span{font-size:12px;color:#62716b}.addon-dialog label{display:grid;grid-template-columns:1fr 170px;gap:12px;align-items:center;padding:4px 0;border-bottom:1px solid #edf1ee;font-size:13px}.addon-dialog select{min-height:0;height:34px;padding:5px 7px;border:1px solid #d0dad2;border-radius:4px;background:#fff;font:inherit}.addon-dialog footer{display:flex;justify-content:flex-end;margin-top:16px}.row-actions{white-space:nowrap}.row-actions button{display:inline-flex;align-items:center;gap:5px;min-height:30px;height:30px;padding:0 9px;margin-right:4px;border:1px solid #c5d0c8;border-radius:4px;background:#fff;color:#29493d;cursor:pointer;font-size:12px;font-weight:600}.row-actions button:hover{border-color:var(--cord,#0f6e5c);background:#f2f7f4}.row-actions .row-delete{color:#9b3a32}.row-actions .row-delete:hover{border-color:#c4655c;background:#fbf1ef}.table-note{font-size:12px;color:#65736c;margin:9px 0 22px}.error-box{padding:12px 14px;margin:14px 0;background:#fff0ed;color:#8f3425;border-radius:6px}.footer-actions{display:flex;justify-content:space-between;padding-top:16px;border-top:1px solid #dce4dd}.submit-button:disabled{opacity:.55;cursor:not-allowed}.notice{padding:18px;color:#65736c}
 @media(max-width:760px){.table-heading{display:block}.heading-actions{justify-content:space-between;margin-top:12px}.order-fields{grid-template-columns:1fr}.install-check{min-height:28px}.sheet-title{align-items:flex-start}.table-wrap table{min-width:1980px}}
+.address-optional{color:#64746b;font-weight:500!important}.addons-cell{min-width:230px}.addons-cell .special-request{width:205px!important;margin:0 0 5px}.addon-total,.line-price{display:block;margin-top:4px;color:#17523a;font-size:11px;font-weight:650}.line-price.muted{color:#68776f;font-weight:400}.addon-dialog label{grid-template-columns:minmax(0,1fr) auto;min-height:46px}.addon-dialog label span{display:grid;gap:2px}.addon-dialog label small{color:#8a4d14;font-size:11px;font-weight:600}.addon-dialog input[type=checkbox]{width:20px;height:20px;accent-color:var(--cord,#0f6e5c)}.addon-dialog .priced-addon{background:#fffaf1}.quote-total{padding:9px 11px;border-radius:5px;background:#edf5ef;color:#17523a;font-weight:650}.quote-error{font-size:12px;color:#8f3425}
 </style>

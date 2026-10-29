@@ -137,7 +137,7 @@ with tempfile.TemporaryDirectory() as folder:
         _c.execute('UPDATE products SET data=? WHERE id=1', (json.dumps(_sample),))
     # Shipments are formed while orders are still "ordered"; marking them in transit comes after.
     transit = post(staff,'operations/transit',{'order_ids':[oid,'not-found'],'operation_key':'transit-001'})
-    assert [r['status'] for r in transit['results']] == ['success','failed']
+    assert [r['status'] for r in transit['results']] == ['skipped','failed']  # joining the shipment already put the order in transit
     assert not {'factory_price_usd','purchase_cost','duty_cost','total_cost','gross_profit'} & set(portal.get('/api/portal/orders').json()[0])
     print('PASS review/deposit: submission does not invoice; acceptance invoices 60% ROUNDUP; separate receipt gate')
 
@@ -151,18 +151,18 @@ with tempfile.TemporaryDirectory() as folder:
         post(staff,'operations/fulfilment',first)
         assert send.call_count == 1
         assert 'Bedroom: 3' in send.call_args.args[2] and 'Lounge: 2' in send.call_args.args[2]
-    assert arrived['order']['status']=='arrived'
+    assert arrived['order']['status']=='ready'
+    assert arrived['order']['deposit_paid_at'] and re.fullmatch(r'\d{4}-\d{2}-\d{2}',arrived['order']['eta']) and arrived['order']['lead_time']['weeks']=='10'
     assert arrived['order']['payment_status']=='deposit_received'
     post(staff,'operations/fulfilment',{**first,'lines':[dict(line_id='1',quantity=2),dict(line_id='2',quantity=2)]},409)
     post(staff,'operations/fulfilment',{**first,'operation_key':'arrival-after-complete','lines':[dict(line_id='1',quantity=1)]},409)
-    post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='delivery-001',lines=[dict(line_id='1',quantity=3),dict(line_id='2',quantity=2)]),409)
     rebate = dict(customer_id=a['customer_id'],source_order_ids=[oid],month='2026-01',amount='50',evidence='TEST confirmed monthly credit',currency='NZD')
     credit = post(staff,'operations/rebates',rebate)
     post(staff,'operations/rebates',rebate,409)
     invoice = post(staff,'operations/settlements',settle)
     post(staff,f"operations/invoices/{invoice['id']}/received",{'note':'TEST balance paid'})
     final = post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='delivery-002',lines=[dict(line_id='1',quantity=3),dict(line_id='2',quantity=2)]))['order']
-    assert final['status']=='delivered' and final['payment_status']=='paid'
+    assert final['status']=='complete' and final['payment_status']=='paid' and final['completed_at']
     print('PASS fulfilment: partial actions rejected; full-order arrival/delivery, payment gate, mail and idempotency')
 
     assert invoice['gross']=='200.00' and invoice['amount']=='150.00'
@@ -199,10 +199,11 @@ with tempfile.TemporaryDirectory() as folder:
         assert send.call_count == 0
     pdf = staff.get(f"/api/operations/invoices/{invoice['id']}/pdf")
     assert pdf.status_code == 200 and pdf.headers['content-type'] == 'application/pdf' and pdf.content.startswith(b'%PDF')
-    # The balance invoice shows the arithmetic, not just a sentence: order total - deposit paid = balance, then rebate, then amount due.
-    for expected in ('Order total: NZD 500.00', 'Deposit paid: NZD 300.00', 'Balance: NZD 200.00', 'Rebate applied: -NZD 50.00', 'Amount due: NZD 150.00'):
+    # Meeting 27 Oct: a balance line is just that order's balance (GST included); no deposit column. Then rebate, amount due and the GST inside it.
+    for expected in ('Balance incl. GST: NZD 200.00', 'Rebate applied: -NZD 50.00', 'Amount due: NZD 150.00', 'Includes GST (15%): NZD 19.57'):
         assert expected in preview['body'], expected
-    assert 'Deposit paid' in preview['html'] and 'Rebate applied' in preview['html']
+    assert 'Deposit paid' not in preview['body'] and 'Deposit paid' not in preview['html']
+    assert 'Balance incl. GST' in preview['html'] and 'Rebate applied' in preview['html']
     import base64, re, zlib
 
     def pdf_text(raw):
@@ -220,7 +221,7 @@ with tempfile.TemporaryDirectory() as folder:
             out += data
         return out
     printed = pdf_text(pdf.content)
-    for expected in (b'Amount due', b'150.00', b'Deposit paid'.upper(), b'300.00'):
+    for expected in (b'Amount due', b'150.00', b'BALANCE', b'200.00', b'19.57'):
         assert expected in printed, expected
     assert b'<b>' not in printed and b'&lt;' not in printed and b'&amp;' not in printed, 'markup leaked into the PDF'
     assert portal.get(f"/api/operations/invoices/{invoice['id']}/mail-preview").status_code == 401

@@ -10,6 +10,7 @@ import json
 import secrets
 import time
 import os
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 from typing import Literal
 from pathlib import Path
@@ -18,7 +19,7 @@ WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").re
 
 import invoice_mail
 from fastapi import Depends, HTTPException
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 # Latest client reply overrides the earlier 20% planning baseline.
 DEPOSIT_RATE = Decimal('0.60')
@@ -129,9 +130,10 @@ def deposit_amount(total, rate=DEPOSIT_RATE):
 
 def prepare_knowledge_manifest(manifest):
     """Return a detached editable copy with the current VERA commercial rules."""
-    from addons import ADDONS, ORDER_INSTALLATION_MINIMUM, PANEL_INSTALLATION, with_price_labels
+    from addons import ADDONS, ORDER_INSTALLATION_MINIMUM, PANEL_INSTALLATION, with_default_addons, with_price_labels
     value = json.loads(json.dumps(manifest))
     value.setdefault('addons', json.loads(json.dumps(ADDONS)))
+    with_default_addons(value['addons'])
     with_price_labels(value['addons'])
     value.setdefault('installation_per_panel', str(PANEL_INSTALLATION))
     value.setdefault('minimum_installation', str(ORDER_INSTALLATION_MINIMUM))
@@ -507,10 +509,17 @@ class Window(Input):
 
 class Project(Input):
     project_name: str = Field(min_length=1, max_length=200)
-    site_address: str = Field(min_length=1, max_length=1000)
+    site_address: str = Field(default='', max_length=1000)
     lines: list[Window] = Field(min_length=1, max_length=200)
     submission_key: str = Field(min_length=8, max_length=100)
     installation_required: bool = False
+
+    @model_validator(mode='after')
+    def address_for_installation(self):
+        # A wholesale customer only gives an address when VERA is asked to install.
+        if self.installation_required and not self.site_address:
+            raise ValueError('Enter the installation address when installation is required')
+        return self
 
 
 class TemplateUpload(Input):
@@ -638,6 +647,32 @@ class Batch(Input):
     operation_key: str = Field(min_length=8, max_length=100)
 
 
+def iso_date(value):
+    try:
+        return date.fromisoformat(value).isoformat()
+    except (TypeError, ValueError):
+        raise ValueError('Use a date like 2026-12-31') from None
+
+
+class ShipmentCreate(Batch):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    eta: str | None = None
+
+    @field_validator('eta')
+    @classmethod
+    def valid_eta(cls, v):
+        return None if v is None else iso_date(v)
+
+
+class ShipmentEta(Input):
+    eta: str
+
+    @field_validator('eta')
+    @classmethod
+    def valid_eta(cls, v):
+        return iso_date(v)
+
+
 class Quantity(Input):
     line_id: str
     quantity: int = Field(gt=0, strict=True)
@@ -666,6 +701,36 @@ class Settlement(Batch):
 
 class Receipt(Input):
     note: str = Field(min_length=3,max_length=1000)
+
+
+class PaymentDetails(Input):
+    account_name: str = Field(default='', max_length=200)
+    bank_name: str = Field(default='', max_length=200)
+    account_number: str = Field(default='', max_length=100)
+    reference_note: str = Field(default='', max_length=500)
+
+
+class SettingsEdit(Input):
+    payment_details: PaymentDetails
+
+
+class ManualItem(Input):
+    description: str = Field(min_length=1, max_length=200)
+    amount: Decimal = Field(allow_inf_nan=False, max_digits=12, decimal_places=2)
+
+    @field_validator('amount')
+    @classmethod
+    def not_zero(cls, v):
+        if v == 0:
+            raise ValueError('An invoice line cannot be zero')
+        return v
+
+
+class ManualInvoice(Input):
+    customer_id: int
+    items: list[ManualItem] = Field(min_length=1, max_length=50)
+    operation_key: str = Field(min_length=8, max_length=100)
+    order_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class ShipmentCosts(Input):
@@ -739,10 +804,20 @@ def register(app, s):
         return number
 
     def lead_time_for(lines):
+        # Robin, 28 Oct: 10 weeks counted from the day the deposit is received (12 when a shaped cut-out is chosen).
         shaped = any(line.get('options', {}).get('shaped_cutout') == 'yes' for line in lines)
-        weeks = '12–14' if shaped else '10–12'
-        return {'weeks': weeks, 'text': weeks + ' calendar weeks from staff acceptance', 'starts_on': 'staff_acceptance', 'calendar_weeks': True,
+        weeks = '12' if shaped else '10'
+        return {'weeks': weeks, 'text': weeks + ' calendar weeks from deposit received', 'starts_on': 'deposit_received', 'calendar_weeks': True,
                 'shaped_cutout': shaped}
+
+    def start_lead_time(d, received_at):
+        """Record when the deposit arrived and the ETA that follows from it, unless a shipment batch already set the ETA."""
+        d['deposit_paid_at'] = received_at
+        d['lead_time'] = {**lead_time_for(d['lines']), 'starts_at': received_at}
+        if d.get('eta_source') != 'batch':
+            start = datetime.fromisoformat(received_at).astimezone(s.business_now().tzinfo).date()
+            d['eta'] = (start + timedelta(weeks=int(d['lead_time']['weeks']))).isoformat()
+            d['eta_source'] = 'deposit'
 
     def get(c, rid, kind=None):
         row = c.execute('SELECT * FROM operations_records WHERE id=?', (rid,)).fetchone()
@@ -763,7 +838,7 @@ def register(app, s):
         # One builder for the stored invoice: used by preview, queueing, delivery and the PDF download.
         inv = get(c, iid, 'invoice')
         orders = {oid: get(c, oid, 'project') for oid in inv['order_ids']}
-        return invoice_mail.build(inv, profile(c, inv['customer_id']), orders)
+        return invoice_mail.build(inv, profile(c, inv['customer_id']), orders, payment_details(c))
 
     def put(c, kind, d, cid=None):
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
@@ -788,8 +863,17 @@ def register(app, s):
     def event(d, action, actor, **extra):
         d['history'].append({'action': action, 'actor': actor, 'created_at': s.now(), **extra})
 
+    LEGACY_STATUS = {'arrived': 'ready', 'partially_arrived': 'in_transit', 'delivered': 'complete', 'partially_delivered': 'ready'}
+
     def enrich(c, d):
-        return {**d, 'invoices': [i for i in records(c, 'invoice', d['customer_id']) if d['id'] in i['order_ids']]}
+        invoices = [i for i in records(c, 'invoice', d['customer_id']) if d['id'] in i['order_ids']]
+        out = {**d, 'status': LEGACY_STATUS.get(d['status'], d['status']), 'invoices': invoices}
+        if not out.get('deposit_paid_at'):
+            # Orders whose deposit was confirmed before ETAs were stored take it from the deposit invoice.
+            paid = next((i.get('received_at') for i in invoices if i['kind'] == 'deposit' and i.get('received_at')), None)
+            if paid:
+                start_lead_time(out, paid)
+        return out
 
     def portal_view(d):
         # Customers see their calculated prices, never the complete private source matrix.
@@ -1043,7 +1127,7 @@ def register(app, s):
             set_cost_area(c, order)
         missing = [order['id'] for order in orders if order.get('purchase_cost') is None]
         if missing:
-            raise HTTPException(409, 'Record the USD factory price for each shipment order first: ' + ', '.join(missing))
+            raise HTTPException(409, 'Record the USD factory price for each shipment order first: ' + ', '.join(str(o.get('order_number') or o['id']) for o in orders if o['id'] in missing))
         costs = [Decimal(order['purchase_cost']) for order in orders]
         freight = allocate_share(Decimal(shipment['freight_land']) + Decimal(shipment['freight_sea']),
                                  [Decimal(order['measured_sqm']) for order in orders], costs)
@@ -1060,14 +1144,48 @@ def register(app, s):
         shipment.update(freight_shares=freight, duty_shares=[order['duty_cost'] for order in orders],
                         duty_basis='actual' if actual else 'estimate')
 
+    def shipment_view(shipment, orders=None):
+        out = {k: v for k, v in shipment.items() if k != 'request_hash'}
+        out.setdefault('name', shipment['id'])
+        out.setdefault('eta', None)
+        out.setdefault('status', 'in_transit')
+        if orders is not None:
+            # Staff-only view: the purchase and landed-cost figures a batch is costed from.
+            out['orders'] = [{'id': o['id'], 'order_number': o.get('order_number'), 'company': o.get('company'),
+                              'project_name': o.get('project_name'), 'status': LEGACY_STATUS.get(o['status'], o['status']), 'eta': o.get('eta'),
+                              **{k: o.get(k) for k in ('factory_price_usd', 'measured_sqm', 'purchase_cost', 'freight_cost', 'duty_cost', 'duty_basis')}}
+                             for o in orders]
+        return out
+
+    @app.get('/api/operations/shipments')
+    def list_shipments(actor=Depends(s.auth)):
+        with s.db() as c:
+            result = []
+            for shipment in sorted(records(c, 'shipment'), key=lambda x: x.get('created_at', ''), reverse=True):
+                orders = [get(c, oid, 'project') for oid in shipment['order_ids']]
+                result.append(shipment_view(shipment, orders))
+            return result
+
+    @app.get('/api/operations/shipments/candidates')
+    def shipment_candidates(actor=Depends(s.auth)):
+        # Ordered shutter projects that no batch has taken yet.
+        with s.db() as c:
+            return [{'id': d['id'], 'order_number': d.get('order_number'), 'company': d.get('company'), 'project_name': d.get('project_name'),
+                     'eta': d.get('eta'), 'deposit_paid_at': d.get('deposit_paid_at')}
+                    for d in records(c, 'project')
+                    if d['status'] == 'supplier_ordered' and not d.get('shipment_id') and shutter_lines(c, d)]
+
     @app.post('/api/operations/shipments')
-    def create_shipment(body: Batch, actor=Depends(s.auth)):
+    def create_shipment(body: ShipmentCreate, actor=Depends(s.auth)):
         sid = 'ship-' + hashlib.sha256(body.operation_key.encode()).hexdigest()[:24]
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             old = replay(c, sid, bodyhash(body))
             if old:
-                return old
+                return shipment_view(old)
+            name = (body.name or '').strip() or sid
+            if any(x.get('name', x['id']).casefold() == name.casefold() for x in records(c, 'shipment')):
+                raise HTTPException(409, 'A shipment with this name already exists')
             members, results = [], []
             for oid in dict.fromkeys(body.order_ids):
                 try:
@@ -1078,8 +1196,11 @@ def register(app, s):
                         raise HTTPException(409, 'Only shutter orders join a sea shipment')
                     if order.get('shipment_id'):
                         raise HTTPException(409, 'Order already belongs to a shipment')
-                    order['shipment_id'] = sid
+                    order.update(shipment_id=sid, batch_name=name, status='in_transit')
+                    if body.eta:
+                        order.update(eta=body.eta, eta_source='batch')
                     set_cost_area(c, order)
+                    event(order, 'in_transit', actor, batch_id=sid, batch_name=name, eta=order.get('eta'))
                     put(c, 'project', order, order['customer_id'])
                     members.append(oid)
                     results.append({'order_id': oid, 'status': 'success'})
@@ -1087,9 +1208,70 @@ def register(app, s):
                     results.append({'order_id': oid, 'status': 'skipped', 'reason': error.detail})
             if not members:
                 raise HTTPException(409, 'No eligible shutter orders could join this shipment')
-            shipment = {'id': sid, 'order_ids': members, 'results': results, 'request_hash': bodyhash(body), 'created_at': s.now(), 'actor': actor}
+            shipment = {'id': sid, 'name': name, 'eta': body.eta, 'status': 'in_transit', 'order_ids': members, 'results': results,
+                        'request_hash': bodyhash(body), 'created_at': s.now(), 'actor': actor}
             put(c, 'shipment', shipment)
-            return shipment
+            return shipment_view(shipment)
+
+    @app.post('/api/operations/shipments/{sid}/eta')
+    def shipment_eta(sid: str, body: ShipmentEta, actor=Depends(s.auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            shipment = get(c, sid, 'shipment')
+            shipment['eta'] = body.eta
+            updated = []
+            for oid in shipment['order_ids']:
+                order = get(c, oid, 'project')
+                if LEGACY_STATUS.get(order['status'], order['status']) != 'in_transit':
+                    continue  # goods already arrived keep the date they arrived under
+                if order.get('eta') != body.eta:
+                    event(order, 'eta_updated', actor, previous=order.get('eta'), eta=body.eta, batch_id=sid, batch_name=shipment.get('name'))
+                    order.update(eta=body.eta, eta_source='batch')
+                    put(c, 'project', order, order['customer_id'])
+                updated.append(oid)
+            put(c, 'shipment', shipment)
+            return {**shipment_view(shipment), 'updated_order_ids': updated}
+
+    @app.post('/api/operations/shipments/{sid}/arrive')
+    def shipment_arrive(sid: str, actor=Depends(s.auth)):
+        """The whole batch has arrived: every order becomes Ready, customers are told, and balance invoices are drafted per company."""
+        notifications, drafts = [], []
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            shipment = get(c, sid, 'shipment')
+            if shipment.get('status') == 'arrived':
+                return {**shipment_view(shipment), 'invoice_ids': shipment.get('invoice_ids', [])}
+            ready = []
+            for oid in shipment['order_ids']:
+                d = get(c, oid, 'project')
+                if LEGACY_STATUS.get(d['status'], d['status']) != 'in_transit':
+                    continue
+                scope = []
+                for line in d['lines']:
+                    quantity = line['quantity'] - line['arrived']
+                    if quantity:
+                        line['arrived'] += quantity
+                        scope.append({'line_id': line['id'], 'window_name': line['window_name'], 'quantity': quantity})
+                d.update(status='ready', ready_at=s.now(), arrival_status='arrived', delivery_status='not_delivered')
+                event(d, 'arrival', actor, batch_id=sid, batch_name=shipment.get('name'), lines=scope)
+                put(c, 'project', d, d['customer_id'])
+                notifications.append(queue(c, d['customer_id'], 'VERA arrival: '+d['project_name'],
+                                           'All goods for this order have arrived:\n'+'\n'.join(f"{l['window_name']}: {l['quantity']}" for l in scope)
+                                           +'\nPlease contact VERA to arrange collection or installation.', 'arrival:'+sid+':'+oid))
+                ready.append(d)
+            groups = {}
+            for d in ready:
+                if d.get('payment_status') == 'deposit_received' and not d.get('balance_invoice_id'):
+                    groups.setdefault((d['customer_id'], d['currency'], d['tax_basis']), []).append(d)
+            for (cid, _currency, _basis), orders in groups.items():
+                iid = key('balance:', f'batch-arrival:{sid}:{cid}')
+                evidence = 'Created automatically when shipment ' + str(shipment.get('name')) + ' arrived'
+                drafts.append(create_balance_invoice(c, orders, actor, iid, evidence, hashlib.sha256(iid.encode()).hexdigest())['id'])
+            shipment.update(status='arrived', arrived_at=s.now(), invoice_ids=drafts)
+            put(c, 'shipment', shipment)
+        for nid in notifications:
+            deliver(nid)
+        return {**shipment_view(shipment), 'invoice_ids': drafts}
 
     @app.get('/api/operations/shipments/{sid}')
     def shipment_detail(sid: str, actor=Depends(s.auth)):
@@ -1166,10 +1348,29 @@ def register(app, s):
         return {'email_mode':state['mode'],'email_delivery_enabled':state['delivery_enabled'] and state['configured'],
                 'demo_email_address':state['demo_recipient'] if state['mode']=='demo' and is_admin else ''}
 
+    def payment_details(c):
+        row = c.execute("SELECT data FROM operations_records WHERE id='payment-details'").fetchone()
+        return json.loads(row['data']) if row else {}
+
+    def payment_view(details):
+        view = {key: details.get(key, '') for key in PaymentDetails.model_fields}
+        return {**view, 'configured': bool(invoice_mail.payment_lines(view))}
+
     @app.get('/api/operations/settings')
     def settings(actor=Depends(s.require_admin)):
         from email_service import configuration
-        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND}
+        with s.db() as c:
+            payment = payment_view(payment_details(c))
+        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND,'payment_details':payment}
+
+    @app.post('/api/operations/settings')
+    def save_settings(body: SettingsEdit, actor=Depends(s.require_admin)):
+        # Bank details printed on every invoice: administrators only, and every change is attributed.
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            saved = {**body.payment_details.model_dump(), 'id': 'payment-details', 'updated_at': s.now(), 'updated_by': actor}
+            put(c, 'setting', saved)
+            return {'payment_details': payment_view(saved)}
 
     @app.post('/api/operations/customers')
     def create_customer(body: Profile, actor=Depends(s.require_admin)):
@@ -1905,7 +2106,6 @@ def register(app, s):
             d['status'] = 'accepted'
             d['accepted_at'] = s.now()
             d.setdefault('lead_time', lead_time_for(d['lines']))
-            d['lead_time']['starts_at'] = d['accepted_at']
             event(d, 'review_accepted', actor)
             inv = {'id': 'deposit:'+oid, 'invoice_number': (d.get('order_number') or oid[-8:].upper()) + '-D', 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
                    'amount': d.get('deposit') or deposit_amount(d['total']), 'currency': d['currency'], 'tax_basis': d['tax_basis'],
@@ -1943,9 +2143,11 @@ def register(app, s):
                 raise HTTPException(409, 'Accept technical review first')
             if d['payment_status'] == 'deposit_unpaid':
                 d['payment_status'] = 'deposit_received'
-                event(d, 'deposit_received', actor)
+                received_at = s.now()
+                start_lead_time(d, received_at)
+                event(d, 'deposit_received', actor, eta=d.get('eta'))
                 inv=get(c,'deposit:'+oid,'invoice')
-                inv.update(payment_status='received',received_at=s.now(),received_by=actor)
+                inv.update(payment_status='received',received_at=received_at,received_by=actor)
                 put(c,'invoice',inv,d['customer_id'])
                 put(c, 'project', d, d['customer_id'])
             return enrich(c, d)
@@ -2054,10 +2256,9 @@ def register(app, s):
             if old:
                 return old
             d = get(c, body.order_id, 'project')
-            if d['status'] not in ('in_transit', 'partially_arrived', 'arrived', 'partially_delivered', 'delivered'):
+            if d['status'] not in ('in_transit', 'ready', 'complete', 'partially_arrived', 'arrived', 'partially_delivered', 'delivered'):
                 raise HTTPException(409, 'Record supplier order and transit before fulfilment')
-            if body.kind == 'delivery' and d.get('payment_status') != 'paid':
-                raise HTTPException(409, 'The balance must be paid before any delivery or completion')
+            # Payment is recorded last and never blocks pickup: in practice customers do not always pay first.
             if len({line.line_id for line in body.lines}) != len(body.lines):
                 raise HTTPException(422, 'Each line may occur only once per batch')
             field = 'arrived' if body.kind == 'arrival' else 'delivered'
@@ -2075,10 +2276,10 @@ def register(app, s):
                 if quantity:
                     line[field] += quantity
                     scope.append({'line_id': line['id'], 'window_name': line['window_name'], 'quantity': quantity})
-            if body.kind == 'arrival':
-                d['status'] = 'delivered' if all(l['delivered'] == l['quantity'] for l in d['lines']) else ('partially_delivered' if any(l['delivered'] for l in d['lines']) else 'arrived')
-            else:
-                d['status'] = 'delivered'
+            d['status'] = 'ready' if body.kind == 'arrival' else 'complete'
+            if body.kind == 'arrival' and all(l['delivered'] == l['quantity'] for l in d['lines']):
+                d['status'] = 'complete'
+            d['ready_at' if body.kind == 'arrival' else 'completed_at'] = s.now()
             d['arrival_status'] = 'arrived'
             d['delivery_status'] = 'delivered' if all(l['delivered'] == l['quantity'] for l in d['lines']) else ('partially_delivered' if any(l['delivered'] for l in d['lines']) else 'not_delivered')
             event(d, body.kind, actor, batch_id=rid, lines=scope)
@@ -2164,6 +2365,76 @@ def register(app, s):
             put(c, 'invoice', d, d['customer_id'])
         return d
 
+    def tax_rate_now(c):
+        active = c.execute("SELECT data FROM operations_records WHERE id='template-current'").fetchone()
+        if active:
+            try:
+                return str(prepare_knowledge_manifest(get(c, json.loads(active['data'])['template_id'], 'template')).get('tax_rate') or '0.15')
+            except HTTPException:
+                pass
+        return '0.15'
+
+    @app.post('/api/operations/invoices/manual')
+    def manual_invoice(body: ManualInvoice, actor=Depends(s.auth)):
+        """A separate invoice for charges outside the order balance (installation, air freight, credits). Lines include GST; credits are negative."""
+        iid = key('manual:', body.operation_key)
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            old = replay(c, iid, bodyhash(body))
+            if old:
+                return old
+            customer = profile(c, body.customer_id)
+            for oid in dict.fromkeys(body.order_ids):
+                if get(c, oid, 'project')['customer_id'] != body.customer_id:
+                    raise HTTPException(422, 'Linked orders must belong to this company')
+            total = sum((item.amount for item in body.items), Decimal(0))
+            if total <= 0:
+                raise HTTPException(422, 'The invoice total must be positive; credits are negative lines against charges')
+            count = len([i for i in records(c, 'invoice', body.customer_id) if i['kind'] == 'manual'])
+            prefix = (customer.get('customer_code') or '').strip() or 'INV'
+            d = {'id': iid, 'invoice_number': f'{prefix}-M{count + 1:03d}', 'fixed_number': f'{prefix}-M{count + 1:03d}',
+                 'customer_id': body.customer_id, 'kind': 'manual', 'order_ids': list(dict.fromkeys(body.order_ids)),
+                 'lines': [{'description': item.description, 'amount': money(item.amount)} for item in body.items],
+                 'currency': 'NZD', 'tax_basis': 'GST included in total', 'tax_rate': tax_rate_now(c),
+                 'gross': money(total), 'amount': money(total), 'status': 'draft', 'created_at': s.now(), 'actor': actor,
+                 'request_hash': bodyhash(body)}
+            put(c, 'invoice', d, body.customer_id)
+            return d
+
+    @app.get('/api/portal/invoices')
+    def portal_invoices(cid=Depends(customer_auth)):
+        """The customer's own invoices once VERA has sent them, with paid/unpaid state and a count of what is still owing."""
+        with s.db() as c:
+            orders = {d['id']: d for d in records(c, 'project', cid)}
+            visible = []
+            for inv in sorted(records(c, 'invoice', cid), key=lambda x: x.get('created_at', ''), reverse=True):
+                if inv.get('status') == 'draft':
+                    continue
+                paid = inv.get('payment_status') == 'received'
+                visible.append({'id': inv['id'], 'invoice_number': inv['invoice_number'], 'kind': inv['kind'], 'currency': inv['currency'],
+                                'amount': inv['amount'], 'created_at': inv.get('created_at'), 'payment_status': 'paid' if paid else 'unpaid',
+                                'received_at': inv.get('received_at') if paid else None,
+                                'orders': [{'id': oid, 'order_number': orders[oid].get('order_number') if orders[oid].get('order_number_confirmed', True) else None,
+                                            'project_name': orders[oid].get('project_name')} for oid in inv['order_ids'] if oid in orders],
+                                'lines': inv.get('lines') if inv['kind'] == 'manual' else None,
+                                'pdf_path': f"portal/invoices/{inv['id']}/pdf"})
+            return {'invoices': visible, 'unpaid_count': sum(i['payment_status'] == 'unpaid' for i in visible),
+                    'unpaid_total': money(sum((Decimal(i['amount']) for i in visible if i['payment_status'] == 'unpaid'), Decimal(0)))}
+
+    @app.get('/api/portal/invoices/{iid}/pdf')
+    def portal_invoice_pdf(iid: str, cid=Depends(customer_auth)):
+        from fastapi.responses import Response
+        with s.db() as c:
+            try:
+                inv = get(c, iid, 'invoice')
+            except HTTPException:
+                inv = None
+            if not inv or inv['customer_id'] != cid or inv.get('status') == 'draft':
+                raise HTTPException(404, 'Invoice not found')
+            model = invoice_email(c, iid)
+        return Response(invoice_mail.render_pdf(model), media_type='application/pdf',
+                        headers={'Content-Disposition': f'inline; filename="{model["number"]}.pdf"', 'Cache-Control': 'private, no-store'})
+
     @app.post('/api/operations/rebates')
     def credit(body: Credit, actor=Depends(s.require_admin)):
         # An explicit confirmed result imports the monthly calculation; no fabricated ladder.
@@ -2191,6 +2462,40 @@ def register(app, s):
         with s.db() as c:
             return {'calculation_status': 'confirmed_monthly_rules_required', 'credits': records(c, 'rebate')}
 
+    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash):
+        """One draft balance invoice for the given arrived orders of one company: order total less deposit, then confirmed earlier-month rebates."""
+        cid, currency = orders[0]['customer_id'], orders[0]['currency']
+        lines = []
+        for d in orders:
+            deposit = get(c, 'deposit:'+d['id'], 'invoice')
+            lines.append({'order_id': d['id'], 'amount': money(Decimal(d['total'])-Decimal(deposit['amount']))})
+        gross = sum((Decimal(l['amount']) for l in lines), Decimal(0))
+        remaining, allocations = gross, []
+        for r in sorted(records(c, 'rebate', cid), key=lambda x: (x['month'], x['id'])):
+            # Use only next-period confirmed credits; never use this month's credit early.
+            if r['currency'] != currency or r['month'] >= s.business_now().strftime('%Y-%m'):
+                continue
+            used = min(remaining, Decimal(r['remaining']))
+            if used <= 0:
+                continue
+            r['remaining'] = money(Decimal(r['remaining'])-used)
+            r['used'] = money(Decimal(r['used'])+used)
+            r['allocations'].append({'invoice_id': iid, 'amount': money(used)})
+            put(c, 'rebate', r, cid)
+            remaining -= used
+            allocations.append({'rebate_id': r['id'], 'amount': money(used)})
+        d = {'id': iid, 'invoice_number': invoice_mail.invoice_number({'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'id': iid}, {o['id']: o.get('order_number') for o in orders}),
+             'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
+             'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'gross': money(gross), 'amount': money(remaining),
+             'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
+             'request_hash': request_hash, 'rules_evidence': rules_evidence}
+        put(c, 'invoice', d, cid)
+        for o in orders:
+            o['balance_invoice_id'] = iid
+            event(o, 'balance_invoice_created', actor, invoice_id=iid)
+            put(c, 'project', o, cid)
+        return d
+
     @app.post('/api/operations/settlements')
     def settle(body: Settlement, actor=Depends(s.auth)):
         iid = key('balance:', body.operation_key)
@@ -2206,37 +2511,7 @@ def register(app, s):
                 raise HTTPException(409, 'Balance invoices are available only after every line has arrived and the deposit is confirmed')
             if any(d.get('balance_invoice_id') for d in orders):
                 raise HTTPException(409, 'An order already has a balance invoice')
-            cid, currency = orders[0]['customer_id'], orders[0]['currency']
-            lines = []
-            for d in orders:
-                deposit = get(c, 'deposit:'+d['id'], 'invoice')
-                lines.append({'order_id': d['id'], 'amount': money(Decimal(d['total'])-Decimal(deposit['amount']))})
-            gross = sum((Decimal(l['amount']) for l in lines), Decimal(0))
-            remaining, allocations = gross, []
-            for r in sorted(records(c, 'rebate', cid), key=lambda x: (x['month'], x['id'])):
-                # Use only next-period confirmed credits; never use this month's credit early.
-                if r['currency'] != currency or r['month'] >= s.business_now().strftime('%Y-%m'):
-                    continue
-                used = min(remaining, Decimal(r['remaining']))
-                if used <= 0:
-                    continue
-                r['remaining'] = money(Decimal(r['remaining'])-used)
-                r['used'] = money(Decimal(r['used'])+used)
-                r['allocations'].append({'invoice_id': iid, 'amount': money(used)})
-                put(c, 'rebate', r, cid)
-                remaining -= used
-                allocations.append({'rebate_id': r['id'], 'amount': money(used)})
-            d = {'id': iid, 'invoice_number': invoice_mail.invoice_number({'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'id': iid}, {o['id']: o.get('order_number') for o in orders}),
-                 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
-                 'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'gross': money(gross), 'amount': money(remaining),
-                 'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
-                 'request_hash': bodyhash(body), 'rules_evidence': body.rules_evidence}
-            put(c, 'invoice', d, cid)
-            for o in orders:
-                o['balance_invoice_id'] = iid
-                event(o, 'balance_invoice_created', actor, invoice_id=iid)
-                put(c, 'project', o, cid)
-            return d
+            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body))
 
     @app.get('/api/portal/consumption')
     def consumption(cid=Depends(customer_auth)):
@@ -2271,11 +2546,11 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             inv=get(c,iid,'invoice')
-            if inv['kind']!='balance':
+            if inv['kind']=='deposit':
                 raise HTTPException(409,'Confirm deposits through the project deposit-received action')
             if inv.get('payment_status')!='received':
                 inv.update(payment_status='received',received_at=s.now(),received_by=actor,receipt_note=body.note)
-                for oid in inv['order_ids']:
+                for oid in inv['order_ids'] if inv['kind']=='balance' else []:
                     d=get(c,oid,'project'); d['payment_status']='paid'
                     event(d,'balance_received',actor,invoice_id=iid,note=body.note)
                     put(c,'project',d,d['customer_id'])
