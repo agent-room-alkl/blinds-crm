@@ -100,10 +100,17 @@ PANEL_INSTALLATION = Decimal('50')
 ORDER_INSTALLATION_MINIMUM = Decimal('150')
 
 
+def concealed_rod(options):
+    """True when the Control Rod is Internal Concealed, which carries the Hidden tilt rod charge."""
+    return str((options or {}).get('control_rod') or '').strip().lower() == 'internal concealed'
+
+
 def addon_totals(options, source_code=None, addon_definitions=None):
     """Return (per_sqm, percent, fixed) for the selected named add-ons."""
     per_sqm = percent = fixed = Decimal(0)
     selected = options or {}
+    if concealed_rod(selected) and selected.get('hidden_tilt_rod') in (None, '', 'no'):
+        selected = {**selected, 'hidden_tilt_rod': 'yes'}  # Robin, 27 Oct: this rod is the V5 Hidden tilt rod, +$40/sqm
     for addon in ADDONS if addon_definitions is None else addon_definitions:
         value = selected.get(addon['key']) or ''
         if value in ('', 'no', 'none'):
