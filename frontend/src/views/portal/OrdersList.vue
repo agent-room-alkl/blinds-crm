@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { leadText } from "../../addons";
+import { formatDate, leadTimeLabel, normalizeStatus, paymentLabel, statusLabel } from "../../orderStatus";
 import { portalRequest } from "../../portal-api";
 
 const { locale } = useI18n();
@@ -58,14 +58,16 @@ function startNewOrder() {
       >
         <div class="order-header">
           <strong>{{ order.project_name }}</strong>
-          <span class="order-status">{{ order.status }}</span>
+          <span class="order-status" :class="`status-${normalizeStatus(order.status)}`">{{ statusLabel(order, locale) }}</span>
         </div>
         <p>{{ tx('订单号', 'Order no.') }} {{ order.order_number || (order.order_number_confirmed === false ? tx('待管理员确认', 'Pending admin confirmation') : '—') }}</p>
-        <p v-if="leadText(order.lead_time)">{{ tx('预计交期', 'Lead time') }} {{ leadText(order.lead_time) }}</p>
+        <p v-if="order.eta && !['ready', 'complete'].includes(normalizeStatus(order.status))" class="order-eta">{{ tx('预计到货', 'Estimated arrival') }} <strong>{{ formatDate(order.eta, locale) }}</strong><span v-if="order.batch_name"> · {{ order.batch_name }}</span></p>
+        <p v-else-if="normalizeStatus(order.status) === 'ready'" class="order-eta ready">{{ tx('已到货，可以提取', 'Arrived. Ready for collection') }}<span v-if="order.batch_name"> · {{ order.batch_name }}</span></p>
+        <p v-else-if="leadTimeLabel(order.lead_time, locale) && normalizeStatus(order.status) !== 'complete'">{{ tx('预计交期', 'Lead time') }} {{ leadTimeLabel(order.lead_time, locale) }}</p>
         <p class="order-address">{{ order.site_address }}</p>
         <div class="order-footer">
           <span>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("待定价", "TBC") }}</span>
-          <span class="order-payment">{{ order.payment_status }}</span>
+          <span class="order-payment" :class="`pay-${order.payment_status}`">{{ paymentLabel(order.payment_status, locale) }}</span>
         </div>
       </div>
     </div>
@@ -183,7 +185,17 @@ button.primary:hover {
 .order-payment {
   font-size: 13px;
   color: rgba(27, 36, 33, 0.6);
+  text-align: right;
 }
+
+.order-payment.pay-paid { color: #17523a; font-weight: 600; }
+
+.order-status.status-ready { background: #0f6e5c; color: #fff; }
+.order-status.status-complete { background: #e8e8e4; color: #4b5650; }
+.order-status.status-in_transit { background: #e6eef7; color: #24527a; }
+
+.order-eta { color: #34503f; }
+.order-eta.ready { color: #17523a; font-weight: 600; }
 
 @media (max-width: 700px) {
   .page-header {

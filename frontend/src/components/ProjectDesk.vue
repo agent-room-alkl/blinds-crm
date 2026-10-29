@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
+import ManualInvoiceForm from "./ManualInvoiceForm.vue";
 
 interface Line {
   rule_version?: string;
@@ -33,7 +34,12 @@ interface Invoice {
   payment_status?: string;
   order_ids?: string[];
   invoice_number?: string;
+  created_at?: string;
+  received_at?: string;
 }
+interface ShipmentOrder { id: string; order_number?: string; company?: string; project_name: string; status: string; eta?: string; factory_price_usd?: string | null; measured_sqm?: string | null; purchase_cost?: string | null; freight_cost?: string | null; duty_cost?: string | null; duty_basis?: string | null; }
+interface Shipment { id: string; name: string; eta?: string | null; status: string; created_at?: string; arrived_at?: string; order_ids: string[]; orders?: ShipmentOrder[]; freight_land?: string; freight_sea?: string; duty_total?: string | null; invoice_ids?: string[]; }
+interface ShipmentCandidate { id: string; order_number?: string; company: string; project_name: string; eta?: string; deposit_paid_at?: string; }
 interface MailPreview {
   invoice_id: string;
   subject: string;
@@ -106,6 +112,11 @@ interface ProjectOrder {
   project_name: string;
   site_address: string;
   created_at?: string;
+  deposit_paid_at?: string;
+  ready_at?: string;
+  completed_at?: string;
+  eta?: string;
+  batch_name?: string;
   status: string;
   payment_status: string;
   arrival_status?: string;
@@ -187,6 +198,14 @@ const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const orders = ref<ProjectOrder[]>([]);
 const invoices = ref<Invoice[]>([]);
+const shipments = ref<Shipment[]>([]);
+const shipmentCandidates = ref<ShipmentCandidate[]>([]);
+const projectPane = ref<'orders'|'shipments'|'overview'>('orders');
+const shipmentPick = ref<string[]>([]);
+const shipmentForm = reactive({ name: '', eta: '' });
+const shipmentEta = reactive<Record<string, string>>({});
+const shipmentCosts = reactive<Record<string, { freight_land: string; freight_sea: string; duty_total: string }>>({});
+const purchaseForm = reactive<Record<string, { usd: string; sqm: string }>>({});
 const notices = ref<Notice[]>([]);
 const rebates = ref<Rebate[]>([]);
 const providers = ref<Provider[]>([]);
@@ -289,9 +308,7 @@ const nextOrderHint = computed(() => {
   if (order.status==='accepted') return tx('定金确认后下载供应商订单，再标为已下单。','After the deposit is confirmed, download the supplier order, then mark it ordered.');
   if (order.status==='supplier_ordered') return tx('供应商下单已记录；可将订单标为在途。','Supplier order recorded; mark it in transit when dispatched.');
   if (order.status==='in_transit'||order.status==='partially_arrived') return tx('所有货物到齐后，记录整单到货。','Record the whole order as arrived once all goods are in.');
-  if (order.status==='arrived'||order.status==='partially_delivered') return order.payment_status==='paid'
-    ? tx('尾款已付，可以记录交付。','The balance is paid; delivery can be recorded.')
-    : tx('每一行到齐后开尾款。尾款付清前不能记录交付。','Invoice the balance once every line has arrived. Delivery stays closed until that balance is paid.');
+  if (order.status==='arrived'||order.status==='ready'||order.status==='partially_delivered') return tx('货物已到，可记录提货或完成；账款在财务页单独跟进。','Goods are ready; record collection or completion. Track payment separately in finance.');
   return tx('订单已完成；在账款与返利中处理尾款。','Order completed; complete the balance in Accounts & rebates.');
 });
 watch(()=>[selectedOrder.value?.id,selectedOrder.value?.status,selectedOrder.value?.payment_status],()=>{
@@ -318,7 +335,7 @@ function stableKey(signature: string) {
 }
 
 async function load() {
-  const [listed, billed, mailed, credits, providerList, templateList, versions, companies] = await Promise.all([
+  const [listed, billed, mailed, credits, providerList, templateList, versions, companies, shipmentList, candidates] = await Promise.all([
     request<ProjectOrder[]>("operations/orders"),
     request<Invoice[]>("operations/invoices"),
     request<Notice[]>("operations/notifications"),
@@ -327,6 +344,8 @@ async function load() {
     request<ProviderTemplate[]>("operations/provider-templates"),
     request<PricingVersion[]>("operations/pricing-templates"),
     request<{customer_id:number;company:string}[]>("operations/customers"),
+    request<Shipment[]>("operations/shipments"),
+    request<ShipmentCandidate[]>("operations/shipments/candidates"),
   ]);
   orders.value = listed;
   invoices.value = billed;
@@ -336,6 +355,13 @@ async function load() {
   providerTemplates.value = templateList;
   pricingVersions.value = versions;
   customers.value = companies;
+  shipments.value = shipmentList;
+  shipmentCandidates.value = candidates;
+  for (const shipment of shipmentList) {
+    shipmentEta[shipment.id] = shipment.eta || '';
+    shipmentCosts[shipment.id] ||= { freight_land: shipment.freight_land || '', freight_sea: shipment.freight_sea || '', duty_total: shipment.duty_total || '' };
+    for (const order of shipment.orders || []) purchaseForm[order.id] = { usd: order.factory_price_usd || '', sqm: '' };
+  }
   if(props.workspace==='finance' && financeCustomer.value && !picked.value.length) {
     const eligible=listed.filter(order=>String(order.customer_id)===financeCustomer.value &&
       order.payment_status==='deposit_received' && order.lines.every((line) => line.arrived === line.quantity) &&
@@ -432,8 +458,8 @@ function orderStatus(value: string) {
     pending_review: ["待审核", "Review pending"], accepted: ["已接收", "Accepted"],
     deposit_unpaid: ["待收定金", "Deposit unpaid"], deposit_received: ["定金已收", "Deposit received"],
     supplier_ordered: ["已下单", "Ordered"], in_transit: ["运输中", "In transit"],
-    partially_arrived: ["部分到货", "Partly arrived"], arrived: ["已到货", "Arrived"],
-    partially_delivered: ["部分交付", "Partly delivered"], delivered: ["已完成", "Completed"], paid: ["已结清", "Paid"],
+    partially_arrived: ["部分到货", "Partly arrived"], arrived: ["可提货", "Ready for collection"], ready: ["可提货", "Ready for collection"],
+    partially_delivered: ["部分交付", "Partly delivered"], delivered: ["已完成", "Complete"], complete: ["已完成", "Complete"], paid: ["已结清", "Paid"],
   };
   return labels[value] ? tx(...labels[value]) : value;
 }
@@ -623,10 +649,6 @@ async function arriveSelected() {
 }
 
 function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
-  if (kind === "delivery" && order.payment_status !== "paid") {
-    fulfilError.value = tx("尾款付清后才能记录交付。", "Record delivery only after the balance is paid.");
-    return;
-  }
   if (kind === "delivery" && !order.lines.every((line) => line.arrived === line.quantity)) {
     fulfilError.value = tx("全部货物到齐后才能安排整单交付。", "All goods must have arrived before the whole order can be delivered.");
     return;
@@ -654,6 +676,34 @@ function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
       ? tx(`已记录整单到货。通知状态：${mailed || "无"}。收款状态不会被覆盖。`, `The whole order is recorded as arrived. Notification status: ${mailed || "none"}. Payment status is left unchanged.`)
       : tx("已记录整单交付。", "The whole order is recorded as delivered.");
   });
+}
+
+function createShipment() {
+  if (!shipmentForm.name.trim() || !shipmentPick.value.length) return;
+  return act(async () => {
+    const ids = [...shipmentPick.value].sort();
+    await request('operations/shipments', { name: shipmentForm.name.trim(), order_ids: ids, eta: shipmentForm.eta || undefined, operation_key: stableKey(JSON.stringify({ shipment: shipmentForm.name.trim().toLowerCase(), ids })) });
+    shipmentForm.name = ''; shipmentForm.eta = ''; shipmentPick.value = [];
+    notice.value = tx('已创建批次并将订单标为在途。', 'Shipment created; orders are now in transit.');
+  });
+}
+function updateShipmentEta(shipment: Shipment) {
+  return act(async () => { await request(`operations/shipments/${encodeURIComponent(shipment.id)}/eta`, { eta: shipmentEta[shipment.id] }); notice.value = tx('已更新批次预计到货日期。', 'Shipment ETA updated.'); });
+}
+function savePurchase(order: ShipmentOrder) {
+  const form = purchaseForm[order.id];
+  if (!form || !form.usd.trim()) { error.value = tx('请先填写工厂价（USD）。', 'Enter the factory price (USD) first.'); return; }
+  return act(async () => {
+    await request(`operations/orders/${encodeURIComponent(order.id)}/purchase-cost`, { factory_price_usd: form.usd.trim(), ...(form.sqm.trim() ? { measured_sqm: form.sqm.trim() } : {}) });
+    notice.value = tx(`已保存 ${order.order_number || ''} 的工厂价。`, `Factory price saved for ${order.order_number || 'the order'}.`);
+  });
+}
+function saveShipmentCosts(shipment: Shipment) {
+  const cost = shipmentCosts[shipment.id];
+  return act(async () => { await request(`operations/shipments/${encodeURIComponent(shipment.id)}/costs`, { freight_land: cost.freight_land || '0', freight_sea: cost.freight_sea || '0', duty_total: cost.duty_total || null }); notice.value = tx('已保存批次运费和关税。', 'Shipment costs saved.'); });
+}
+function arriveShipment(shipment: Shipment) {
+  return act(async () => { const result = await request<Shipment & {invoice_ids?: string[]}>(`operations/shipments/${encodeURIComponent(shipment.id)}/arrive`, {}); notice.value = tx(`批次已到货；自动生成 ${result.invoice_ids?.length || 0} 张尾款草稿。`, `Shipment arrived; ${result.invoice_ids?.length || 0} balance draft(s) created automatically.`); });
 }
 
 async function previewInvoiceMail() {
@@ -1071,7 +1121,12 @@ async function loadOrderProviders(orderId: string) {
     <p v-if="notice" class="success card" role="status">{{ notice }}</p>
 
     <p v-if="!loaded" role="status">{{ tx('加载中…','Loading…') }}</p>
-    <div v-show="loaded" class="workspace-grid">
+    <nav v-if="workspace === 'projects'" class="project-panes" :aria-label="tx('项目视图','Project views')">
+      <button type="button" :aria-pressed="projectPane==='orders'" @click="projectPane='orders'">{{ tx('订单工作台','Orders') }}</button>
+      <button type="button" :aria-pressed="projectPane==='shipments'" @click="projectPane='shipments'">{{ tx('批次管理','Shipments') }}</button>
+      <button type="button" :aria-pressed="projectPane==='overview'" @click="projectPane='overview'">{{ tx('订单总览','Order overview') }}</button>
+    </nav>
+    <div v-show="loaded && (workspace !== 'projects' || projectPane === 'orders')" class="workspace-grid">
       <aside v-if="workspace === 'projects'" class="card order-list">
         <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
         <label class="filter-row">{{ tx("筛选", "Filter") }}
@@ -1137,7 +1192,7 @@ async function loadOrderProviders(orderId: string) {
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
                 <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
                 <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
-              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered' || (selectedOrder.payment_status==='deposit_received' && selectedOrder.lines.every(line => line.arrived === line.quantity))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
+              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered' || selectedOrder.status==='complete' || (selectedOrder.payment_status==='deposit_received' && selectedOrder.lines.every(line => line.arrived === line.quantity))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
 <div v-show="detailSection === 'order'">              <div class="section-title-row"><h3>{{ tx('产品明细与客户提交配置','Product details and customer-submitted configuration') }}</h3><button type="button" class="secondary" @click="openSheetPreview">{{ tx('预览整单','Preview whole order') }}</button></div>
               <div class="table-scroll"><table class="quote-sheet">
                 <thead><tr>
@@ -1189,9 +1244,8 @@ async function loadOrderProviders(orderId: string) {
               <div class="actions">
                 <button v-if="selectedOrder.status==='supplier_ordered'" type="button" class="secondary" :disabled="busy" @click="transitOne(selectedOrder.id)">{{ tx('标为在途','Mark in transit') }}</button>
                 <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("确认整单货物已到齐", "Confirm all goods arrived") }}</button>
-                <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy || selectedOrder.payment_status!=='paid' || !selectedOrder.lines.every(line=>line.arrived===line.quantity)" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录整单交付", "Record whole-order delivery") }}</button>
+                <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy || !selectedOrder.lines.every(line=>line.arrived===line.quantity)" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录整单交付", "Record whole-order completion") }}</button>
               </div>
-              <p v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered) && selectedOrder.payment_status!=='paid'" class="hint">{{ tx('尾款付清后才能记录交付。','Record delivery only after the balance is paid.') }}</p>
               <p v-if="fulfilError" class="fulfil-error" role="alert">{{ fulfilError }}</p>
 
 </div><div v-show="detailSection === 'supplier'">              <h3>{{ tx("供应商与导出", "Provider & Export") }}</h3>
@@ -1422,6 +1476,7 @@ async function loadOrderProviders(orderId: string) {
           </section>
 
           <section v-if="activeSection === 'settlement'" class="card section-card finance-workspace">
+            <ManualInvoiceForm v-if="admin" :customers="customers" :locale="locale" @created="load" />
             <header class="finance-header">
               <div><h2>{{ tx('账款与返利','Accounts & rebates') }}</h2><p class="fin-sub">{{ financeTodoTotal ? tx(`还有 ${financeTodoTotal} 件事要处理，按 1 → 4 的顺序做。`, `${financeTodoTotal} items need action. Work through steps 1 → 4.`) : tx('没有待处理的账款，全部处理完了。', 'Nothing to do. All accounts are up to date.') }}</p></div>
               <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[];rebatePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
@@ -1480,7 +1535,7 @@ async function loadOrderProviders(orderId: string) {
             </section>
 
             <section id="fin-receipt" class="fin-block" :class="{ clear: !financeQueues.balanceDue.length }">
-              <header class="fin-block-head"><span class="fin-no">4</span><div><h3>{{ tx('确认尾款收款','Confirm balance receipts') }}</h3><p>{{ tx('尾款发票已发出，客户付款后在这里确认。尾款付清前不能提货或标完成。','Balance invoices that were sent. Confirm once paid; pick-up and completion stay blocked until then.') }}</p></div><span class="fin-count">{{ financeQueues.balanceDue.length }}</span></header>
+              <header class="fin-block-head"><span class="fin-no">4</span><div><h3>{{ tx('确认尾款收款','Confirm balance receipts') }}</h3><p>{{ tx('尾款发票已发出，客户付款后在这里确认。提货与订单完成状态单独记录。','Confirm receipt here after the customer pays. Collection and order completion are recorded separately.') }}</p></div><span class="fin-count">{{ financeQueues.balanceDue.length }}</span></header>
               <p v-if="!financeQueues.balanceDue.length" class="fin-clear">✓ {{ tx('没有等待收款的尾款','No balance payments waiting') }}</p>
               <ul v-else class="fin-rows">
                 <li v-for="invoice in financeQueues.balanceDue" :key="invoice.id" class="fin-row">
@@ -1523,6 +1578,41 @@ async function loadOrderProviders(orderId: string) {
         </div>
       </div>
     </div>
+    <section v-if="workspace === 'projects' && projectPane === 'shipments'" class="card shipment-workspace">
+      <header><div><h2>{{ tx('批次管理','Shipment batches') }}</h2><p>{{ tx('将已向供应商下单且尚未分批的卷帘订单加入海运批次。创建后会自动标为在途。','Create a sea shipment from supplier-ordered shutter orders that are not already batched. Orders move to in transit on creation.') }}</p></div></header>
+      <div class="shipment-create">
+        <label>{{ tx('批次名称','Batch name') }}<input v-model="shipmentForm.name" :placeholder="tx('例如 P4261008','e.g. P4261008')" /></label>
+        <label>{{ tx('预计到货','ETA') }}<input v-model="shipmentForm.eta" type="date" /></label>
+        <button type="button" :disabled="busy || !shipmentForm.name.trim() || !shipmentPick.length" @click="createShipment">{{ tx(`创建批次（${shipmentPick.length} 单）`,`Create batch (${shipmentPick.length} selected)`) }}</button>
+      </div>
+      <h3>{{ tx('可加入的订单','Eligible orders') }} · {{ shipmentCandidates.length }}</h3>
+      <p v-if="!shipmentCandidates.length" class="hint">{{ tx('没有可加入的订单。','No eligible orders available.') }}</p>
+      <div v-else class="shipment-candidates"><label v-for="order in shipmentCandidates" :key="order.id"><input v-model="shipmentPick" type="checkbox" :value="order.id" /><span><strong>{{ order.order_number || order.id }}</strong> · {{ order.project_name }}<small>{{ order.company }} · {{ order.eta ? quoteDate(order.eta) : tx('尚無預計日期','No ETA') }}</small></span></label></div>
+      <h3>{{ tx('现有批次','Current batches') }} · {{ shipments.length }}</h3>
+      <p v-if="!shipments.length" class="hint">{{ tx('尚未建立批次。','No shipment batches yet.') }}</p>
+      <article v-for="shipment in shipments" :key="shipment.id" class="shipment-card">
+        <header><div><h3>{{ shipment.name }}</h3><span class="badge">{{ orderStatus(shipment.status) }}</span></div><small>{{ shipment.orders?.length || shipment.order_ids.length }} {{ tx('个订单','orders') }}</small></header>
+        <ul class="shipment-orders"><li v-for="order in shipment.orders" :key="order.id">
+          <div class="shipment-order-main"><strong>{{ order.order_number || order.id }}</strong> · {{ order.company }} · {{ order.project_name }} · {{ orderStatus(order.status) }}</div>
+          <div v-if="purchaseForm[order.id]" class="shipment-fields">
+            <label>{{ tx('工厂价 (USD)','Factory price (USD)') }}<input v-model="purchaseForm[order.id].usd" inputmode="decimal" /></label>
+            <label>{{ tx('实测面积 ㎡（可选）','Measured m² (optional)') }}<input v-model="purchaseForm[order.id].sqm" inputmode="decimal" :placeholder="order.measured_sqm || ''" /></label>
+            <button type="button" class="secondary" :disabled="busy" @click="savePurchase(order)">{{ tx('保存工厂价','Save price') }}</button>
+          </div>
+          <small v-if="order.freight_cost != null" class="shipment-share">{{ tx('已摊分','Allocated') }}: {{ tx('运费','freight') }} NZD {{ order.freight_cost }} · {{ tx('关税','duty') }} NZD {{ order.duty_cost }} ({{ order.duty_basis === 'actual' ? tx('实际','actual') : tx('估算','estimate') }})</small>
+        </li></ul>
+        <div class="shipment-fields"><label>{{ tx('预计到货','ETA') }}<input v-model="shipmentEta[shipment.id]" type="date" /></label><button type="button" :disabled="busy || shipment.status==='arrived'" @click="updateShipmentEta(shipment)">{{ tx('更新 ETA','Update ETA') }}</button></div>
+        <div class="shipment-fields"><label>{{ tx('陆运运费','Land freight') }}<input v-model="shipmentCosts[shipment.id].freight_land" inputmode="decimal" /></label><label>{{ tx('海运运费','Sea freight') }}<input v-model="shipmentCosts[shipment.id].freight_sea" inputmode="decimal" /></label><label>{{ tx('实际关税（可选）','Actual duty (optional)') }}<input v-model="shipmentCosts[shipment.id].duty_total" inputmode="decimal" /></label><button type="button" :disabled="busy" @click="saveShipmentCosts(shipment)">{{ tx('保存成本','Save costs') }}</button></div>
+        <button v-if="shipment.status!=='arrived'" type="button" :disabled="busy" @click="arriveShipment(shipment)">{{ tx('记录整批到货并开尾款草稿','Mark batch arrived and draft balance invoices') }}</button>
+        <p v-else class="success">{{ tx('批次已到货','Shipment arrived') }} · {{ shipment.invoice_ids?.length || 0 }} {{ tx('张尾款草稿','balance drafts') }}</p>
+      </article>
+    </section>
+    <section v-if="workspace === 'projects' && projectPane === 'overview'" class="card order-overview">
+      <header><div><h2>{{ tx('订单总览','Order overview') }}</h2><p>{{ tx('仅显示订单级别的付款和履约摘要，不展开窗户行。','Order-level payment and fulfilment summary; window rows are omitted.') }}</p></div></header>
+      <div class="overview-scroll"><table><thead><tr><th>{{ tx('订单 / 项目','Order / project') }}</th><th>{{ tx('提交日期','Submitted') }}</th><th>{{ tx('状态','Status') }}</th><th>{{ tx('定金','Deposit') }}</th><th>{{ tx('定金日期','Deposit date') }}</th><th>{{ tx('尾款','Balance') }}</th><th>{{ tx('尾款日期','Balance date') }}</th><th>{{ tx('完成日期','Completed') }}</th><th>ETA</th><th>{{ tx('批次','Batch') }}</th></tr></thead><tbody>
+        <tr v-for="order in orders" :key="order.id"><td><strong>{{ order.order_number || order.id }}</strong><small>{{ order.company }} · {{ order.project_name }}</small></td><td>{{ quoteDate(order.created_at) }}</td><td>{{ orderStatus(order.status) }}</td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.deposit_paid_at || depositInvoiceFor(order)?.received_at) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td>{{ order.batch_name || '—' }}</td></tr>
+      </tbody></table></div>
+    </section>
     <Teleport to="body">
       <dialog ref="previewDialog" class="mail-dialog" :aria-label="tx('邮件预览','Email preview')" @close="onDialogClosed" @click="onDialogClick">
         <section v-if="mailPreview" class="mail-modal-card">
@@ -2075,6 +2165,30 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .fin-rebate-orders .checkbox-label { min-height: 34px; }
 .fin-rebate-orders small { color: #52635a; }
 .fin-rebate-form > button { justify-self: start; }
+.project-panes { display:flex; gap:8px; overflow:auto; margin:0 0 14px; }
+.desk .project-panes button { flex:none; }
+.desk .project-panes button[aria-pressed="true"] { background:#17523a; color:#fff; }
+.shipment-workspace,.order-overview { padding:clamp(16px,3vw,28px); }
+.shipment-workspace > header,.order-overview > header { margin-bottom:16px; }
+.shipment-workspace > header h2,.order-overview > header h2 { margin:0; }
+.shipment-workspace > header p,.order-overview > header p { margin:5px 0; color:#52635a; }
+.shipment-create,.shipment-fields { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
+.shipment-create label,.shipment-fields label { display:grid; gap:4px; min-width:150px; }
+.shipment-candidates { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:8px; margin-bottom:20px; }
+.shipment-candidates label { display:flex; gap:9px; align-items:flex-start; padding:10px; border:1px solid #dce5df; border-radius:8px; }
+.shipment-candidates small,.order-overview td small { display:block; color:#52635a; }
+.shipment-card { border:1px solid #dce5df; border-radius:10px; padding:16px; margin:12px 0; }
+.shipment-card > header { display:flex; justify-content:space-between; gap:12px; align-items:center; }
+.shipment-card > header h3 { display:inline-block; margin:0 10px 0 0; }
+.shipment-card ul { padding-left:22px; }
+.shipment-card ul.shipment-orders { list-style:none; padding:0; display:grid; gap:12px; }
+.shipment-card ul.shipment-orders li { padding:10px 12px; border:1px solid #e4eae5; border-radius:8px; display:grid; gap:8px; }
+.shipment-share { color:#17523a; }
+.overview-scroll { overflow:auto; }
+.order-overview table { border-collapse:collapse; width:100%; min-width:1050px; }
+.order-overview th,.order-overview td { text-align:left; padding:10px 9px; border-bottom:1px solid #e4eae5; white-space:nowrap; }
+.order-overview th { background:#f5f8f5; }
+@media(max-width:700px) { .shipment-create,.shipment-fields { display:grid; grid-template-columns:minmax(0,1fr); } .shipment-create label,.shipment-fields label { min-width:0; } .shipment-candidates { grid-template-columns:minmax(0,1fr); } .shipment-card { padding:12px; } }
 @media (max-width: 1100px) { .fin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 700px) {
   .fin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }

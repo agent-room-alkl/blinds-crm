@@ -2,50 +2,42 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { describeAddons, leadText } from "../../addons";
+import { describeAddons } from "../../addons";
+import { ORDER_FLOW, formatDate, leadTimeLabel, normalizeStatus } from "../../orderStatus";
 import { portalRequest } from "../../portal-api";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const route = useRoute();
-
 const order = ref<any>(null);
 const loading = ref(true);
+const error = ref("");
 
-const STATUS_TIMELINE = [
-  { key: 'draft', label_zh: '草稿', label_en: 'Draft' },
-  { key: 'pending_review', label_zh: '已提交待审核', label_en: 'Submitted' },
-  { key: 'accepted', label_zh: '已审核并冻结', label_en: 'Confirmed' },
-  { key: 'deposit_unpaid', label_zh: '定金发票已开', label_en: '60% Deposit Invoiced' },
-  { key: 'deposit_received', label_zh: '定金已付', label_en: 'Deposit Paid' },
-  { key: 'supplier_ordered', label_zh: '已下单', label_en: 'Ordered' },
-  { key: 'in_transit', label_zh: '运输中', label_en: 'In Transit' },
-  { key: 'delivered', label_zh: '已完成', label_en: 'Completed' },
-  { key: 'balance_invoiced', label_zh: '尾款发票已开', label_en: 'Balance Invoiced' },
-  { key: 'paid', label_zh: '已结清', label_en: 'Paid in Full' },
-];
-
-const currentStatusIndex = computed(() => {
+const FLOW = ORDER_FLOW;
+const normalizedStatus = computed(() => normalizeStatus(order.value?.status));
+const currentFlowIndex = computed(() => {
   if (!order.value) return -1;
-  const status = order.value.status;
-  const payment = order.value.payment_status;
-  if (payment === 'paid') return 9;
-  if (payment === 'balance_unpaid' || order.value.invoices?.some((invoice: any) => invoice.kind === 'balance')) return 8;
-  if (status === 'delivered') return 7;
-  if (['in_transit', 'partially_arrived', 'arrived', 'partially_delivered'].includes(status)) return 6;
-  if (status === 'supplier_ordered') return 5;
-  if (payment === 'deposit_received') return 4;
-  if (status === 'accepted' && order.value.invoices?.some((invoice: any) => invoice.kind === 'deposit')) return 3;
-  return STATUS_TIMELINE.findIndex(s => s.key === status);
+  if (normalizedStatus.value === "pending_review") return 0;
+  if (normalizedStatus.value === "accepted" || normalizedStatus.value === "deposit_unpaid") return 1;
+  const found = FLOW.findIndex((step) => step.key === normalizedStatus.value);
+  return found >= 0 ? found : Math.max(0, FLOW.findIndex((step) => step.key === "accepted"));
 });
+const friendlyStatus = computed(() => FLOW.find((step) => step.key === normalizedStatus.value)?.[locale.value === "zh" ? "zh" : "en"] || tx("处理中", "In progress"));
+
+function lineAddons(line: any): string[] {
+  const values = describeAddons(line.options, locale.value);
+  if (line.options?.custom_frame === "yes") values.push(tx("定制边框", "Customised frame"));
+  return values;
+}
+function option(line: any, key: string): string { return line.options?.[key] || "—"; }
 
 onMounted(async () => {
-  const orderId = route.params.id as string;
   try {
     const orders = await portalRequest<any[]>("orders");
-    order.value = orders.find((o: any) => o.id === orderId) || orders[0];
-  } catch {
-    // error
+    order.value = orders.find((item) => item.id === route.params.id) || null;
+    if (!order.value) error.value = tx("找不到这张订单。", "This order could not be found.");
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : tx("订单暂时无法载入。", "The order could not be loaded.");
   } finally {
     loading.value = false;
   }
@@ -54,268 +46,57 @@ onMounted(async () => {
 
 <template>
   <div class="order-detail">
-    <div v-if="loading" class="loading">{{ tx("加载中...", "Loading...") }}</div>
-    
-    <div v-else-if="order" class="detail-content">
-      <div class="detail-header">
-        <h1>{{ order.project_name }}</h1>
-        <span class="order-status">{{ order.status }}</span>
-      </div>
+    <div v-if="loading" class="notice">{{ tx("加载中…", "Loading…") }}</div>
+    <div v-else-if="error" class="notice error" role="alert">{{ error }}</div>
+    <template v-else-if="order">
+      <header class="page-heading">
+        <div><p class="eyebrow">{{ tx("订单详情", "ORDER DETAILS") }}</p><h1>{{ order.project_name }}</h1><p v-if="order.order_number" class="order-number">{{ order.order_number }}</p></div>
+        <span class="status-pill" :class="`status-${normalizedStatus}`">{{ friendlyStatus }}</span>
+      </header>
 
-      <div class="status-timeline">
-        <h2>{{ tx("订单状态", "Order Status") }}</h2>
-        <div class="timeline">
-          <div
-            v-for="(status, index) in STATUS_TIMELINE"
-            :key="status.key"
-            class="timeline-item"
-            :class="{
-              active: index === currentStatusIndex,
-              completed: index < currentStatusIndex,
-              pending: index > currentStatusIndex
-            }"
-          >
-            <div class="timeline-marker"></div>
-            <div class="timeline-content">
-              <strong>{{ locale === "zh" ? status.label_zh : status.label_en }}</strong>
-            </div>
-          </div>
-        </div>
-      </div>
+      <section class="panel status-panel">
+        <div class="section-heading"><div><h2>{{ tx("订单进度", "Order progress") }}</h2><p v-if="order.eta">{{ tx("预计到货", "Estimated arrival") }}: <strong>{{ formatDate(order.eta, locale) }}</strong><span v-if="order.batch_name"> · {{ order.batch_name }}</span></p></div><span v-if="leadTimeLabel(order.lead_time, locale)" class="lead-time">{{ leadTimeLabel(order.lead_time, locale) }}</span></div>
+        <ol class="status-flow">
+          <li v-for="(step,index) in FLOW" :key="step.key" :class="{ done:index<currentFlowIndex, current:index===currentFlowIndex }"><span class="dot"></span><span>{{ locale==='zh'?step.zh:step.en }}</span></li>
+        </ol>
+      </section>
 
-      <div class="detail-section">
-        <h2>{{ tx("订单信息", "Order Information") }}</h2>
-        <dl>
-          <dt>{{ tx("订单号", "Order ID") }}</dt>
-          <dd v-if="order.order_number">{{ order.order_number }}</dd>
-          <dd v-else-if="order.order_number_confirmed === false">{{ tx("订单号待 VERA 管理员确认；确认后会显示在这里。", "Your order number is awaiting VERA admin confirmation. It will appear here once confirmed.") }}</dd>
-          <dd v-else>—</dd>
-          <template v-if="leadText(order.lead_time)">
-            <dt>{{ tx("预计交期", "Lead time") }}</dt>
-            <dd>{{ leadText(order.lead_time) }}</dd>
-          </template>
-          <dt>{{ tx("施工地址", "Site Address") }}</dt>
-          <dd>{{ order.site_address }}</dd>
-          <dt>{{ tx("状态", "Status") }}</dt>
-          <dd>{{ order.status }}</dd>
-          <dt>{{ tx("付款状态", "Payment Status") }}</dt>
-          <dd>{{ order.payment_status }}</dd>
-          <dt>{{ tx("合计", "Total") }}</dt>
-          <dd>{{ order.total ? `${order.currency || ""} ${order.total}` : tx("待定价", "TBC") }}</dd>
+      <section class="panel">
+        <h2>{{ tx("订单信息", "Order information") }}</h2>
+        <dl class="facts">
+          <dt>{{ tx("订单号", "Order number") }}</dt><dd>{{ order.order_number || (order.order_number_confirmed===false ? tx("待确认", "Awaiting confirmation") : "—") }}</dd>
+          <dt>{{ tx("状态", "Status") }}</dt><dd>{{ friendlyStatus }}</dd>
+          <dt>{{ tx("定金状态", "Deposit") }}</dt><dd>{{ order.payment_status==='deposit_received' || order.payment_status==='paid' ? tx("已到账", "Received") : tx("处理中", "Pending") }}<span v-if="order.deposit_paid_at"> · {{ order.deposit_paid_at.slice(0,10) }}</span></dd>
+          <dt>{{ tx("安装", "Installation") }}</dt><dd>{{ order.installation_required ? tx("需要", "Required") : tx("不需要", "Not required") }}</dd>
+          <template v-if="order.site_address"><dt>{{ tx("施工地址", "Site address") }}</dt><dd>{{ order.site_address }}</dd></template>
+          <dt>{{ tx("订单总额", "Order total") }}</dt><dd>{{ order.total ? `${order.currency || "NZD"} ${order.total}` : tx("待定价", "To be confirmed") }}</dd>
         </dl>
-      </div>
+      </section>
 
-      <div v-if="order.lines && order.lines.length" class="detail-section">
-        <h2>{{ tx("窗户明细", "Window Details") }}</h2>
-        <div class="lines-list">
-          <div v-for="line in order.lines" :key="line.id" class="line-item">
-            <strong>{{ line.window_name }}</strong>
-            <p>{{ line.amount ? `${order.currency || ""} ${line.amount}` : tx("待定价", "TBC") }}</p>
-            <p v-for="fact in describeAddons(line.options, locale)" :key="fact">{{ fact }}</p>
-          </div>
+      <section v-if="order.lines?.length" class="panel">
+        <div class="section-heading"><h2>{{ tx("窗户明细", "Window details") }}</h2><span>{{ order.lines.length }} {{ tx("行", "lines") }}</span></div>
+        <div class="line-table-wrap" tabindex="0" :aria-label="tx('窗户明细表，可横向滚动','Window detail table, scroll horizontally')">
+          <table class="line-table">
+            <thead><tr><th>#</th><th>{{ tx("位置 / 名称", "Location / name") }}</th><th>{{ tx("宽 (mm)", "Width (mm)") }}</th><th>{{ tx("高 (mm)", "Height (mm)") }}</th><th>{{ tx("产品系列", "Product series") }}</th><th>{{ tx("开合方式", "Opening style") }}</th><th>{{ tx("扇数", "Panels") }}</th><th>{{ tx("布局代码", "Layout code") }}</th><th>{{ tx("竖柱", "VT post") }}</th><th>{{ tx("横柱", "HT post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }}</th><th>{{ tx("叶片尺寸", "Louver size") }}</th><th>{{ tx("颜色", "Colour") }}</th><th>{{ tx("控制杆", "Control rod") }}</th><th>{{ tx("安装尺寸", "Fitting") }}</th><th>{{ tx("数量", "Quantity") }}</th><th>{{ tx("附加项 / 特殊要求", "Add-ons / special request") }}</th><th>{{ tx("金额", "Amount") }}</th></tr></thead>
+            <tbody>
+              <tr v-for="(line,index) in order.lines" :key="line.id || index">
+                <td>{{ index+1 }}</td><td><strong>{{ line.window_name }}</strong></td><td>{{ line.width_mm }}</td><td>{{ line.height_mm }}</td><td>{{ line.product_name || line.source_code || "—" }}</td><td>{{ option(line,"opening_style") }}</td><td>{{ line.panel_count || 1 }}</td><td>{{ option(line,"layout_code") }}</td><td>{{ option(line,"vt_post") }}</td><td>{{ option(line,"ht_post") }}</td><td>{{ option(line,"midrail") }}</td><td>{{ option(line,"frame") }}</td><td>{{ option(line,"louver_size") }}</td><td>{{ option(line,"colour") }}</td><td>{{ option(line,"control_rod") }}</td><td>{{ option(line,"fitting") }}</td><td>{{ line.quantity }}</td>
+                <td><div class="line-extras"><span v-for="fact in lineAddons(line)" :key="fact" class="extra-chip">{{ fact }}</span><span v-if="line.options?.special_request" class="special-request">{{ line.options.special_request }}</span><span v-if="!lineAddons(line).length && !line.options?.special_request">—</span></div></td>
+                <td>{{ line.amount ? `${order.currency || "NZD"} ${line.amount}` : "—" }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-      </div>
+      </section>
 
-      <div v-if="order.invoices && order.invoices.length" class="detail-section">
-        <h2>{{ tx("相关发票", "Related Invoices") }}</h2>
-        <div class="invoices-list">
-          <div v-for="invoice in order.invoices" :key="invoice.id" class="invoice-item">
-            <strong>{{ invoice.invoice_number || invoice.kind }}</strong>
-            <span>{{ invoice.currency }} {{ invoice.amount }}</span>
-            <span>{{ invoice.status }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div v-else class="empty">{{ tx("订单未找到", "Order not found") }}</div>
+      <section v-if="order.invoices?.length" class="panel">
+        <h2>{{ tx("相关发票", "Related invoices") }}</h2>
+        <ul class="invoice-links"><li v-for="invoice in order.invoices" :key="invoice.id"><strong>{{ invoice.invoice_number || invoice.kind }}</strong><span>{{ invoice.currency }} {{ invoice.amount }}</span></li></ul>
+      </section>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.order-detail {
-  max-width: 1200px;
-}
-
-.loading,
-.empty {
-  text-align: center;
-  padding: 60px 20px;
-  font-size: 16px;
-  color: rgba(27, 36, 33, 0.6);
-}
-
-.detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--line);
-}
-
-.detail-header h1 {
-  font-family: var(--font-display);
-  font-size: 32px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.order-status {
-  font-size: 14px;
-  font-weight: 600;
-  padding: 6px 16px;
-  background: rgba(15, 110, 92, 0.1);
-  color: var(--cord);
-  border-radius: 12px;
-}
-
-.status-timeline {
-  margin-bottom: 40px;
-  padding: 24px;
-  background: white;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.status-timeline h2 {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 24px;
-}
-
-.timeline {
-  position: relative;
-}
-
-.timeline::before {
-  content: '';
-  position: absolute;
-  left: 15px;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--line);
-}
-
-.timeline-item {
-  position: relative;
-  padding-left: 48px;
-  padding-bottom: 24px;
-}
-
-.timeline-item:last-child {
-  padding-bottom: 0;
-}
-
-.timeline-marker {
-  position: absolute;
-  left: 8px;
-  top: 4px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: rgba(27, 36, 33, 0.2);
-  border: 2px solid white;
-  box-shadow: 0 0 0 2px var(--line);
-}
-
-.timeline-item.completed .timeline-marker {
-  background: var(--cord);
-  box-shadow: 0 0 0 2px var(--cord);
-}
-
-.timeline-item.active .timeline-marker {
-  background: var(--cord);
-  box-shadow: 0 0 0 2px var(--cord), 0 0 0 4px rgba(15, 110, 92, 0.2);
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.1); }
-}
-
-.timeline-content strong {
-  font-size: 15px;
-  color: rgba(27, 36, 33, 0.88);
-}
-
-.timeline-item.completed .timeline-content strong {
-  color: var(--cord);
-}
-
-.detail-section {
-  margin-bottom: 32px;
-  padding: 24px;
-  background: white;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
-
-.detail-section h2 {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 20px;
-}
-
-.detail-section dl {
-  display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 16px;
-  margin: 0;
-}
-
-.detail-section dt {
-  font-weight: 600;
-  font-size: 14px;
-  color: rgba(27, 36, 33, 0.6);
-}
-
-.detail-section dd {
-  margin: 0;
-  font-size: 15px;
-  color: var(--ink);
-}
-
-.lines-list,
-.invoices-list {
-  display: grid;
-  gap: 12px;
-}
-
-.line-item,
-.invoice-item {
-  padding: 16px;
-  background: rgba(15, 110, 92, 0.04);
-  border-radius: 4px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.line-item strong,
-.invoice-item strong {
-  font-size: 15px;
-  color: var(--ink);
-}
-
-@media (max-width: 700px) {
-  .detail-header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  .detail-section dl {
-    grid-template-columns: 1fr;
-    gap: 8px;
-  }
-
-  .detail-section dd {
-    margin-bottom: 16px;
-  }
-}
+.order-detail{max-width:1400px;margin:auto;color:var(--ink,#1b2421)}.page-heading,.section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.page-heading{margin:4px 0 20px}.eyebrow{margin:0 0 5px;color:var(--cord);font-size:11px;font-weight:750;letter-spacing:.12em}.page-heading h1{margin:0;font:600 28px var(--font-display)}.order-number{margin:5px 0 0;color:#66746c;font-size:13px}.status-pill{padding:8px 13px;border-radius:999px;background:#e7f0eb;color:#17523a;font-size:13px;font-weight:700;white-space:nowrap}.panel{margin:0 0 16px;padding:20px;background:#fff;border:1px solid #dbe4dd;border-radius:8px}.panel h2{margin:0;font:600 18px var(--font-display)}.section-heading p{margin:6px 0 0;color:#62716b;font-size:13px}.lead-time{color:#62716b;font-size:12px;text-align:right}.status-flow{display:grid;grid-template-columns:repeat(7,minmax(90px,1fr));gap:8px;padding:0;margin:22px 0 0;list-style:none}.status-flow li{display:flex;align-items:flex-start;gap:7px;color:#6a776f;font-size:11px;line-height:1.35}.status-flow .dot{width:11px;height:11px;flex:none;border:2px solid #c8d3cb;border-radius:50%;background:#fff}.status-flow li.done,.status-flow li.current{color:#17523a;font-weight:650}.status-flow li.done .dot,.status-flow li.current .dot{border-color:var(--cord,#0f6e5c);background:var(--cord,#0f6e5c)}.facts{display:grid;grid-template-columns:180px minmax(0,1fr);gap:10px 16px;margin:16px 0 0}.facts dt{color:#64736b;font-size:13px;font-weight:650}.facts dd{margin:0;overflow-wrap:anywhere;font-size:14px}.line-table-wrap{overflow:auto;margin-top:14px;border:1px solid #dbe4dd;border-radius:6px}.line-table{width:100%;min-width:2020px;border-collapse:collapse;font-size:12px}.line-table th,.line-table td{padding:10px 9px;border-bottom:1px solid #e5ebe6;text-align:left;vertical-align:top}.line-table th{position:sticky;top:0;background:#edf2ee;color:#33473c;font-size:11px;white-space:nowrap}.line-table tr:last-child td{border-bottom:0}.line-extras{display:flex;flex-wrap:wrap;gap:4px}.extra-chip{padding:3px 7px;border-radius:999px;background:#e8f1eb;color:#2c5942}.special-request{display:block;width:100%;color:#58675f;white-space:pre-wrap}.invoice-links{display:grid;gap:8px;margin:14px 0 0;padding:0;list-style:none}.invoice-links li{display:flex;justify-content:space-between;gap:12px;padding:11px;background:#f5f7f5;border-radius:5px}.notice{padding:40px;text-align:center;color:#617068}.notice.error{color:#8f3425;background:#fff0ed;border-radius:6px}@media(max-width:760px){.page-heading{align-items:flex-start}.page-heading h1{font-size:23px}.panel{padding:14px}.status-flow{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.facts{grid-template-columns:1fr;gap:4px}.facts dd{margin-bottom:9px}.section-heading{align-items:flex-start;flex-direction:column}.lead-time{text-align:left}}
 </style>

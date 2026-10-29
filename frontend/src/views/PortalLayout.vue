@@ -87,13 +87,12 @@ async function logout() {
     </div>
 
     <div v-else-if="profile" class="portal-main">
-      <!-- Desktop sidebar -->
-      <aside class="portal-sidebar">
-        <div class="sidebar-header">
+      <header class="portal-header">
+        <div class="brand">
           <h2>{{ tx("客户门户", "Portal") }}</h2>
-          <p class="company-name">{{ profile.company }}</p>
+          <span class="company-name">{{ profile.company }}</span>
         </div>
-        <nav class="sidebar-nav">
+        <nav class="portal-nav" :aria-label="tx('客户门户导航','Customer portal navigation')">
           <router-link
             v-for="item in NAV_ITEMS"
             :key="item.path"
@@ -101,33 +100,17 @@ async function logout() {
             class="nav-item"
             :class="{ active: route.path.startsWith(item.path) }"
           >
-            <span class="nav-icon">{{ item.icon }}</span>
             <span class="nav-label">{{ locale === "zh" ? item.label_zh : item.label_en }}</span>
           </router-link>
         </nav>
         <button type="button" class="logout-btn" @click="logout">
           {{ tx("退出", "Sign out") }}
         </button>
-      </aside>
+      </header>
 
-      <!-- Main content -->
       <main class="portal-content">
         <router-view />
       </main>
-
-      <!-- Mobile bottom nav -->
-      <nav class="portal-bottom-nav">
-        <router-link
-          v-for="item in NAV_ITEMS"
-          :key="item.path"
-          :to="item.path"
-          class="bottom-nav-item"
-          :class="{ active: route.path.startsWith(item.path) }"
-        >
-          <span class="nav-icon">{{ item.icon }}</span>
-          <span class="nav-label">{{ locale === "zh" ? item.label_zh : item.label_en }}</span>
-        </router-link>
-      </nav>
     </div>
 
     <div v-else class="loading-view">
@@ -232,15 +215,17 @@ button.primary:hover {
   box-shadow: 0 4px 12px rgba(15, 110, 92, 0.3);
 }
 
-.portal-main {
-  display: grid;
-  grid-template-columns: 1fr;
-  min-height: 100vh;
-}
-
-.portal-sidebar {
-  display: none;
-}
+.portal-main { min-height: 100vh; }
+.portal-header { display:flex; align-items:center; gap:24px; padding:14px 24px; background:#fff; border-bottom:1px solid var(--line); }
+.brand { display:flex; align-items:baseline; gap:12px; flex:none; }
+.brand h2 { margin:0; font:600 20px var(--font-display); }
+.company-name { overflow:hidden; max-width:220px; color:rgba(27,36,33,.62); text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.portal-nav { display:flex; align-items:center; gap:4px; min-width:0; flex:1; }
+.nav-item { display:flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; border-radius:6px; color:rgba(27,36,33,.72); text-decoration:none; white-space:nowrap; font-size:14px; }
+.nav-item:hover { background:rgba(15,110,92,.05); color:var(--ink); }
+.nav-item.active { color:var(--cord); background:rgba(15,110,92,.1); font-weight:650; }
+.logout-btn { flex:none; min-height:38px; padding:7px 12px; border:1px solid rgba(27,36,33,.25); border-radius:5px; background:transparent; color:rgba(27,36,33,.72); font-size:13px; cursor:pointer; }
+.logout-btn:hover { color:var(--cord); border-color:var(--cord); }
 
 .portal-content {
   padding: 24px 16px 100px;
@@ -249,48 +234,7 @@ button.primary:hover {
   width: 100%;
 }
 
-.portal-bottom-nav {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  display: flex;
-  background: white;
-  border-top: 1px solid var(--line);
-  z-index: 50;
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
-}
-
-.bottom-nav-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 68px;
-  padding: 8px 4px;
-  text-decoration: none;
-  color: rgba(27, 36, 33, 0.6);
-  transition: all 0.2s;
-  border-top: 3px solid transparent;
-}
-
-.bottom-nav-item.active {
-  color: var(--cord);
-  border-top-color: var(--cord);
-  background: rgba(15, 110, 92, 0.04);
-}
-
-.bottom-nav-item .nav-icon {
-  font-size: 24px;
-  margin-bottom: 4px;
-}
-
-.bottom-nav-item .nav-label {
-  font-size: 11px;
-  font-weight: 500;
-  text-align: center;
-}
+.portal-content { padding:24px; max-width:none; margin:0; width:100%; box-sizing:border-box; }
 
 .loading-view {
   display: flex;
@@ -301,123 +245,13 @@ button.primary:hover {
   color: rgba(27, 36, 33, 0.6);
 }
 
-@media (min-width: 1024px) {
-  .portal-main {
-    grid-template-columns: 280px 1fr;
-  }
-
-  .portal-sidebar {
-    display: flex;
-    flex-direction: column;
-    background: white;
-    border-right: 1px solid var(--line);
-    padding: 32px 0;
-    position: sticky;
-    top: 0;
-    height: 100vh;
-    overflow-y: auto;
-  }
-
-  .sidebar-header {
-    padding: 0 24px 24px;
-    border-bottom: 1px solid var(--line);
-    margin-bottom: 16px;
-  }
-
-  .sidebar-header h2 {
-    font-family: var(--font-display);
-    font-size: 24px;
-    font-weight: 600;
-    margin: 0 0 8px;
-    letter-spacing: 0.01em;
-  }
-
-  .company-name {
-    font-size: 14px;
-    color: rgba(27, 36, 33, 0.6);
-    margin: 0;
-  }
-
-  .sidebar-nav {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 0 12px;
-  }
-
-  .nav-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-    margin-bottom: 4px;
-    text-decoration: none;
-    color: rgba(27, 36, 33, 0.72);
-    border-radius: 6px;
-    transition: all 0.2s;
-    min-height: 48px;
-  }
-
-  .nav-item:hover {
-    background: rgba(15, 110, 92, 0.04);
-    color: var(--ink);
-  }
-
-  .nav-item.active {
-    background: rgba(15, 110, 92, 0.1);
-    color: var(--cord);
-    font-weight: 600;
-  }
-
-  .nav-item .nav-icon {
-    font-size: 20px;
-    width: 24px;
-    text-align: center;
-  }
-
-  .nav-item .nav-label {
-    font-size: 15px;
-  }
-
-  .logout-btn {
-    margin: 16px 24px 0;
-    min-height: 44px;
-    padding: 10px 20px;
-    background: transparent;
-    color: rgba(27, 36, 33, 0.72);
-    border: 1px solid rgba(27, 36, 33, 0.3);
-    border-radius: 4px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .logout-btn:hover {
-    background: rgba(27, 36, 33, 0.04);
-    border-color: var(--cord);
-    color: var(--cord);
-  }
-
-  .portal-content {
-    padding: 48px 40px;
-  }
-
-  .portal-bottom-nav {
-    display: none;
-  }
+@media(max-width:760px) {
+ .portal-header { gap:10px; padding:10px 12px; flex-wrap:wrap; }
+ .brand { width:auto; min-width:0; flex:1; justify-content:flex-start; }
+ .brand .company-name { flex:1; max-width:none; margin-right:4px; text-align:right; }
+ .portal-nav { order:2; flex:0 0 100%; width:100%; flex-wrap:wrap; overflow:visible; }
+ .nav-item { flex:1 1 auto; min-height:34px; padding:6px 8px; font-size:12px; }
+ .logout-btn { position:static; min-height:32px; }
+ .portal-content { padding:16px 12px 24px; }
 }
-
-.portal-layout,.portal-main{min-height:calc(100dvh - 64px)}
-.portal-content{min-width:0;max-width:none;padding:12px 16px 84px}
-@media(min-width:1024px){
- .portal-main{grid-template-columns:192px minmax(0,1fr)}
- .portal-sidebar{position:sticky;top:0;align-self:start;height:auto;overflow:visible;padding:16px 0}
- .sidebar-header{padding:0 16px 12px;margin-bottom:8px}.sidebar-header h2{font-size:20px;margin:0 0 4px}
- .sidebar-nav{flex:none;padding:0 8px}.nav-item{min-height:44px;padding:8px 10px;gap:8px;margin:0 0 2px}
- .nav-item .nav-label{font-size:14px}.logout-btn{margin:12px 16px 0}.portal-content{padding:12px 20px}
-}
-@media(max-width:700px){.portal-layout,.portal-main{min-height:calc(100dvh - 60px)}.portal-content{padding:8px 12px 84px}}
-
-.portal-layout{flex:1;display:flex;flex-direction:column;min-height:0}.portal-main{flex:1;min-height:0;width:100%}@media(max-width:700px){.portal-layout,.portal-main{min-height:0}}
 </style>
