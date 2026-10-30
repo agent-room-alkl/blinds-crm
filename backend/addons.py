@@ -105,6 +105,22 @@ def concealed_rod(options):
     return str((options or {}).get('control_rod') or '').strip().lower() == 'internal concealed'
 
 
+# Customer feedback, 30 Oct: the Opening Style decides the track add-on, so a tracked shutter is never priced as hinged.
+OPENING_STYLE_ADDONS = {'tracked bifold': 'tracked_bifold', 'tracked sliding': 'tracked_sliding'}
+
+
+def sync_opening_style(options):
+    """Set the track add-on from the Opening Style: Tracked Bifold/Sliding select their add-on and clear the other, Hinged clears both.
+    A blank or unknown Opening Style leaves the add-ons as chosen."""
+    style = str((options or {}).get('opening_style') or '').strip().lower()
+    if style != 'hinged' and style not in OPENING_STYLE_ADDONS:
+        return options
+    synced = {k: v for k, v in options.items() if k not in OPENING_STYLE_ADDONS.values()}
+    if style in OPENING_STYLE_ADDONS:
+        synced[OPENING_STYLE_ADDONS[style]] = 'yes'
+    return synced
+
+
 def addon_totals(options, source_code=None, addon_definitions=None):
     """Return (per_sqm, percent, fixed) for the selected named add-ons."""
     per_sqm = percent = fixed = Decimal(0)

@@ -18,6 +18,7 @@ from pathlib import Path
 WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").read_text(encoding="utf-8"))
 
 import invoice_mail
+from addons import sync_opening_style
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
@@ -422,6 +423,28 @@ def backfill_order_numbers(c):
     return changed
 
 
+def number_invoice(c, d):
+    """Give an invoice the next running number. Call inside BEGIN IMMEDIATE so two invoices never share one."""
+    rows = c.execute("SELECT data FROM operations_records WHERE kind='invoice'").fetchall()
+    sequence = max((int(json.loads(r['data']).get('sequence') or 0) for r in rows), default=0) + 1
+    d['sequence'] = sequence
+    d['invoice_number'] = d['fixed_number'] = invoice_mail.format_invoice_number(sequence)
+    return d
+
+
+def backfill_invoice_numbers(c):
+    """Number invoices made before running numbers, oldest first, after any already numbered.
+    The old name is kept as legacy_number so earlier emails and PDFs can still be matched."""
+    projects = {json.loads(r['data'])['id']: json.loads(r['data']).get('order_number') for r in c.execute("SELECT data FROM operations_records WHERE kind='project'").fetchall()}
+    rows = c.execute("SELECT data FROM operations_records WHERE kind='invoice'").fetchall()
+    pending = sorted((d for d in (json.loads(r['data']) for r in rows) if not d.get('sequence')), key=lambda d: (d.get('created_at', ''), d['id']))
+    for d in pending:
+        d['legacy_number'] = invoice_mail.invoice_number(d, projects)
+        number_invoice(c, d)
+        c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(d, ensure_ascii=False), d['id']))
+    return [(d['legacy_number'], d['invoice_number']) for d in pending]
+
+
 def migrate(c):
     c.executescript('''
     CREATE TABLE IF NOT EXISTS portal_profiles(customer_id INTEGER PRIMARY KEY REFERENCES customers(id), username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, data TEXT NOT NULL);
@@ -505,6 +528,11 @@ class Window(Input):
     quantity: int = Field(gt=0, le=10000, strict=True)
     panel_count: int = Field(default=1, gt=0, le=100, strict=True)
     options: dict[str, str] = Field(default_factory=dict, max_length=30)
+
+    @model_validator(mode='after')
+    def track_addon_from_opening_style(self):
+        self.options = sync_opening_style(self.options)
+        return self
 
 
 class Project(Input):
@@ -832,6 +860,7 @@ def register(app, s):
             numbers = {d['id']: d.get('order_number') for d in (json.loads(r['data']) for r in c.execute("SELECT data FROM operations_records WHERE kind='project'").fetchall())}
             for i in out:
                 i['invoice_number'] = invoice_mail.invoice_number(i, numbers)
+                i['reference'] = invoice_mail.invoice_reference(i, numbers)
         return out
 
     def invoice_email(c, iid):
@@ -843,6 +872,7 @@ def register(app, s):
     def put(c, kind, d, cid=None):
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
                   (d['id'], kind, cid, s.dump(d)))
+
 
     def profile(c, cid):
         r = c.execute('SELECT data FROM portal_profiles WHERE customer_id=?', (cid,)).fetchone()
@@ -868,6 +898,10 @@ def register(app, s):
     def enrich(c, d):
         invoices = [i for i in records(c, 'invoice', d['customer_id']) if d['id'] in i['order_ids']]
         out = {**d, 'status': LEGACY_STATUS.get(d['status'], d['status']), 'invoices': invoices}
+        if any('material' not in line for line in d.get('lines') or []):
+            # Lines saved before the material was recorded show it from the current product.
+            materials = {r['id']: json.loads(r['data']).get('material') for r in c.execute('SELECT id,data FROM products')}
+            out['lines'] = [line if 'material' in line else {**line, 'material': materials.get(line.get('product_id'))} for line in d['lines']]
         if not out.get('deposit_paid_at'):
             # Orders whose deposit was confirmed before ETAs were stored take it from the deposit invoice.
             paid = next((i.get('received_at') for i in invoices if i['kind'] == 'deposit' and i.get('received_at')), None)
@@ -975,7 +1009,7 @@ def register(app, s):
                     # Mark provisional pricing on the line
                     pricing_status = 'provisional' if rule.get('provisional') else 'configured'
                     lines.append({**raw,**calculated,'id':str(n+1),'arrived':0,'delivered':0,
-                                  'source_code':p['source_code'],'product_name':p.get('name_en'),
+                                  'source_code':p['source_code'],'product_name':p.get('name_en'),'material':p.get('material'),
                                   'pricing_status':pricing_status,'rule_version':template['version'],
                                   'price_snapshot':rule})
                 order_minimum_applied = apply_order_minimum(lines,template.get('addons'),template.get('order_minimum_area','1'))
@@ -2107,11 +2141,12 @@ def register(app, s):
             d['accepted_at'] = s.now()
             d.setdefault('lead_time', lead_time_for(d['lines']))
             event(d, 'review_accepted', actor)
-            inv = {'id': 'deposit:'+oid, 'invoice_number': (d.get('order_number') or oid[-8:].upper()) + '-D', 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
+            inv = {'id': 'deposit:'+oid, 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
                    'amount': d.get('deposit') or deposit_amount(d['total']), 'currency': d['currency'], 'tax_basis': d['tax_basis'],
                    'deposit_rate': str(d.get('deposit_rate') or DEPOSIT_RATE), 'rounding': 'ROUND_UP_2DP',
                    'rule_source': 'Client reply 2026-10-15; In Put!P51',
                    'status': 'draft', 'created_at': s.now(), 'actor': actor, 'lines': [{'order_id': oid, 'amount': d.get('deposit') or deposit_amount(d['total'])}]}
+            number_invoice(c, inv)
             put(c, 'invoice', inv, d['customer_id'])
             put(c, 'project', d, d['customer_id'])
             return enrich(c, d)
@@ -2390,14 +2425,12 @@ def register(app, s):
             total = sum((item.amount for item in body.items), Decimal(0))
             if total <= 0:
                 raise HTTPException(422, 'The invoice total must be positive; credits are negative lines against charges')
-            count = len([i for i in records(c, 'invoice', body.customer_id) if i['kind'] == 'manual'])
-            prefix = (customer.get('customer_code') or '').strip() or 'INV'
-            d = {'id': iid, 'invoice_number': f'{prefix}-M{count + 1:03d}', 'fixed_number': f'{prefix}-M{count + 1:03d}',
-                 'customer_id': body.customer_id, 'kind': 'manual', 'order_ids': list(dict.fromkeys(body.order_ids)),
+            d = {'id': iid, 'customer_id': body.customer_id, 'kind': 'manual', 'order_ids': list(dict.fromkeys(body.order_ids)),
                  'lines': [{'description': item.description, 'amount': money(item.amount)} for item in body.items],
                  'currency': 'NZD', 'tax_basis': 'GST included in total', 'tax_rate': tax_rate_now(c),
                  'gross': money(total), 'amount': money(total), 'status': 'draft', 'created_at': s.now(), 'actor': actor,
                  'request_hash': bodyhash(body)}
+            number_invoice(c, d)
             put(c, 'invoice', d, body.customer_id)
             return d
 
@@ -2411,7 +2444,7 @@ def register(app, s):
                 if inv.get('status') == 'draft':
                     continue
                 paid = inv.get('payment_status') == 'received'
-                visible.append({'id': inv['id'], 'invoice_number': inv['invoice_number'], 'kind': inv['kind'], 'currency': inv['currency'],
+                visible.append({'id': inv['id'], 'invoice_number': inv['invoice_number'], 'reference': inv.get('reference', ''), 'kind': inv['kind'], 'currency': inv['currency'],
                                 'amount': inv['amount'], 'created_at': inv.get('created_at'), 'payment_status': 'paid' if paid else 'unpaid',
                                 'received_at': inv.get('received_at') if paid else None,
                                 'orders': [{'id': oid, 'order_number': orders[oid].get('order_number') if orders[oid].get('order_number_confirmed', True) else None,
@@ -2484,11 +2517,11 @@ def register(app, s):
             put(c, 'rebate', r, cid)
             remaining -= used
             allocations.append({'rebate_id': r['id'], 'amount': money(used)})
-        d = {'id': iid, 'invoice_number': invoice_mail.invoice_number({'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'id': iid}, {o['id']: o.get('order_number') for o in orders}),
-             'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
+        d = {'id': iid, 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
              'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'gross': money(gross), 'amount': money(remaining),
              'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
              'request_hash': request_hash, 'rules_evidence': rules_evidence}
+        number_invoice(c, d)
         put(c, 'invoice', d, cid)
         for o in orders:
             o['balance_invoice_id'] = iid

@@ -182,10 +182,11 @@ with tempfile.TemporaryDirectory() as folder:
     # Readable numbers, HTML+PDF email, read-only preview with the real destination.
     all_invoices = staff.get('/api/operations/invoices').json()
     order_no = {o['id']: o['order_number'] for o in staff.get('/api/operations/orders').json()}
+    # Invoice numbers run INV-00001, INV-00002, ... in creation order; the reference is the order number(s).
     for inv in all_invoices:
-        letter = 'D' if inv['kind'] == 'deposit' else 'B'
-        assert inv['invoice_number'] == min(order_no[x] for x in inv['order_ids']) + '-' + letter, inv['invoice_number']
-    assert len({i['invoice_number'] for i in all_invoices}) == len(all_invoices)
+        assert inv['invoice_number'] == f"INV-{inv['sequence']:05d}", inv['invoice_number']
+        assert inv['reference'] == ', '.join(order_no[x] for x in dict.fromkeys(inv['order_ids'])), inv['reference']
+    assert sorted(i['sequence'] for i in all_invoices) == list(range(1, len(all_invoices) + 1))
     number = next(i for i in all_invoices if i['id'] == invoice['id'])['invoice_number']
     before = (all_invoices, len(staff.get('/api/operations/notifications').json()))
     with patch.dict(os.environ, {'VERA_EMAIL_MODE': 'demo', 'VERA_DEMO_EMAIL_ADDRESS': 'owner@example.invalid'}), patch('email_service.send_email') as send:

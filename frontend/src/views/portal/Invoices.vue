@@ -79,7 +79,7 @@ async function download(invoice: any) {
       <div v-if="invoices.length" class="invoice-list">
         <article v-for="invoice in invoices" :key="invoice.id" class="invoice-card" :class="paid(invoice)?'is-paid':'is-unpaid'">
           <div class="invoice-head"><div><p class="invoice-kind">{{ invoice.kind === "deposit" ? tx("定金发票", "Deposit invoice") : invoice.kind === "balance" ? tx("尾款发票", "Balance invoice") : tx("服务账单", "Service invoice") }}</p><h2>{{ invoice.invoice_number || tx("发票", "Invoice") }}</h2></div><span class="payment-pill" :class="paid(invoice)?'paid':'unpaid'">{{ statusText(invoice) }}</span></div>
-          <div class="invoice-meta"><span>{{ tx("开票日期", "Issued") }}: {{ (invoice.created_at || "").slice(0,10) || "—" }}</span><span v-if="invoice.orders?.length">{{ tx("订单", "Orders") }}: {{ invoiceOrderNames(invoice) }}</span></div>
+          <div class="invoice-meta"><span>{{ tx("开票日期", "Issued") }}: {{ (invoice.created_at || "").slice(0,10) || "—" }}</span><span v-if="invoice.reference">{{ tx("参考号（订单号）", "Reference") }}: <strong>{{ invoice.reference }}</strong></span><span v-if="invoice.orders?.length">{{ tx("订单", "Orders") }}: {{ invoiceOrderNames(invoice) }}</span></div>
           <div class="invoice-foot"><strong class="amount">{{ invoice.currency || "NZD" }} {{ invoice.amount }}</strong><button type="button" class="download-button" :disabled="downloading===invoice.id" @click="download(invoice)">{{ downloading===invoice.id ? tx("准备中…", "Preparing…") : tx("下载 PDF", "Download PDF") }}</button></div>
         </article>
       </div>

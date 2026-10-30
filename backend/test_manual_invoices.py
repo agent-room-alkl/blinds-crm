@@ -2,6 +2,7 @@
 Synthetic data only; no real SMTP or production database.
 """
 import os
+import re
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -43,11 +44,12 @@ with tempfile.TemporaryDirectory() as folder:
         {'description': 'Credit from September', 'amount': '-75.00'}])
     inv = post(staff, 'operations/invoices/manual', body)
     assert inv['kind'] == 'manual' and inv['amount'] == '500.00' and inv['status'] == 'draft' and inv['order_ids'] == []
-    assert inv['invoice_number'] == 'MA-M001' and inv['tax_rate'] == '0.15'
+    # One running number for every invoice kind; a manual invoice with no linked order has no reference.
+    assert re.fullmatch(r'INV-\d{5}', inv['invoice_number']) and inv['tax_rate'] == '0.15'
     assert post(staff, 'operations/invoices/manual', body)['id'] == inv['id']
     post(staff, 'operations/invoices/manual', {**body, 'items': [{'description': 'Other', 'amount': '10'}]}, 409)  # key reused for different data
     second = post(staff, 'operations/invoices/manual', {**body, 'operation_key': 'manual-key-0002', 'items': [{'description': 'Extra', 'amount': '23.00'}]})
-    assert second['invoice_number'] == 'MA-M002'
+    assert second['sequence'] == inv['sequence'] + 1 and second['invoice_number'] == f"INV-{inv['sequence'] + 1:05d}"
     post(staff, 'operations/invoices/manual', {**body, 'operation_key': 'manual-key-0003', 'items': [{'description': 'Credit only', 'amount': '-10'}]}, 422)
     post(staff, 'operations/invoices/manual', {**body, 'operation_key': 'manual-key-0004', 'items': [{'description': 'Zero', 'amount': '0'}]}, 422)
     post(staff, 'operations/invoices/manual', {**body, 'operation_key': 'manual-key-0005', 'items': []}, 422)
@@ -57,9 +59,9 @@ with tempfile.TemporaryDirectory() as folder:
     with patch.dict(os.environ, {'VERA_EMAIL_MODE': 'demo', 'VERA_DEMO_EMAIL_ADDRESS': 'owner@example.invalid'}):
         preview = staff.get(f"/api/operations/invoices/{inv['id']}/mail-preview").json()
     for expected in ('Installation, Sterling House', 'Amount incl. GST: NZD 460.00', 'Credit from September', 'NZD -75.00', 'Amount due: NZD 500.00',
-                     'Includes GST (15%): NZD 65.22', 'Account number: 12-3456-7890123-00', 'quote MA-M001 as the reference'):
+                     'Includes GST (15%): NZD 65.22', 'Account number: 12-3456-7890123-00', f"quote {inv['invoice_number']} as the reference"):
         assert expected in preview['body'], (expected, preview['body'])
-    assert 'Account number' in preview['html'] and 'Credit from September' in preview['html'] and preview['invoice_number'] == 'MA-M001'
+    assert 'Account number' in preview['html'] and 'Credit from September' in preview['html'] and preview['invoice_number'] == inv['invoice_number']
     pdf = staff.get(f"/api/operations/invoices/{inv['id']}/pdf")
     assert pdf.status_code == 200 and pdf.content.startswith(b'%PDF')
 
@@ -71,7 +73,7 @@ with tempfile.TemporaryDirectory() as folder:
     mine = a.get('/api/portal/invoices').json()
     assert mine['unpaid_count'] == 1 and mine['unpaid_total'] == '500.00' and len(mine['invoices']) == 1
     row = mine['invoices'][0]
-    assert row['invoice_number'] == 'MA-M001' and row['payment_status'] == 'unpaid' and row['kind'] == 'manual' and row['pdf_path'] == f"portal/invoices/{inv['id']}/pdf"
+    assert row['invoice_number'] == inv['invoice_number'] and row['reference'] == '' and row['payment_status'] == 'unpaid' and row['kind'] == 'manual' and row['pdf_path'] == f"portal/invoices/{inv['id']}/pdf"
     assert [l['description'] for l in row['lines']] == ['Installation, Sterling House', 'Air freight, 2 orders', 'Credit from September']
     assert not {'actor', 'request_hash', 'rebate_allocations', 'rules_evidence'} & set(row)
     assert b.get('/api/portal/invoices').json()['invoices'] == []

@@ -45,6 +45,27 @@ export const ADDONS: Addon[] = [
 
 const ADDON_KEYS = new Set(ADDONS.map((addon) => addon.key));
 
+// The Opening Style decides the track add-on; the server applies the same rule (addons.sync_opening_style).
+export const OPENING_STYLE_ADDONS: Record<string, string> = { "tracked bifold": "tracked_bifold", "tracked sliding": "tracked_sliding" };
+const TRACK_ADDON_KEYS = Object.values(OPENING_STYLE_ADDONS);
+
+export function isTrackAddon(key: string): boolean { return TRACK_ADDON_KEYS.includes(key); }
+
+// True when the Opening Style is one the rule knows, so the track add-ons are set for the customer.
+export function trackAddonsLocked(options: Record<string, string>): boolean {
+  const style = String(options.opening_style || "").trim().toLowerCase();
+  return style === "hinged" || style in OPENING_STYLE_ADDONS;
+}
+
+export function syncOpeningStyle(options: Record<string, string>): void {
+  if (!trackAddonsLocked(options)) return;
+  const wanted = OPENING_STYLE_ADDONS[String(options.opening_style).trim().toLowerCase()];
+  for (const key of TRACK_ADDON_KEYS) {
+    if (key === wanted) options[key] = "yes";
+    else delete options[key];
+  }
+}
+
 export function addonsFor(sourceCode?: string): Addon[] {
   if (sourceCode && !sourceCode.startsWith("Shutters_")) return [];
   return ADDONS.map((addon) => ({
