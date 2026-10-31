@@ -22,9 +22,18 @@ def money(value):
     return f'{Decimal(str(value)):,.2f}'
 
 
+INVOICE_PREFIX = 'INV-'
+INVOICE_DIGITS = 5
+
+
+def format_invoice_number(sequence):
+    """Customer feedback, 30 Oct: one running number across deposit, balance and manual invoices, e.g. INV-00001."""
+    return f'{INVOICE_PREFIX}{int(sequence):0{INVOICE_DIGITS}d}'
+
+
 def invoice_number(invoice, order_numbers):
-    """Deposit V0000101-D, balance V0000105-B. Derived from the order number, so it is stable and needs no migration.
-    A balance invoice covering several orders is named after its first order; each order has at most one balance invoice."""
+    """The saved running number. Invoices made before running numbers keep their old order-derived name
+    (deposit V0000101-D, balance V0000105-B) until backfill_invoice_numbers.py gives them one."""
     if invoice.get('fixed_number'):
         return invoice['fixed_number']
     letter = 'D' if invoice.get('kind') == 'deposit' else 'B'
@@ -33,6 +42,12 @@ def invoice_number(invoice, order_numbers):
     if not first:
         first = re.sub(r'[^A-Za-z0-9]', '', str(invoice.get('id', '')))[-8:].upper() or 'INVOICE'
     return f'{first}-{letter}'
+
+
+def invoice_reference(invoice, order_numbers):
+    """The reference is the order number; an invoice for several orders lists each one."""
+    numbers = [order_numbers.get(oid) for oid in dict.fromkeys(invoice.get('order_ids', []))]
+    return ', '.join(n for n in numbers if n)
 
 
 def payment_lines(payment):
@@ -51,6 +66,7 @@ def build(invoice, customer, orders, payment=None):
     """invoice: stored invoice dict; customer: portal profile dict; orders: {order_id: project dict}; payment: saved bank details."""
     numbers = {oid: o.get('order_number') for oid, o in orders.items()}
     number = invoice_number(invoice, numbers)
+    reference = invoice_reference(invoice, numbers)
     kind = invoice.get('kind')
     deposit = kind == 'deposit'
     manual = kind == 'manual'
@@ -77,6 +93,7 @@ def build(invoice, customer, orders, payment=None):
     bank = payment_lines(payment)
     model = {
         'number': number,
+        'reference': reference,
         'kind': 'Deposit invoice' if deposit else ('Invoice' if manual else 'Balance invoice'),
         'kind_key': kind,
         'is_deposit': deposit,
@@ -96,7 +113,7 @@ def build(invoice, customer, orders, payment=None):
                   else 'Amounts include GST.' if manual
                   else 'Balance of each order (GST included), after the deposit already paid and any confirmed rebate.'),
         'payment': bank,
-        'footer': (f'Please pay by bank transfer to the account above and quote {number} as the reference.' if bank else footer()),
+        'footer': (f'Please pay by bank transfer to the account above and quote {reference or number} as the reference.' if bank else footer()),
     }
     model['subject'] = f"VERA invoice {number}"
     model['text'] = _text(model)
@@ -118,7 +135,7 @@ def _cells(m, r):
 
 
 def _text(m):
-    lines = [f"{BRAND}", f"{m['kind']} {m['number']}", f"Date: {m['date']}", '',
+    lines = [f"{BRAND}", f"{m['kind']} {m['number']}"] + ([f"Reference: {m['reference']}"] if m['reference'] else []) + [f"Date: {m['date']}", '',
              f"Bill to: {m['company']}" + (f" ({m['contact']})" if m['contact'] else '')]
     if m['address']:
         lines.append(m['address'])
@@ -163,11 +180,12 @@ def _html(m):
         pay = ('<tr><td style="padding:0 32px 16px"><div style="color:#64766b;font-size:11px;letter-spacing:.1em;margin-bottom:6px">PAYMENT DETAILS</div>'
                + ''.join(f'<div style="font-size:13px;line-height:1.7;color:{ink}"><span style="color:#64766b">{e(label)}:</span> <strong>{e(value)}</strong></div>' for label, value in m['payment'])
                + '</td></tr>')
+    reference = f'<div style="font-size:13px;opacity:.85;margin-top:2px">Reference: {e(m["reference"])}</div>' if m['reference'] else ''
     return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f4f7f5;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:{ink}">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7f5;padding:24px 12px"><tr><td align="center">
 <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid {line}">
 <tr><td style="background:{green};padding:26px 32px;color:#ffffff"><div style="font-size:12px;letter-spacing:.16em;opacity:.8">{e(BRAND.upper())}</div>
-<div style="font-size:24px;font-weight:700;margin-top:6px">{e(m["kind"])}</div><div style="font-size:14px;opacity:.9;margin-top:2px">{e(m["number"])}</div></td></tr>
+<div style="font-size:24px;font-weight:700;margin-top:6px">{e(m["kind"])}</div><div style="font-size:14px;opacity:.9;margin-top:2px">{e(m["number"])}</div>{reference}</td></tr>
 <tr><td style="padding:28px 32px 8px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td valign="top" style="font-size:13px;line-height:1.6"><div style="color:#64766b;font-size:11px;letter-spacing:.1em">BILL TO</div><strong>{e(m["company"])}</strong>{"<br>" + e(m["contact"]) if m["contact"] else ""}{"<br>" + e(m["address"]) if m["address"] else ""}</td>
 <td valign="top" align="right" style="font-size:13px;line-height:1.6"><div style="color:#64766b;font-size:11px;letter-spacing:.1em">INVOICE DATE</div><strong>{e(m["date"])}</strong></td></tr></table></td></tr>
@@ -213,7 +231,10 @@ def render_pdf(m):
     # reportlab frames add 6pt padding; subtract it so paragraphs and full-width tables share one left edge (174mm of content).
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm - 6, rightMargin=18 * mm - 6, topMargin=18 * mm, bottomMargin=18 * mm,
                             title=f"{m['kind']} {m['number']}", author=BRAND)
-    story = [P(BRAND.upper(), small), P(m['kind'], title), P(m['number'], base), Spacer(1, 8 * mm)]
+    story = [P(BRAND.upper(), small), P(m['kind'], title), P(m['number'], base)]
+    if m['reference']:
+        story.append(P('Reference: ' + m['reference'], base))
+    story.append(Spacer(1, 8 * mm))
     head = Table([[P('BILL TO', small), P('INVOICE DATE', small_right)], [P(m['company'], bold), P(m['date'], bold_right)]], colWidths=[114 * mm, 60 * mm])
     head.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
     story.append(head)

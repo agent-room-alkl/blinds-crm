@@ -11,6 +11,7 @@ interface Line {
   window_name: string;
   product_id?: number;
   product_name?: string;
+  material?: string;
   source_code?: string;
   width_mm?: string | number;
   height_mm?: string | number;
@@ -1185,7 +1186,7 @@ async function loadOrderProviders(orderId: string) {
                     <td>{{ line.window_name || "—" }}</td>
                     <td>{{ line.width_mm || "—" }}</td>
                     <td>{{ line.height_mm || "—" }}</td>
-                    <td>{{ line.product_name || line.source_code || line.product_id || "—" }}</td>
+                    <td>{{ [line.product_name || line.source_code || line.product_id, line.material].filter(Boolean).join(" · ") || "—" }}</td>
                     <td>{{ cell(line, "opening_style") }}</td>
                     <td>{{ line.panel_count || "—" }}</td>
                     <td>{{ cell(line, "layout_code") }}</td>
@@ -1642,7 +1643,7 @@ async function loadOrderProviders(orderId: string) {
                 <td>{{ line.window_name || "—" }}</td>
                 <td>{{ line.width_mm || "—" }}</td>
                 <td>{{ line.height_mm || "—" }}</td>
-                <td>{{ line.product_name || line.source_code || line.product_id || "—" }}</td>
+                <td>{{ [line.product_name || line.source_code || line.product_id, line.material].filter(Boolean).join(" · ") || "—" }}</td>
                 <td>{{ cell(line, "opening_style") }}</td>
                 <td>{{ line.panel_count || "—" }}</td>
                 <td>{{ cell(line, "layout_code") }}</td>
