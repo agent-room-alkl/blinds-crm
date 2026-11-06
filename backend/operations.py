@@ -602,6 +602,15 @@ class Project(Input):
         return self
 
 
+class StaffOrder(Project):
+    customer_id: int = Field(gt=0)
+    submit: bool = False
+
+
+class StaffOrderBatch(Input):
+    orders: list[StaffOrder] = Field(min_length=1, max_length=100)
+
+
 class TemplateUpload(Input):
     filename: str = Field(min_length=1,max_length=200)
     content_base64: str = Field(min_length=1,max_length=14000000)
@@ -1515,6 +1524,84 @@ def register(app, s):
     def customers(actor=Depends(s.auth)):
         with s.db() as c:
             return [json.loads(r['data']) for r in c.execute('SELECT data FROM portal_profiles')]
+
+    @app.get('/api/operations/order-catalog')
+    def staff_order_catalog(actor=Depends(s.auth)):
+        with s.db() as c:
+            active=c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
+            template=prepare_knowledge_manifest(get(c,json.loads(active['data'])['template_id'],'template')) if active else None
+            configured={r.get('source_code'):r for r in template.get('products',[]) if r.get('status')=='configured' and not r.get('provisional')} if template else {}
+            allowed={'Shutters_PVC_Eco','Shutters_PVC','Shutters_Pinewood','Shutters_Basswood','VERA_Ashwood_provisional','VERA_Ashwood_display'}
+            products=[]
+            for row in c.execute('SELECT data FROM products'):
+                product=s.catalog_product(json.loads(row['data']))
+                code=product.get('source_code')
+                if code not in allowed or product.get('category')=='blinds':
+                    continue
+                normalized='VERA_Ashwood_provisional' if code=='VERA_Ashwood_display' else code
+                rule=configured.get(normalized) or configured.get(code)
+                if template:
+                    schema=next((r.get('schema') for r in template['products'] if r.get('source_code') in (normalized,code)),None)
+                    product={**product,'source_code':normalized,'orderable':bool(rule),'configuration_schema':schema or product.get('configuration_schema',[])}
+                else:
+                    product={**product,'orderable':False}
+                products.append(product)
+            addons=template.get('addons',[]) if template else []
+            return {'products':products,'addons':addons,'pricing_status':'configured' if configured else 'rules_required'}
+
+    @app.post('/api/operations/orders/staff/preview')
+    def preview_staff_orders(body: StaffOrderBatch, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            previews=[]
+            for item in body.orders:
+                profile(c,item.customer_id)
+                payload=Project(**item.model_dump(exclude={'customer_id','submit'}))
+                priced=calculate(c,payload)
+                if priced.get('total') is None:
+                    raise HTTPException(409,'Confirmed price sheet is required for these product series')
+                previews.append({'customer_id':item.customer_id,'project_name':item.project_name,
+                                 'subtotal':priced.get('subtotal'),'installation':priced.get('installation'),
+                                 'tax':priced.get('tax'),'total':priced.get('total'),'deposit':priced.get('deposit'),
+                                 'currency':priced.get('currency'),'line_count':len(priced.get('lines',[]))})
+            return previews
+
+    @app.post('/api/operations/orders/staff')
+    def create_staff_orders(body: StaffOrderBatch, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            prepared=[]
+            for item in body.orders:
+                customer=profile(c,item.customer_id)
+                payload=Project(**item.model_dump(exclude={'customer_id','submit'}))
+                priced=calculate(c,payload)
+                if priced.get('total') is None:
+                    raise HTTPException(409,'Confirmed price sheet is required for these product series')
+                digest=bodyhash(item)
+                oid=key('staff-project:', actor+':'+item.submission_key)
+                existing=replay(c,oid,digest)
+                if existing:
+                    prepared.append(enrich(c,existing))
+                    continue
+                d={**priced,'id':oid,'order_number':assign_business_number(c,customer,payload.project_name),
+                   'order_number_confirmed':False,'customer_id':item.customer_id,'company':customer['company'],
+                   'customer_type':customer.get('customer_type') or 'wholesale','contact_name':customer['contact_name'],
+                   'email':customer['email'],'phone':customer['phone'],'company_address':customer['company_address'],
+                   'project_name':payload.project_name,'site_address':payload.site_address,
+                   'status':'pending_review' if item.submit else 'draft','payment_status':'deposit_unpaid',
+                   'history':[],'created_at':s.now(),'order_date':None,'request_hash':digest,
+                   'installation_required':payload.installation_required,'adjustments':{}}
+                d['lead_time']=lead_time_for(d['lines'])
+                event(d,'submitted' if item.submit else 'draft_created',actor)
+                prepared.append((d,item.customer_id))
+            result=[]
+            for entry in prepared:
+                if isinstance(entry,tuple):
+                    d,cid=entry
+                    put(c,'project',d,cid)
+                    result.append(enrich(c,d))
+                else:
+                    result.append(entry)
+            return result
 
     @app.get('/api/operations/runtime')
     def runtime(actor=Depends(s.auth)):

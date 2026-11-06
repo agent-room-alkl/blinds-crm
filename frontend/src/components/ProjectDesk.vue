@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
 import ManualInvoiceForm from "./ManualInvoiceForm.vue";
+import StaffOrderEntry from "./StaffOrderEntry.vue";
 
 interface Line {
   rule_version?: string;
@@ -203,7 +204,7 @@ const orders = ref<ProjectOrder[]>([]);
 const invoices = ref<Invoice[]>([]);
 const shipments = ref<Shipment[]>([]);
 const shipmentCandidates = ref<ShipmentCandidate[]>([]);
-const projectPane = ref<'orders'|'overview'>(route.query.status || route.query.payment ? 'orders' : 'overview');
+const projectPane = ref<'orders'|'overview'|'create'>(route.query.status || route.query.payment ? 'orders' : 'overview');
 const shipmentPick = ref<string[]>([]);
 const shipmentForm = reactive({ name: '', shipDate: '', eta: '' });
 const shipmentOrderText = ref('');
@@ -1281,7 +1282,9 @@ async function loadOrderProviders(orderId: string) {
     <nav v-if="workspace === 'projects'" class="project-panes" :aria-label="tx('订单视图','Order views')">
       <button type="button" :aria-pressed="projectPane==='overview'" @click="projectPane='overview'">{{ tx('订单总览','Order overview') }}</button>
       <button type="button" :aria-pressed="projectPane==='orders'" @click="projectPane='orders'">{{ tx('订单工作台','Order workspace') }}</button>
+      <button v-if="admin" type="button" :aria-pressed="projectPane==='create'" @click="projectPane='create'">{{ tx('新增订单','New order') }}</button>
     </nav>
+    <StaffOrderEntry v-if="admin && loaded && workspace === 'projects' && projectPane === 'create'" @created="load" />
     <div v-show="loaded && (['providers','finance'].includes(workspace) || (workspace === 'projects' && projectPane === 'orders'))" class="workspace-grid">
       <aside v-if="workspace === 'projects'" class="card order-list">
         <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
@@ -1752,7 +1755,7 @@ async function loadOrderProviders(orderId: string) {
       <h3>{{ tx('现有批次','Current batches') }} · {{ shipments.length }}</h3>
       <p v-if="!shipments.length" class="hint">{{ tx('尚未建立批次。','No shipment batches yet.') }}</p>
       <div v-if="shipments.length" class="shipment-overview-scroll"><table class="shipment-overview-table"><thead><tr><th>{{ tx('批次名称','Batch name') }}</th><th>{{ tx('状态','Status') }}</th><th>{{ tx('出厂时间','Factory departure') }}</th><th>{{ tx('上船时间','On board') }}</th><th>{{ tx('到港时间','Port arrival') }}</th><th>{{ tx('到仓库时间','Warehouse arrival') }}</th><th>ETA</th><th>{{ tx('订单数','Orders') }}</th></tr></thead><tbody><tr v-for="shipment in shipments" :key="shipment.id"><td><strong>{{ shipment.name }}</strong></td><td>{{ shipmentStageLabel(shipment.status) }}</td><td>{{ quoteDate(shipment.factory_departed_at) }}</td><td>{{ quoteDate(shipment.on_board_at) }}</td><td>{{ quoteDate(shipment.port_arrived_at) }}</td><td>{{ quoteDate(shipment.warehouse_arrived_at) }}</td><td>{{ quoteDate(shipment.eta) }}</td><td>{{ shipment.orders?.length || shipment.order_ids.length }}</td></tr></tbody></table></div>
-      <article v-for="shipment in shipments" :key="shipment.id" class="shipment-card">
+      <div v-if="shipments.length" class="shipment-cards-scroll"><article v-for="shipment in shipments" :key="shipment.id" class="shipment-card">
         <header><div><h3>{{ shipment.name }}</h3><span class="badge">{{ shipmentStageLabel(shipment.status) }}</span></div><small>{{ shipment.orders?.length || shipment.order_ids.length }} {{ tx('个订单','orders') }}</small></header>
         <ul class="shipment-orders"><li v-for="order in shipment.orders" :key="order.id">
           <div class="shipment-order-main"><strong>{{ order.order_number || order.id }}</strong> · {{ order.company }} · {{ order.project_name }} · {{ orderStatus(order.status) }}</div>
@@ -1777,7 +1780,7 @@ async function loadOrderProviders(orderId: string) {
         <div class="shipment-fields"><label>{{ tx('预计到货','ETA') }}<input v-model="shipmentEta[shipment.id]" type="date" /></label><button type="button" :disabled="busy || shipment.status==='arrived_warehouse'" @click="updateShipmentEta(shipment)">{{ tx('更新 ETA','Update ETA') }}</button></div>
         <div class="shipment-fields"><label>{{ tx('陆运运费','Land freight') }}<input v-model="shipmentCosts[shipment.id].freight_land" inputmode="decimal" /></label><label>{{ tx('海运运费','Sea freight') }}<input v-model="shipmentCosts[shipment.id].freight_sea" inputmode="decimal" /></label><label>{{ tx('实际关税（可选）','Actual duty (optional)') }}<input v-model="shipmentCosts[shipment.id].duty_total" inputmode="decimal" /></label><button type="button" :disabled="busy" @click="saveShipmentCosts(shipment)">{{ tx('保存成本','Save costs') }}</button></div>
         <p v-if="shipment.status==='arrived_warehouse'" class="success">{{ tx('批次已到仓库','Shipment arrived at warehouse') }} · {{ shipment.invoice_ids?.length || 0 }} {{ tx('张尾款草稿','balance drafts') }}</p>
-      </article>
+      </article></div>
     </section>
     <section v-if="workspace === 'projects' && projectPane === 'overview'" class="card order-overview">
       <header><div><h2>{{ tx('订单总览','Order overview') }}</h2><p>{{ tx('仅显示订单级别的付款和履约摘要，不展开窗户行。','Order-level payment and fulfilment summary; window rows are omitted.') }}</p></div></header>
@@ -2429,6 +2432,33 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
   .fin-rebate-form .form-grid { grid-template-columns: minmax(0, 1fr); }
   .fin-clear, .fin-block.clear .fin-clear { margin-left: 0; margin-top: 6px; }
 }
+</style>
+<style scoped>
+.project-panes{gap:6px;margin-bottom:8px}
+.desk .project-panes button{min-height:36px;padding:6px 12px}
+.order-overview{height:calc(100dvh - 250px);min-height:280px;max-height:calc(100dvh - 190px);padding:14px;display:flex;flex-direction:column;overflow:hidden}
+.order-overview>header{flex:none;margin-bottom:8px}
+.overview-filter-groups{flex:none;gap:6px;margin-bottom:8px}
+.overview-bulk{flex:none;gap:8px;margin-bottom:8px;padding:7px}
+.overview-scroll{flex:1;min-height:120px;max-height:none;overflow:auto;overscroll-behavior:contain}
+.overview-scroll table{border-collapse:separate;border-spacing:0}
+.overview-scroll thead th{position:sticky;top:0;z-index:2;background:#f5f8f5}
+.order-overview th,.order-overview td{padding:7px 8px}
+.shipment-workspace{height:calc(100dvh - 170px);min-height:340px;max-height:calc(100dvh - 120px);padding:14px;display:flex;flex-direction:column;overflow:hidden}
+.shipment-workspace>.shipment-heading{flex:none;margin-bottom:8px}
+.shipment-workspace>h3{flex:none;margin:4px 0}
+.shipment-overview-scroll{flex:none;max-height:150px;overflow:auto;margin:6px 0 10px}
+.shipment-overview-table{border-collapse:separate;border-spacing:0}
+.shipment-overview-table thead th{position:sticky;top:0;z-index:1;background:#f5f8f5}
+.shipment-overview-table th,.shipment-overview-table td{padding:6px 8px}
+.shipment-cards-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding-right:3px}
+.shipment-cards-scroll .shipment-card{margin:0 0 8px;padding:10px}
+.shipment-card ul.shipment-orders{gap:6px}
+.shipment-card ul.shipment-orders li{padding:7px 9px;gap:5px}
+.shipment-milestones{gap:7px;margin:7px 0;padding:8px}
+.shipment-progress-action{margin:7px 0;padding:8px}
+.shipment-create-dialog{flex:none;max-height:45dvh;overflow:auto;margin:6px 0;padding:10px}
+@media(max-width:700px){.order-overview{height:auto;max-height:none;min-height:55dvh}.shipment-workspace{height:auto;max-height:none;min-height:70dvh}.shipment-cards-scroll{overflow:visible}.shipment-overview-scroll{max-height:180px}}
 </style>
 <style scoped>
 .order-progress-pill,.payment-progress-pill{display:inline-flex;align-items:center;min-height:24px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}
