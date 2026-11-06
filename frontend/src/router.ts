@@ -13,6 +13,7 @@ import OrderDetail from "./views/portal/OrderDetail.vue";
 import Invoices from "./views/portal/Invoices.vue";
 import Company from "./views/portal/Company.vue";
 import Help from "./views/portal/Help.vue";
+import TradeResourcesView from "./views/TradeResourcesView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -20,6 +21,7 @@ export const router = createRouter({
     { path: "/", name: "home", component: HomeView },
     { path: "/products", name: "products", component: ProductsView },
     { path: "/products/:id", name: "product", component: ProductDetailView },
+    { path: "/trade-resources", name: "trade-resources", component: TradeResourcesView },
     { path: "/inquiry", redirect: "/contact" },
     { path: "/portal-old", name: "portal-old", component: PortalView },
     {

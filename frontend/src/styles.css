@@ -1,15 +1,15 @@
 :root {
-  --ink: #1b2421;
-  --glare: #e7eee9;
-  --frame: #1a2823;
-  --aluminium: #8e9a94;
+  --ink: #28343a;
+  --glare: #e8eef0;
+  --frame: #354552;
+  --aluminium: #788890;
   --timber: #a67c52;
   --composite: #d4cfc4;
-  --cord: #0f6e5c;
-  --paper: #f4f7f5;
-  --line: rgba(27, 36, 33, 0.14);
+  --cord: #354552;
+  --paper: #f4f6f5;
+  --line: rgba(53, 69, 82, 0.18);
   --danger: #8c2f2f;
-  --font-display: "Figtree", "Noto Sans SC", "Segoe UI", sans-serif;
+  --font-display: Georgia, "Times New Roman", "Noto Serif SC", serif;
   --font-body: "Figtree", "Noto Sans SC", sans-serif;
   color: var(--ink);
   background: var(--frame);
@@ -45,6 +45,11 @@ button, .button {
   align-items: center;
   justify-content: center;
 }
+
+button, .button, a { transition: color .16s ease, background-color .16s ease, border-color .16s ease, box-shadow .16s ease; }
+button:hover, .button:hover { background: #293b46; border-color: #293b46; color: #fff; }
+button:active, .button:active { background: #1f303b; border-color: #1f303b; color: #fff; box-shadow: inset 0 2px 4px rgba(0,0,0,.18); }
+.nav a:not(.button):hover { color: #fff; background: #354552; }
 
 .button.secondary, button.secondary {
   background: transparent;

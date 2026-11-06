@@ -1,50 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
-import { listProducts, type ApiProduct } from "../api";
-import CatalogueGallery from '../components/CatalogueGallery.vue';
-
-const { t, locale } = useI18n();
+import { computed, onMounted, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { listProducts, materialPhoto, type ApiProduct } from '../api';
+const { locale } = useI18n();
+const zh = computed(() => locale.value === 'zh');
 const products = ref<ApiProduct[]>([]);
-const lang = computed(() => (locale.value === "en" ? "en" : "zh"));
-
-onMounted(async () => {
-  products.value = await listProducts();
-});
+onMounted(async () => { products.value = await listProducts(); });
 </script>
-
 <template>
-  <main class="page">
-    <header class="catalogue-intro">
-      <p class="catalogue-label">VERA / {{ lang === 'zh' ? '材料与选型' : 'MATERIALS & OPTIONS' }}</p>
-      <h1>{{ t("products.title") }}</h1>
-      <p class="lead">{{ t("products.lead") }}</p>
-    </header>
-    <div class="gallery">
-      <article
-        v-for="product in products"
-        :key="product.id"
-        class="photo-panel"
-      >
-        <CatalogueGallery :product="product" :lang="lang" />
-        <div class="photo-copy">
-          <p v-if="product.sample" class="badge">{{ t("sample") }}</p>
-          <h2>{{ lang === "en" ? product.name_en : product.name_zh }}</h2>
-          <p>{{ lang === "en" ? product.description_en : product.description_zh }}</p>
-          <router-link class="detail-link" :to="`/products/${product.id}`">{{ lang === 'zh' ? '查看规格与详情' : 'View specifications & details' }} ↗</router-link>
-        </div>
-      </article>
-    </div>
+  <main class="page catalogue-page">
+    <header class="catalogue-intro"><p class="eyebrow">VERA / {{zh?'批发产品目录':'WHOLESALE PRODUCT CATALOGUE'}}</p><h1>{{zh?'产品系列与规格':'Product ranges & specifications'}}</h1><p>{{zh?'按材料查看系列参数、饰面选项和质保年限。':'Compare material ranges, finish options and warranty periods.'}}</p></header>
+    <nav class="range-tabs" :aria-label="zh?'产品系列':'Product ranges'"><router-link v-for="(product,index) in products" :key="product.id" :to="`/products/${product.id}`"><span>0{{index+1}}</span>{{zh?product.name_zh:product.name_en}}</router-link></nav>
+    <section class="range-list"><article v-for="(product,index) in products" :key="product.id" class="range-row"><router-link :to="`/products/${product.id}`" class="range-image"><img :src="materialPhoto(product)" :alt="zh?product.name_zh:product.name_en" loading="lazy"></router-link><div class="range-detail"><p class="eyebrow">RANGE 0{{index+1}} / {{zh?product.material_zh:product.material_en}}</p><h2>{{zh?product.name_zh:product.name_en}}</h2><p>{{zh?product.description_zh:product.description_en}}</p><dl><div><dt>{{zh?'材料':'Material'}}</dt><dd>{{zh?product.material_zh:product.material_en}}</dd></div><div><dt>{{zh?'叶片规格':'Louvre widths'}}</dt><dd>63 · 76 · 89 · 114 mm</dd></div></dl><router-link class="detail-link" :to="`/products/${product.id}`">{{zh?'打开产品规格':'View product specifications'}} ↗</router-link></div></article></section>
   </main>
 </template>
-
 <style scoped>
-.page,.photo-panel{background:#faf9f6}.catalogue-intro{padding:32px 0 30px}.catalogue-label{font-size:11px;letter-spacing:.12em;color:#64766b;margin:0 0 12px}.page h1 {
-  font-weight: 600;
-  font-size: clamp(28px, 2.6vw, 38px);
-  line-height: 1.25;
-  letter-spacing: 0;
-  margin: 0 0 10px;
-}
-.lead{font-size:15px;line-height:1.7;margin:0;color:#5d6d63}.detail-link{display:inline-block;border-bottom:1px solid var(--ink);padding:8px 0;margin-top:16px;font-size:14px}.photo-panel:nth-child(even) .catalogue-gallery{order:2}@media(max-width:900px){.photo-panel:nth-child(even) .catalogue-gallery{order:0}}@media(max-width:640px){.catalogue-intro{padding:24px 0}.page h1{font-size:28px}}
+.catalogue-page{padding:0 0 60px;background:var(--paper)}.catalogue-intro{padding:clamp(44px,7vw,80px) clamp(24px,7vw,96px) 32px;background:#edf1f2}.eyebrow{font-size:10px;letter-spacing:.14em;color:#586b77;font-weight:700;margin:0 0 12px}.catalogue-intro h1{font:600 clamp(34px,4.5vw,56px)/1.12 var(--font-display);margin:0 0 12px}.catalogue-intro>p:last-child{color:#5a6870;margin:0;font-size:14px}.range-tabs{position:sticky;top:0;z-index:10;display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid var(--line);padding:0 clamp(18px,5vw,72px)}.range-tabs a{flex:1;min-width:max-content;gap:9px;padding:14px 18px;border-bottom:2px solid transparent;font-size:12px}.range-tabs a span{font-size:10px;color:#78858c}.range-tabs a:hover,.range-tabs a.router-link-active{background:#edf1f2;border-bottom-color:var(--frame)}.range-list{max-width:1440px;margin:auto;padding:22px clamp(20px,5vw,72px)}.range-row{display:grid;grid-template-columns:minmax(260px,.9fr) 1.1fr;gap:clamp(24px,5vw,72px);padding:28px 0;border-bottom:1px solid var(--line)}.range-image img{display:block;width:100%;height:100%;min-height:280px;max-height:390px;object-fit:cover}.range-detail{align-self:center}.range-detail h2{font:600 clamp(27px,3vw,38px)/1.15 var(--font-display);margin:0 0 12px}.range-detail>p:not(.eyebrow){font-size:13px;line-height:1.75;color:#5b6971;max-width:590px}.range-detail dl{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:22px 0}.range-detail dl div{padding-top:10px;border-top:1px solid var(--line)}dt{font-size:10px;color:#67757d}dd{font-size:13px;margin:4px 0 0}.detail-link{display:inline-flex;border-bottom:1px solid;padding:8px 0;font-size:12px}.detail-link:hover{color:#526b7b}@media(max-width:700px){.range-row{grid-template-columns:1fr;gap:18px;padding:20px 0}.range-image img{height:240px;min-height:0}.range-tabs{padding:0 10px}.range-tabs a{padding:12px 10px}.range-detail dl{gap:8px}}
 </style>
