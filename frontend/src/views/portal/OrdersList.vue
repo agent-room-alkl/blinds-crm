@@ -17,13 +17,19 @@ const error = ref("");
 // Customer feedback, 30 Oct: filter by where the order is and when it was placed. Filters live in the URL so Back from an order keeps them.
 const STATUS_GROUPS = [
   { key: "all", zh: "全部", en: "All" },
-  { key: "submitted", zh: "待确认", en: "Submitted" },
-  { key: "awaiting_deposit", zh: "待付定金", en: "Awaiting deposit" },
+  { key: "draft", zh: "草稿", en: "Draft" },
+  { key: "submitted", zh: "待审核", en: "Submitted" },
   { key: "confirmed", zh: "已确认", en: "Confirmed" },
-  { key: "supplier_ordered", zh: "已向工厂下单", en: "Ordered" },
+  { key: "in_production", zh: "生产中", en: "In production" },
   { key: "in_transit", zh: "运输中", en: "In transit" },
   { key: "ready", zh: "可提货", en: "Ready" },
   { key: "complete", zh: "已完成", en: "Complete" },
+];
+const PAYMENT_GROUPS = [
+  { key: "all", zh: "全部付款状态", en: "Any payment status" },
+  { key: "deposit_unpaid", zh: "定金待付", en: "Deposit due" },
+  { key: "deposit_received", zh: "定金已付", en: "Deposit paid" },
+  { key: "paid", zh: "已结清", en: "Paid in full" },
 ];
 const DATE_RANGES = [
   { key: "all", zh: "全部日期", en: "Any date" },
@@ -34,14 +40,16 @@ const DATE_RANGES = [
 ];
 
 const status = ref(String(route.query.status || "all"));
+const paymentFilter = ref(String(route.query.payment || "all"));
 const range = ref(String(route.query.range || "all"));
 const from = ref(String(route.query.from || ""));
 const to = ref(String(route.query.to || ""));
 const search = ref(String(route.query.q || ""));
 
-watch([status, range, from, to, search], () => {
+watch([status, paymentFilter, range, from, to, search], () => {
   const query: Record<string, string> = {};
   if (status.value !== "all") query.status = status.value;
+  if (paymentFilter.value !== "all") query.payment = paymentFilter.value;
   if (range.value !== "all") query.range = range.value;
   if (range.value === "custom" && from.value) query.from = from.value;
   if (range.value === "custom" && to.value) query.to = to.value;
@@ -51,16 +59,16 @@ watch([status, range, from, to, search], () => {
 
 function statusGroup(order: any): string {
   const value = normalizeStatus(order.status);
+  if (value === "draft") return "draft";
   if (value === "pending_review") return "submitted";
-  // Same buckets as the status label each row shows (orderStatus.statusLabel).
-  if (value === "accepted") return order.payment_status === "deposit_unpaid" ? "awaiting_deposit" : "confirmed";
-  if (value === "deposit_received") return "confirmed";
-  if (["supplier_ordered", "in_transit", "ready", "complete"].includes(value)) return value;
+  if (value === "accepted") return "confirmed";
+  if (value === "supplier_ordered") return "in_production";
+  if (["in_transit", "ready", "complete"].includes(value)) return value;
   return "confirmed";
 }
 
 function placedAt(order: any): Date | null {
-  const date = order.created_at ? new Date(order.created_at) : null;
+  const date = order.order_date ? new Date(`${order.order_date}T00:00:00`) : null;
   return date && !Number.isNaN(date.getTime()) ? date : null;
 }
 
@@ -83,19 +91,25 @@ function matchesSearch(order: any): boolean {
   return [order.order_number, order.project_name, order.site_address].some((value) => String(value || "").toLowerCase().includes(term));
 }
 
-const sorted = computed(() => [...orders.value].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || ""))));
+const sorted = computed(() => [...orders.value].sort((a, b) => String(b.order_date || "").localeCompare(String(a.order_date || ""))));
 const datedAndSearched = computed(() => sorted.value.filter((order) => inRange(order) && matchesSearch(order)));
-const visible = computed(() => datedAndSearched.value.filter((order) => status.value === "all" || statusGroup(order) === status.value));
+const visible = computed(() => datedAndSearched.value.filter((order) => (status.value === "all" || statusGroup(order) === status.value) && (paymentFilter.value === "all" || order.payment_status === paymentFilter.value)));
 // Counts follow the date and search filters, so each chip says how many orders it would show.
 const counts = computed(() => {
   const out: Record<string, number> = { all: datedAndSearched.value.length };
   for (const order of datedAndSearched.value) out[statusGroup(order)] = (out[statusGroup(order)] || 0) + 1;
   return out;
 });
-const filtered = computed(() => status.value !== "all" || range.value !== "all" || Boolean(search.value.trim()));
+const paymentCounts = computed(() => {
+  const out: Record<string, number> = { all: datedAndSearched.value.length };
+  for (const order of datedAndSearched.value) out[order.payment_status] = (out[order.payment_status] || 0) + 1;
+  return out;
+});
+const filtered = computed(() => status.value !== "all" || paymentFilter.value !== "all" || range.value !== "all" || Boolean(search.value.trim()));
 
 function clearFilters() {
   status.value = "all";
+  paymentFilter.value = "all";
   range.value = "all";
   from.value = "";
   to.value = "";
@@ -169,19 +183,22 @@ function startNewOrder() {
 
     <template v-else>
       <section class="filters" :aria-label="tx('筛选订单', 'Filter orders')">
-        <div class="status-chips" role="group" :aria-label="tx('按状态', 'By status')">
+        <div class="filter-group"><strong>{{ tx("订单进度", "Order progress") }}</strong><div class="status-chips" role="group" :aria-label="tx('按订单进度', 'By order progress')">
           <button
             v-for="group in STATUS_GROUPS"
             :key="group.key"
             type="button"
             class="chip"
-            :class="{ active: status === group.key }"
+            :class="[`filter-${group.key}`, { active: status === group.key }]"
             :aria-pressed="status === group.key"
             @click="status = group.key"
           >
             {{ locale === "zh" ? group.zh : group.en }}<span class="chip-count">{{ counts[group.key] || 0 }}</span>
           </button>
-        </div>
+        </div></div>
+        <div class="filter-group"><strong>{{ tx("付款进度", "Payment progress") }}</strong><div class="status-chips payment-chips" role="group" :aria-label="tx('按付款进度', 'By payment progress')">
+          <button v-for="group in PAYMENT_GROUPS" :key="group.key" type="button" class="chip" :class="[`pay-filter-${group.key}`,{active:paymentFilter===group.key}]" :aria-pressed="paymentFilter===group.key" @click="paymentFilter=group.key">{{locale==='zh'?group.zh:group.en}}<span class="chip-count">{{paymentCounts[group.key]||0}}</span></button>
+        </div></div>
         <div class="filter-row">
           <input v-model="search" type="search" class="search" :placeholder="tx('搜索订单号或订单名称', 'Search order no. or name')" :aria-label="tx('搜索订单', 'Search orders')" />
           <label class="range">
@@ -207,7 +224,7 @@ function startNewOrder() {
         <div class="order-row head" role="row">
           <span role="columnheader">{{ tx("订单号", "Order ID") }}</span>
           <span role="columnheader">{{ tx("订单名称", "Order name") }}</span>
-          <span role="columnheader">{{ tx("下单日期", "Order date") }}</span>
+          <span role="columnheader">{{ tx("订单日期（定金到账日）", "Order date (deposit paid)") }}</span>
           <span role="columnheader">{{ tx("状态", "Status") }}</span>
           <span role="columnheader">{{ tx("预计到货 (ETA)", "ETA") }}</span>
           <span role="columnheader" class="num">{{ tx("窗数", "Windows") }}</span>
@@ -225,7 +242,7 @@ function startNewOrder() {
         >
           <span role="cell" class="cell-number" :data-label="tx('订单号', 'Order ID')"><strong>{{ orderNumber(order) }}</strong></span>
           <span role="cell" class="cell-name" :data-label="tx('订单名称', 'Order name')">{{ order.project_name }}<small v-if="order.site_address">{{ order.site_address }}</small></span>
-          <span role="cell" class="cell-date" :data-label="tx('下单日期', 'Order date')">{{ formatDate(order.created_at, locale) || "—" }}</span>
+          <span role="cell" class="cell-date" :data-label="tx('订单日期（定金到账日）', 'Order date (deposit paid)')">{{ formatDate(order.order_date, locale) || "—" }}</span>
           <span role="cell" class="cell-status" :data-label="tx('状态', 'Status')"><span class="order-status" :class="`status-${normalizeStatus(order.status)}`">{{ statusLabel(order, locale) }}</span></span>
           <span role="cell" class="cell-eta" :data-label="tx('预计到货', 'ETA')"><span :class="`eta-${etaText(order).tone}`">{{ etaText(order).text }}</span><small v-if="order.batch_name && etaText(order).tone !== 'muted'">{{ order.batch_name }}</small></span>
           <span role="cell" class="cell-windows num" :data-label="tx('窗数', 'Windows')">{{ windowCount(order) }}</span>
@@ -318,6 +335,8 @@ button.primary:hover {
   margin-bottom: 16px;
 }
 
+.filter-group{display:grid;gap:7px}.filter-group>strong{font-size:11px;letter-spacing:.06em;color:#65747d}
+
 .status-chips {
   display: flex;
   flex-wrap: wrap;
@@ -362,6 +381,10 @@ button.primary:hover {
 .chip.active .chip-count {
   background: rgba(255, 255, 255, 0.22);
 }
+
+.chip.filter-draft{color:#52616a;background:#eef1f3;border-color:#d8dfe3}.chip.filter-submitted{color:#865510;background:#fff5e2;border-color:#f0ddb2}.chip.filter-confirmed{color:#5b4789;background:#f1edfa;border-color:#ded5f1}.chip.filter-in_production{color:#445192;background:#edf0fb;border-color:#d8def5}.chip.filter-in_transit{color:#286181;background:#eaf4fb;border-color:#cee3f1}.chip.filter-ready{color:#17644f;background:#e7f5f0;border-color:#c8e8dd}.chip.filter-complete{color:#42634a;background:#eaf2eb;border-color:#d2e2d4}
+.chip.pay-filter-deposit_unpaid{color:#9b493b;background:#fff0ed;border-color:#f0d0c9}.chip.pay-filter-deposit_received{color:#286181;background:#eaf4fb;border-color:#cee3f1}.chip.pay-filter-paid{color:#376448;background:#eaf2eb;border-color:#d2e2d4}
+.chip.active{background:var(--frame);border-color:var(--frame);color:#fff}.chip.active .chip-count{color:#fff}
 
 .filter-row {
   display: flex;
@@ -485,16 +508,19 @@ button.clear {
   font-size: 12px;
   font-weight: 600;
   padding: 3px 10px;
-  background: rgba(15, 110, 92, 0.1);
+  background: #e8eef0;
   color: var(--cord);
   border-radius: 12px;
   white-space: nowrap;
 }
 
-.order-status.status-ready { background: #0f6e5c; color: #fff; }
-.order-status.status-complete { background: #e8e8e4; color: #4b5650; }
-.order-status.status-in_transit { background: #e6eef7; color: #24527a; }
-.order-status.status-pending_review { background: #fdf3e3; color: #8a4d14; }
+.order-status.status-draft { background:#e8ecef;color:#44545f }
+.order-status.status-ready { background:#dff2ed;color:#17644f }
+.order-status.status-complete { background:#e5eee6;color:#376448 }
+.order-status.status-in_transit { background:#e2f0fa;color:#245b7a }
+.order-status.status-supplier_ordered { background:#e7eafa;color:#3f4d90 }
+.order-status.status-accepted { background:#eee8fb;color:#59428b }
+.order-status.status-pending_review { background:#fff1d8;color:#82510b }
 
 .eta-date { font-weight: 600; color: #34503f; }
 .eta-ready { font-weight: 600; color: #17523a; }
@@ -507,6 +533,8 @@ button.clear {
 
 .order-payment.pay-paid { color: #17523a; font-weight: 600; }
 .order-payment.pay-deposit_unpaid { color: #a44034; }
+.order-payment.pay-deposit_received { color:#245b7a;font-weight:650 }
+.order-payment.pay-paid { color:#376448;font-weight:700 }
 
 /* Phone and narrow tablet: each order becomes a compact card with labelled fields. */
 @media (max-width: 860px) {

@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 from typing import Literal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").read_text(encoding="utf-8"))
 
@@ -24,6 +25,53 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator, model_valida
 
 # Latest client reply overrides the earlier 20% planning baseline.
 DEPOSIT_RATE = Decimal('0.60')
+ORDER_DATE_MIGRATION_ID = 'migration:order-date-from-deposit-v1'
+
+
+def order_date_from_timestamp(value):
+    """Return the Auckland business date on which a deposit receipt made the order real."""
+    if not value:
+        return None
+    raw = str(value)
+    try:
+        tz = ZoneInfo(os.getenv('VERA_TIMEZONE', 'Pacific/Auckland'))
+        moment = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=tz)
+        return moment.astimezone(tz).date().isoformat()
+    except (ValueError, TypeError, KeyError):
+        return raw[:10] or None
+
+
+def backfill_order_dates(c):
+    """Persist formal order dates from actual deposit receipts; never count drafts."""
+    if c.execute('SELECT 1 FROM operations_records WHERE id=?', (ORDER_DATE_MIGRATION_ID,)).fetchone():
+        return 0
+    received_deposits = {}
+    for row in c.execute("SELECT data FROM operations_records WHERE kind='invoice'").fetchall():
+        invoice = json.loads(row['data'])
+        if invoice.get('kind') != 'deposit' or not invoice.get('received_at'):
+            continue
+        for order_id in invoice.get('order_ids') or []:
+            received_deposits[order_id] = invoice['received_at']
+    changed_count = 0
+    for row in c.execute("SELECT id, data FROM operations_records WHERE kind='project'").fetchall():
+        order = json.loads(row['data'])
+        received_at = order.get('deposit_paid_at') or received_deposits.get(order['id'])
+        expected = order_date_from_timestamp(received_at) if received_at and order.get('status') != 'draft' else None
+        changed = False
+        if received_at and not order.get('deposit_paid_at'):
+            order['deposit_paid_at'] = received_at
+            changed = True
+        if order.get('order_date') != expected or 'order_date' not in order:
+            order['order_date'] = expected
+            changed = True
+        if changed:
+            c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(order, ensure_ascii=False), row['id']))
+            changed_count += 1
+    c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING',
+              (ORDER_DATE_MIGRATION_ID, 'system_migration', None, json.dumps({'id': ORDER_DATE_MIGRATION_ID, 'version': 1})))
+    return changed_count
 
 # Canonical VERA Deluxe (Ashwood) configuration schema
 # Single source of truth: used by product records and pricing rules
@@ -491,6 +539,10 @@ def migrate(c):
         if with_opening_styles(product.get('configuration_schema')):
             c.execute('UPDATE products SET data=? WHERE id=?', (json.dumps(product, ensure_ascii=False), row['id']))
 
+    # The formal order date begins when the deposit is actually received. Keep
+    # created_at as the submission/audit timestamp; drafts stay undated.
+    backfill_order_dates(c)
+
 
 class Input(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
@@ -875,6 +927,7 @@ def register(app, s):
     def start_lead_time(d, received_at):
         """Record when the deposit arrived and the ETA that follows from it, unless a shipment batch already set the ETA."""
         d['deposit_paid_at'] = received_at
+        d['order_date'] = order_date_from_timestamp(received_at) if d.get('status') != 'draft' else None
         d['lead_time'] = {**lead_time_for(d['lines']), 'starts_at': received_at}
         if d.get('eta_source') != 'batch':
             start = datetime.fromisoformat(received_at).astimezone(s.business_now().tzinfo).date()
@@ -941,6 +994,7 @@ def register(app, s):
             paid = next((i.get('received_at') for i in invoices if i['kind'] == 'deposit' and i.get('received_at')), None)
             if paid:
                 start_lead_time(out, paid)
+        out['order_date'] = order_date_from_timestamp(out.get('deposit_paid_at')) if out.get('deposit_paid_at') and out.get('status') != 'draft' else None
         return out
 
     def portal_view(d):
@@ -2169,7 +2223,7 @@ def register(app, s):
                  'customer_type': p.get('customer_type') or 'wholesale',
                  'contact_name': p['contact_name'], 'email': p['email'], 'phone': p['phone'],
                  'company_address': p['company_address'], 'project_name': body.project_name, 'site_address': body.site_address,
-                 'status': 'pending_review', 'payment_status': 'deposit_unpaid', 'history': [], 'created_at': s.now(),
+          'status': 'pending_review', 'payment_status': 'deposit_unpaid', 'history': [], 'created_at': s.now(), 'order_date': None,
                  'request_hash': bodyhash(body),'installation_required':body.installation_required,'adjustments':{}}
             d['lead_time'] = lead_time_for(d['lines'])
             event(d, 'submitted', p['username'])
@@ -2179,11 +2233,17 @@ def register(app, s):
     @app.get('/api/portal/orders')
     def portal_orders(cid=Depends(customer_auth)):
         with s.db() as c:
+            if not c.execute('SELECT 1 FROM operations_records WHERE id=?', (ORDER_DATE_MIGRATION_ID,)).fetchone():
+                c.execute('BEGIN IMMEDIATE')
+            backfill_order_dates(c)
             return [portal_view(enrich(c, d)) for d in records(c, 'project', cid)]
 
     @app.get('/api/operations/orders')
     def orders(actor=Depends(s.auth)):
         with s.db() as c:
+            if not c.execute('SELECT 1 FROM operations_records WHERE id=?', (ORDER_DATE_MIGRATION_ID,)).fetchone():
+                c.execute('BEGIN IMMEDIATE')
+            backfill_order_dates(c)
             result=[]
             for d in records(c, 'project'):
                 customer=profile(c,d['customer_id'])
@@ -2258,6 +2318,7 @@ def register(app, s):
                 if body.payment_status is not None and order.get('payment_status') != body.payment_status:
                     previous['payment_status'] = order.get('payment_status')
                     order['payment_status'] = body.payment_status
+                order['order_date'] = order_date_from_timestamp(order.get('deposit_paid_at')) if order.get('deposit_paid_at') and order.get('status') != 'draft' else None
                 if previous:
                     event(order, 'staff_progress_updated', actor, previous=previous,
                           status=order.get('status'), payment_status=order.get('payment_status'))

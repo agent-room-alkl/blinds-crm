@@ -1,8 +1,8 @@
 // One place for how a customer reads an order's progress, shared by the order list and the order detail page.
 export const ORDER_FLOW = [
+  { key: "draft", zh: "草稿", en: "Draft" },
   { key: "pending_review", zh: "已提交", en: "Submitted" },
   { key: "accepted", zh: "已确认", en: "Confirmed" },
-  { key: "deposit_received", zh: "定金已到账", en: "Deposit received" },
   { key: "supplier_ordered", zh: "生产中", en: "In production" },
   { key: "in_transit", zh: "运输中", en: "In transit" },
   { key: "ready", zh: "已到货，可提取", en: "Ready for collection" },

@@ -8,7 +8,7 @@ interface Order {
   id: string; order_number?: string; company: string; project_name: string; status: string;
   payment_status: string; total?: string | null; deposit?: string | null; eta?: string;
   subtotal?: string | null; installation?: string | null; tax?: string | null;
-  created_at?: string; accepted_at?: string; deposit_paid_at?: string;
+  created_at?: string; accepted_at?: string; deposit_paid_at?: string; order_date?: string | null;
   history?: { action: string; created_at: string }[];
 }
 interface Invoice { kind: string; payment_status?: string; received_at?: string; amount: string; order_ids?: string[]; }
@@ -24,7 +24,6 @@ const formatter = new Intl.NumberFormat('en-NZ', { style: 'currency', currency: 
 const amount = (value?: string | number | null) => formatter.format(Number(value || 0));
 const reviewTasks = computed(() => orders.value.filter(order => order.status === 'pending_review'));
 const orderTasks = computed(() => orders.value.filter(order => order.status === 'accepted' && order.payment_status === 'deposit_received'));
-const acceptedAt = (order: Order) => order.accepted_at || [...(order.history || [])].reverse().find(item => item.action === 'review_accepted')?.created_at || '';
 const monthKey = (value?: string) => value ? value.slice(0, 7) : '';
 const monthLabel = (key: string) => new Intl.DateTimeFormat(zh.value ? 'zh-NZ' : 'en-NZ', { month: 'short', year: 'numeric', timeZone: 'Pacific/Auckland' }).format(new Date(`${key}-01T12:00:00`));
 const months = computed(() => {
@@ -37,7 +36,7 @@ const months = computed(() => {
   return result;
 });
 const monthly = computed(() => months.value.map(month => {
-  const bookedOrders = orders.value.filter(order => ['accepted','supplier_ordered','in_transit','ready','complete'].includes(order.status) && monthKey(acceptedAt(order)) === month);
+  const bookedOrders = orders.value.filter(order => Boolean(order.order_date) && monthKey(order.order_date || undefined) === month);
   const booked = bookedOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
   const product = bookedOrders.reduce((sum, order) => sum + Number(order.subtotal || 0), 0);
   const installation = bookedOrders.reduce((sum, order) => sum + Number(order.installation || 0), 0);
@@ -77,7 +76,7 @@ onMounted(() => void load());
         <button type="button" class="task-card" @click="openOrders('accepted', 'deposit_received')"><span>{{ tx('待下单','Ready to order') }}</span><strong>{{ orderTasks.length }}</strong><small>{{ tx('已确认且定金已收，等待向工厂下单','Confirmed and deposit received; awaiting supplier order') }}</small></button>
       </div>
     </section>
-    <section class="finance-area"><div class="section-title"><div><h2>{{ tx('财务概览','Financial overview') }}</h2><p>{{ tx('确认日期归属营业额月份；到账金额按实际收款日；尾款按 ETA 预测。','Sales are grouped by confirmation month, receipts by actual payment date, and balances by ETA.') }}</p></div></div>
+    <section class="finance-area"><div class="section-title"><div><h2>{{ tx('财务概览','Financial overview') }}</h2><p>{{ tx('营业额按定金到账后的正式订单日期归月；已收款按实际到账日；尾款按 ETA 预测。','Revenue is grouped by the formal order date after deposit receipt; payments use the actual receipt date, and balances are forecast by ETA.') }}</p></div></div>
       <p v-if="loading" class="muted">{{ tx('正在读取真实订单…','Loading live order data…') }}</p>
       <div v-else class="finance-table-wrap"><table><thead><tr><th>{{ tx('月份','Month') }}</th><th>{{ tx('订单金额（营业额）','Order total (revenue)') }}</th><th>{{ tx('产品金额','Product') }}</th><th>{{ tx('安装','Installation') }}</th><th>GST</th><th>{{ tx('已收定金','Deposits received') }}</th><th>{{ tx('预计尾款（ETA）','Forecast balance (ETA)') }}</th></tr></thead><tbody><tr v-for="row in monthly" :key="row.month"><th>{{ monthLabel(row.month) }}</th><td><div class="metric-cell"><span>{{ amount(row.booked) }}</span><i :style="{width:`${row.booked/maxFinance*100}%`}" /></div></td><td>{{ amount(row.product) }}</td><td>{{ amount(row.installation) }}</td><td>{{ amount(row.gst) }}</td><td><div class="metric-cell"><span>{{ amount(row.received) }}</span><i class="received" :style="{width:`${row.received/maxFinance*100}%`}" /></div></td><td><div class="metric-cell"><span>{{ amount(row.balance) }}</span><i class="forecast" :style="{width:`${row.balance/maxFinance*100}%`}" /></div></td></tr></tbody></table></div>
       <div class="finance-legend"><span><i />{{ tx('营业额','Revenue') }}</span><span><i class="received" />{{ tx('已收款','Received') }}</span><span><i class="forecast" />{{ tx('预计尾款','Forecast balance') }}</span></div>

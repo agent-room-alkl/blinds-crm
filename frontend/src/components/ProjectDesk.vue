@@ -113,6 +113,7 @@ interface ProjectOrder {
   project_name: string;
   site_address: string;
   created_at?: string;
+  order_date?: string | null;
   deposit_paid_at?: string;
   ready_at?: string;
   completed_at?: string;
@@ -292,7 +293,7 @@ const overviewOrders = computed(() => {
       case 'status': return order.status || '';
       case 'payment': return order.payment_status || '';
       case 'deposit': return order.deposit || '';
-      case 'depositDate': return order.deposit_paid_at || depositInvoiceFor(order)?.received_at || '';
+      case 'depositDate': return order.order_date || '';
       case 'balance': return quoteBalance(order) || '';
       case 'balanceDate': return balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at || '';
       case 'completed': return order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at || '';
@@ -1392,7 +1393,7 @@ async function loadOrderProviders(orderId: string) {
                 <h3>{{ tx('批发报价汇总','Wholesale quote summary') }}</h3>
                 <dl class="quote-summary-grid">
                   <div><dt>{{ tx('客户/联系人','Customer / contact') }}</dt><dd>{{ selectedOrder.company }} · {{ selectedOrder.contact_name || '—' }} · {{ selectedOrder.phone || '—' }} · {{ selectedOrder.email || '—' }}</dd></div>
-                  <div><dt>{{ tx('订单号 / 日期','Order / date') }}</dt><dd>{{ selectedOrder.order_number || '—' }} · {{ quoteDate(selectedOrder.created_at) }}</dd></div>
+                  <div><dt>{{ tx('订单号 / 日期','Order / date') }}</dt><dd>{{ selectedOrder.order_number || '—' }} · {{ quoteDate(selectedOrder.order_date) }}</dd></div>
                   <div><dt>{{ tx('公司地址','Company address') }}</dt><dd>{{ selectedOrder.company_address || '—' }}</dd></div>
                   <div><dt>{{ tx('施工地址 / 安装','Site / installation') }}</dt><dd>{{ selectedOrder.site_address || '—' }} · {{ selectedOrder.installation_required ? tx('需要','Required') : tx('仅供货','Supply only') }}</dd></div>
                   <div><dt>{{ tx('产品小计','Sub total') }}</dt><dd>{{ quoteMoney(selectedOrder.subtotal, selectedOrder.currency || 'NZD') }}</dd></div>
@@ -1811,14 +1812,14 @@ async function loadOrderProviders(orderId: string) {
           <th><button type="button" class="sort-heading" @click="sortOverview('status')">{{ tx('订单进度','Order progress') }} {{ overviewSort.key==='status' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><select v-model="overviewFilters.status" class="overview-column-filter"><option value="">{{ tx('全部','All') }}</option><option v-for="status in orderStatusChoices" :key="status" :value="status">{{ orderStatus(status) }}</option></select></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('payment')">{{ tx('付款进度','Payment progress') }} {{ overviewSort.key==='payment' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><select v-model="overviewFilters.payment" class="overview-column-filter"><option value="">{{ tx('全部','All') }}</option><option v-for="status in paymentStatusChoices" :key="status" :value="status">{{ orderStatus(status) }}</option></select></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('deposit')">{{ tx('定金','Deposit') }} {{ overviewSort.key==='deposit' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.deposit" class="overview-column-filter" :placeholder="tx('筛选金额','Filter amount')" /></th>
-          <th><button type="button" class="sort-heading" @click="sortOverview('depositDate')">{{ tx('定金日期','Deposit date') }} {{ overviewSort.key==='depositDate' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.depositDate" type="date" class="overview-column-filter" /></th>
+          <th><button type="button" class="sort-heading" @click="sortOverview('depositDate')">{{ tx('订单日期 / 定金到账日','Order date / deposit paid') }} {{ overviewSort.key==='depositDate' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.depositDate" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('balance')">{{ tx('尾款','Balance') }} {{ overviewSort.key==='balance' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.balance" class="overview-column-filter" :placeholder="tx('筛选金额','Filter amount')" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('balanceDate')">{{ tx('尾款日期','Balance date') }} {{ overviewSort.key==='balanceDate' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.balanceDate" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('completed')">{{ tx('完成日期','Completed') }} {{ overviewSort.key==='completed' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.completed" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('eta')">ETA {{ overviewSort.key==='eta' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.eta" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('batch')">{{ tx('批次','Batch') }} {{ overviewSort.key==='batch' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.batch" class="overview-column-filter" :placeholder="tx('筛选','Filter')" /></th>
         </tr></thead><tbody>
-        <tr v-for="order in overviewOrders" :key="order.id" class="overview-row" @click="openOrder(order.id)"><td @click.stop><input type="checkbox" :aria-label="tx('选择订单','Select order')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /></td><td><button type="button" class="overview-order-link" @click.stop="openOrder(order.id)"><strong>{{ order.order_number || order.id }}</strong><small>{{ order.company }} · {{ order.project_name }}</small></button></td><td>{{ quoteDate(order.created_at) }}</td><td>{{ orderStatus(order.status) }}</td><td>{{ orderStatus(order.payment_status) }}</td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.deposit_paid_at || depositInvoiceFor(order)?.received_at) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td>{{ order.batch_name || '—' }}</td></tr>
+        <tr v-for="order in overviewOrders" :key="order.id" class="overview-row" @click="openOrder(order.id)"><td @click.stop><input type="checkbox" :aria-label="tx('选择订单','Select order')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /></td><td><button type="button" class="overview-order-link" @click.stop="openOrder(order.id)"><strong>{{ order.order_number || order.id }}</strong><small>{{ order.company }} · {{ order.project_name }}</small></button></td><td>{{ quoteDate(order.created_at) }}</td><td><span class="order-progress-pill" :class="`order-state-${order.status}`">{{ orderStatus(order.status) }}</span></td><td><span class="payment-progress-pill" :class="`payment-state-${order.payment_status}`">{{ orderStatus(order.payment_status) }}</span></td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.order_date) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td>{{ order.batch_name || '—' }}</td></tr>
       </tbody></table></div>
     </section>
     <Teleport to="body">
@@ -1859,7 +1860,7 @@ async function loadOrderProviders(orderId: string) {
             <div class="quote-title-block">
               <button type="button" class="mail-x" :aria-label="tx('关闭预览','Close preview')" @click="closeSheetPreview">✕</button>
               <p>QUOTE</p>
-              <small>Date: {{ quoteDate(selectedOrder.created_at) }}</small>
+              <small>Date: {{ quoteDate(selectedOrder.order_date) }}</small>
             </div>
           </header>
           <div class="table-scroll quote-doc-scroll"><table class="quote-doc">
@@ -2428,4 +2429,9 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
   .fin-rebate-form .form-grid { grid-template-columns: minmax(0, 1fr); }
   .fin-clear, .fin-block.clear .fin-clear { margin-left: 0; margin-top: 6px; }
 }
+</style>
+<style scoped>
+.order-progress-pill,.payment-progress-pill{display:inline-flex;align-items:center;min-height:24px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}
+.order-state-draft{background:#e8ecef;color:#44545f}.order-state-pending_review{background:#fff1d8;color:#82510b}.order-state-accepted{background:#eee8fb;color:#59428b}.order-state-supplier_ordered{background:#e7eafa;color:#3f4d90}.order-state-in_transit{background:#e2f0fa;color:#245b7a}.order-state-ready{background:#dff2ed;color:#17644f}.order-state-complete{background:#e5eee6;color:#376448}
+.payment-state-deposit_unpaid{background:#fff0ed;color:#9b493b}.payment-state-deposit_received{background:#eaf4fb;color:#286181}.payment-state-paid{background:#eaf2eb;color:#376448}
 </style>
