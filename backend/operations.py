@@ -796,6 +796,14 @@ class ShipmentEta(Input):
         return iso_date(v)
 
 
+class ShipmentNameEdit(Input):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class OrderNumberLimitEdit(Input):
+    max_length: int = Field(ge=10, le=100, strict=True)
+
+
 class Quantity(Input):
     line_id: str
     quantity: int = Field(gt=0, strict=True)
@@ -894,6 +902,10 @@ def register(app, s):
     def bodyhash(body):
         return hashlib.sha256(body.model_dump_json().encode()).hexdigest()
 
+    def order_number_max_length(c):
+        row=c.execute("SELECT data FROM operations_records WHERE id='order-number-limit'").fetchone()
+        return int(json.loads(row['data']).get('max_length',32)) if row else 32
+
     def assign_business_number(c, customer, project_name):
         kind = customer.get('customer_type') or 'wholesale'
         if kind == 'wholesale':
@@ -904,6 +916,8 @@ def register(app, s):
             numbers = [json.loads(row['data']).get('order_number', '') for row in c.execute("SELECT data FROM operations_records WHERE kind='project'")]
             if any(value.casefold() == number.casefold() for value in numbers):
                 raise HTTPException(409, 'This wholesale order number already exists; use a unique job name')
+            if len(number) > order_number_max_length(c):
+                raise HTTPException(422, f"Generated order ID is {len(number)} characters; the current limit is {order_number_max_length(c)}. Shorten the project name or raise the limit in Settings.")
             return number
         day = s.business_now().strftime('%y%m%d')
         pattern = re.compile(rf'^R{day}(\d{{2}})[A-Z]+$', re.I)
@@ -911,12 +925,17 @@ def register(app, s):
         sequence = max((int(m.group(1)) for value in numbers if (m := pattern.fullmatch(value))), default=0) + 1
         if sequence > 99:
             raise HTTPException(409, 'Daily retail order number sequence is full')
-        return f'R{day}{sequence:02d}A'
+        number = f'R{day}{sequence:02d}A'
+        if len(number) > order_number_max_length(c):
+            raise HTTPException(422, f"Generated order ID exceeds the current {order_number_max_length(c)} character limit")
+        return number
 
     def validate_order_number_unique(c, order_number, order_id):
         number = order_number.strip()
         if not number:
             raise HTTPException(422, 'Order number cannot be empty')
+        if len(number) > order_number_max_length(c):
+            raise HTTPException(422, f"Order ID cannot exceed {order_number_max_length(c)} characters")
         rows = c.execute("SELECT id,data FROM operations_records WHERE kind='project'").fetchall()
         for row in rows:
             if row['id'] == order_id:
@@ -1417,6 +1436,27 @@ def register(app, s):
             put(c, 'shipment', shipment)
             return {**shipment_view(shipment), 'updated_order_ids': updated}
 
+    @app.post('/api/operations/shipments/{sid}/name')
+    def shipment_name(sid: str, body: ShipmentNameEdit, actor=Depends(s.auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            shipment=get(c,sid,'shipment')
+            name=body.name.strip()
+            if not name:
+                raise HTTPException(422,'Shipment batch name cannot be empty')
+            duplicate=any(item['id']!=sid and item.get('name',item['id']).casefold()==name.casefold() for item in records(c,'shipment'))
+            if duplicate:
+                raise HTTPException(409,'A shipment with this name already exists')
+            previous=shipment.get('name',sid)
+            shipment['name']=name
+            event(shipment,'shipment_name_updated',actor,previous=previous,name=name)
+            for oid in shipment.get('order_ids',[]):
+                order=get(c,oid,'project')
+                order['batch_name']=name
+                put(c,'project',order,order['customer_id'])
+            put(c,'shipment',shipment)
+            return shipment_view(shipment,[get(c,oid,'project') for oid in shipment.get('order_ids',[])])
+
     @app.post('/api/operations/shipments/{sid}/arrive')
     def shipment_arrive(sid: str, actor=Depends(s.auth)):
         """The whole batch has arrived: every order becomes Ready, customers are told, and balance invoices are drafted per company."""
@@ -1626,7 +1666,16 @@ def register(app, s):
         from email_service import configuration
         with s.db() as c:
             payment = payment_view(payment_details(c))
-        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND,'payment_details':payment}
+            max_length = order_number_max_length(c)
+        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND,'payment_details':payment,'order_number_max_length':max_length}
+
+    @app.post('/api/operations/settings/order-number-limit')
+    def save_order_number_limit(body: OrderNumberLimitEdit, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            saved = {'id':'order-number-limit','max_length':body.max_length,'updated_at':s.now(),'updated_by':actor}
+            put(c, 'setting', saved)
+            return {'max_length':body.max_length}
 
     @app.post('/api/operations/settings')
     def save_settings(body: SettingsEdit, actor=Depends(s.require_admin)):
@@ -2425,7 +2474,9 @@ def register(app, s):
             if number_confirmation_required and not body.confirm_order_number:
                 raise HTTPException(409, 'Review and confirm the order number before accepting this quote')
             if body.order_number is not None and number_confirmation_required:
-                d['order_number'] = validate_order_number_unique(c, body.order_number, oid)
+                proposed = body.order_number.strip()
+                if proposed != d.get('order_number'):
+                    d['order_number'] = validate_order_number_unique(c, proposed, oid)
             if d['total'] is None:
                 # Re-price only an unreviewed submission; reviewed snapshots stay immutable.
                 b = Project(project_name=d['project_name'], site_address=d['site_address'], submission_key='repricing',

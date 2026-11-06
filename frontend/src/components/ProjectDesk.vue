@@ -204,11 +204,15 @@ const orders = ref<ProjectOrder[]>([]);
 const invoices = ref<Invoice[]>([]);
 const shipments = ref<Shipment[]>([]);
 const shipmentCandidates = ref<ShipmentCandidate[]>([]);
-const projectPane = ref<'orders'|'overview'|'create'>(route.query.status || route.query.payment ? 'orders' : 'overview');
+const projectPane = ref<'orders'|'overview'>(route.query.order ? 'orders' : 'overview');
+const orderSearch = ref('');
+const createOrderOpen = ref(false);
+const staffOrderDialog = ref<HTMLDialogElement | null>(null);
 const shipmentPick = ref<string[]>([]);
 const shipmentForm = reactive({ name: '', shipDate: '', eta: '' });
 const shipmentOrderText = ref('');
 const shipmentCreateOpen = ref(false);
+const expandedShipmentId = ref('');
 const shipmentInputIds = computed(() => [...new Set(shipmentOrderText.value.split(/[\s,;]+/).map(value => value.trim()).filter(Boolean))]);
 const shipmentMatches = computed(() => shipmentInputIds.value.flatMap(input => {
   const found = shipmentCandidates.value.find(order => order.order_number?.toLocaleLowerCase() === input.toLocaleLowerCase() || order.id.toLocaleLowerCase() === input.toLocaleLowerCase());
@@ -243,7 +247,7 @@ const orderProgressFilter = ref(String(route.query.status || ""));
 const paymentProgressFilter = ref(String(route.query.payment || ""));
 const bulkOrderStatus = ref("");
 const bulkPaymentStatus = ref("");
-const overviewFilters = reactive<Record<string, string>>({ order: '', submitted: '', status: '', payment: '', deposit: '', depositDate: '', balance: '', balanceDate: '', completed: '', eta: '', batch: '' });
+const overviewFilters = reactive<Record<string, string>>({ order: '', customer: '', submitted: '', status: String(route.query.status || ''), payment: String(route.query.payment || ''), deposit: '', depositDate: '', balance: '', balanceDate: '', completed: '', eta: '', batch: '' });
 const overviewSort = ref<{ key: string; direction: 1 | -1 }>({ key: 'submitted', direction: -1 });
 const picked = ref<string[]>([]);
 const invoicePick = ref<string[]>([]);
@@ -290,6 +294,7 @@ const overviewOrders = computed(() => {
   const valueFor = (order: ProjectOrder, key: string): string => {
     switch (key) {
       case 'order': return `${order.order_number || order.id} ${order.company} ${order.project_name}`;
+      case 'customer': return `${order.company} ${order.contact_name || ''} ${order.email || ''}`;
       case 'submitted': return order.created_at || '';
       case 'status': return order.status || '';
       case 'payment': return order.payment_status || '';
@@ -303,7 +308,8 @@ const overviewOrders = computed(() => {
       default: return '';
     }
   };
-  const rows = orders.value.filter(order => Object.entries(overviewFilters).every(([key, filter]) => {
+  const search = orderSearch.value.trim().toLocaleLowerCase();
+  const rows = orders.value.filter(order => (!search || `${order.order_number || order.id} ${order.company} ${order.contact_name || ''} ${order.email || ''} ${order.project_name}`.toLocaleLowerCase().includes(search)) && Object.entries(overviewFilters).every(([key, filter]) => {
     if (!filter) return true;
     const value = valueFor(order, key);
     return key === 'status' || key === 'payment'
@@ -628,6 +634,20 @@ function openOrder(id: string) {
   detailSection.value = 'order';
   router.replace({ query: { ...route.query, order: id } });
 }
+function backToOrderList() {
+  projectPane.value = 'overview';
+  const { order: _order, ...query } = route.query;
+  router.replace({ query });
+}
+function onStaffOrderDialogClose() { createOrderOpen.value = false; }
+function onStaffOrderDialogClick(event: MouseEvent) { if (event.target === staffOrderDialog.value) createOrderOpen.value = false; }
+async function staffOrderCreated() { createOrderOpen.value = false; await load(); }
+watch(createOrderOpen, async open => {
+  if (open) {
+    await nextTick();
+    if (createOrderOpen.value && staffOrderDialog.value && !staffOrderDialog.value.open) staffOrderDialog.value.showModal();
+  } else if (staffOrderDialog.value?.open) staffOrderDialog.value.close();
+});
 async function applyBulkStatus(kind: 'accept' | 'deposit' | 'supplier') {
   const targets = orders.value.filter(order => picked.value.includes(order.id));
   if (!targets.length) return;
@@ -833,8 +853,9 @@ function createShipment() {
   });
 }
 function shipmentNextStage(shipment: Shipment): string {
-  return ({ planned: 'factory_departed', factory_departed: 'on_board', on_board: 'port_arrived', port_arrived: 'arrived_warehouse' } as Record<string, string>)[shipment.status] || '';
+  return ({ planned: 'factory_departed', in_transit: 'on_board', factory_departed: 'on_board', on_board: 'port_arrived', port_arrived: 'arrived_warehouse' } as Record<string, string>)[shipment.status] || '';
 }
+function shipmentStatusValue(shipment: Shipment) { return ({ in_transit: 'factory_departed', arrived: 'arrived_warehouse' } as Record<string,string>)[shipment.status] || shipment.status; }
 function shipmentStageLabel(status: string) {
   const labels: Record<string, [string, string]> = {
     planned: ['待出厂', 'Preparing'], factory_departed: ['已出厂', 'Factory departed'],
@@ -852,6 +873,26 @@ function advanceShipment(shipment: Shipment) {
     notice.value = status === 'factory_departed'
       ? tx('批次已出厂，批次内订单已转为运输中。', 'Batch departed the factory; its orders are now in transit.')
       : tx(`批次进度已更新：${shipmentStageLabel(status)}。`, `Shipment advanced to ${shipmentStageLabel(status)}.`);
+  });
+}
+function setShipmentStage(shipment: Shipment, status: string) {
+  if (status === shipmentStatusValue(shipment)) return;
+  if (status === 'arrived_warehouse') return arriveShipment(shipment);
+  if (status === shipmentNextStage(shipment)) return advanceShipment(shipment);
+  return act(async () => {
+    await request(`operations/shipments/${encodeURIComponent(shipment.id)}/progress`, { status });
+    notice.value = status === 'factory_departed'
+      ? tx('批次已出厂，批次内订单已转为运输中。', 'Batch departed the factory; its orders are now in transit.')
+      : tx(`批次进度已更新：${shipmentStageLabel(status)}。`, `Shipment advanced to ${shipmentStageLabel(status)}.`);
+  });
+}
+function renameShipment(shipment: Shipment) {
+  const name = shipment.name.trim();
+  if (!name) { error.value = tx('批次名称不能为空。','Batch name cannot be empty.'); return; }
+  if (name === shipment.name) return;
+  return act(async () => {
+    await request(`operations/shipments/${encodeURIComponent(shipment.id)}/name`, { name });
+    notice.value = tx('已保存批次名称。','Shipment batch name saved.');
   });
 }
 function saveShipmentMilestones(shipment: Shipment) {
@@ -1279,12 +1320,13 @@ async function loadOrderProviders(orderId: string) {
     <p v-if="notice" class="success card" role="status">{{ notice }}</p>
 
     <p v-if="!loaded" role="status">{{ tx('加载中…','Loading…') }}</p>
-    <nav v-if="workspace === 'projects'" class="project-panes" :aria-label="tx('订单视图','Order views')">
-      <button type="button" :aria-pressed="projectPane==='overview'" @click="projectPane='overview'">{{ tx('订单总览','Order overview') }}</button>
-      <button type="button" :aria-pressed="projectPane==='orders'" @click="projectPane='orders'">{{ tx('订单工作台','Order workspace') }}</button>
-      <button v-if="admin" type="button" :aria-pressed="projectPane==='create'" @click="projectPane='create'">{{ tx('新增订单','New order') }}</button>
+    <nav v-if="workspace === 'projects'" class="project-panes order-list-toolbar" :aria-label="tx('订单操作','Order actions')">
+      <template v-if="projectPane==='orders'"><button type="button" class="secondary" @click="backToOrderList">← {{ tx('返回全部订单','Back to all orders') }}</button><span class="current-order-label">{{ selectedOrder?.order_number || selectedOrder?.project_name }}</span></template>
+      <template v-else>
+        <label class="order-global-search"><span>{{ tx('搜索订单','Search orders') }}</span><input v-model="orderSearch" type="search" :placeholder="tx('订单 ID、客户或项目','Order ID, customer or project')" /></label>
+        <button v-if="admin" type="button" @click="createOrderOpen=true">＋ {{ tx('新增订单','New order') }}</button>
+      </template>
     </nav>
-    <StaffOrderEntry v-if="admin && loaded && workspace === 'projects' && projectPane === 'create'" @created="load" />
     <div v-show="loaded && (['providers','finance'].includes(workspace) || (workspace === 'projects' && projectPane === 'orders'))" class="workspace-grid">
       <aside v-if="workspace === 'projects'" class="card order-list">
         <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
@@ -1752,42 +1794,34 @@ async function loadOrderProviders(orderId: string) {
           <footer><button type="button" class="secondary" @click="shipmentCreateOpen=false">{{ tx('取消','Cancel') }}</button><button type="submit" :disabled="busy || !shipmentForm.name.trim() || !shipmentForm.shipDate || !shipmentMatches.length">{{ tx('创建批次并加入匹配订单','Create batch with matched orders') }}</button></footer>
         </form>
       </dialog>
-      <h3>{{ tx('现有批次','Current batches') }} · {{ shipments.length }}</h3>
+      <div class="shipment-list-heading"><h3>{{ tx('运输批次','Shipment batches') }}</h3><span>{{ shipments.length }}</span></div>
       <p v-if="!shipments.length" class="hint">{{ tx('尚未建立批次。','No shipment batches yet.') }}</p>
-      <div v-if="shipments.length" class="shipment-overview-scroll"><table class="shipment-overview-table"><thead><tr><th>{{ tx('批次名称','Batch name') }}</th><th>{{ tx('状态','Status') }}</th><th>{{ tx('出厂时间','Factory departure') }}</th><th>{{ tx('上船时间','On board') }}</th><th>{{ tx('到港时间','Port arrival') }}</th><th>{{ tx('到仓库时间','Warehouse arrival') }}</th><th>ETA</th><th>{{ tx('订单数','Orders') }}</th></tr></thead><tbody><tr v-for="shipment in shipments" :key="shipment.id"><td><strong>{{ shipment.name }}</strong></td><td>{{ shipmentStageLabel(shipment.status) }}</td><td>{{ quoteDate(shipment.factory_departed_at) }}</td><td>{{ quoteDate(shipment.on_board_at) }}</td><td>{{ quoteDate(shipment.port_arrived_at) }}</td><td>{{ quoteDate(shipment.warehouse_arrived_at) }}</td><td>{{ quoteDate(shipment.eta) }}</td><td>{{ shipment.orders?.length || shipment.order_ids.length }}</td></tr></tbody></table></div>
-      <div v-if="shipments.length" class="shipment-cards-scroll"><article v-for="shipment in shipments" :key="shipment.id" class="shipment-card">
-        <header><div><h3>{{ shipment.name }}</h3><span class="badge">{{ shipmentStageLabel(shipment.status) }}</span></div><small>{{ shipment.orders?.length || shipment.order_ids.length }} {{ tx('个订单','orders') }}</small></header>
-        <ul class="shipment-orders"><li v-for="order in shipment.orders" :key="order.id">
-          <div class="shipment-order-main"><strong>{{ order.order_number || order.id }}</strong> · {{ order.company }} · {{ order.project_name }} · {{ orderStatus(order.status) }}</div>
-          <div v-if="purchaseForm[order.id]" class="shipment-fields">
-            <label>{{ tx('工厂价 (USD)','Factory price (USD)') }}<input v-model="purchaseForm[order.id].usd" inputmode="decimal" /></label>
-            <label>{{ tx('实测面积 ㎡（可选）','Measured m² (optional)') }}<input v-model="purchaseForm[order.id].sqm" inputmode="decimal" :placeholder="order.measured_sqm || ''" /></label>
-            <button type="button" class="secondary" :disabled="busy" @click="savePurchase(order)">{{ tx('保存工厂价','Save price') }}</button>
-          </div>
-          <small v-if="order.freight_cost != null" class="shipment-share">{{ tx('已摊分','Allocated') }}: {{ tx('运费','freight') }} NZD {{ order.freight_cost }} · {{ tx('关税','duty') }} NZD {{ order.duty_cost }} ({{ order.duty_basis === 'actual' ? tx('实际','actual') : tx('估算','estimate') }})</small>
-        </li></ul>
-        <div class="shipment-milestones">
-          <label>{{ tx('出厂时间','Factory departure') }}<input v-model="shipmentMilestones[shipment.id].factory_departed_at" type="date" /></label>
-          <label>{{ tx('上船时间','Loaded on vessel') }}<input v-model="shipmentMilestones[shipment.id].on_board_at" type="date" /></label>
-          <label>{{ tx('到港时间','Port arrival') }}<input v-model="shipmentMilestones[shipment.id].port_arrived_at" type="date" /></label>
-          <label>{{ tx('到仓库时间','Warehouse arrival') }}<input v-model="shipmentMilestones[shipment.id].warehouse_arrived_at" type="date" /></label>
-          <button type="button" class="secondary" :disabled="busy" @click="saveShipmentMilestones(shipment)">{{ tx('保存日期','Save dates') }}</button>
-        </div>
-        <div class="shipment-progress-action" v-if="shipmentNextStage(shipment)">
-          <span>{{ tx('下一阶段','Next stage') }}：{{ shipmentStageLabel(shipmentNextStage(shipment)) }}</span>
-          <button type="button" :disabled="busy" @click="advanceShipment(shipment)">{{ shipmentNextStage(shipment)==='factory_departed' ? tx('确认出厂','Mark factory departure') : shipmentNextStage(shipment)==='on_board' ? tx('确认上船','Mark loaded on vessel') : shipmentNextStage(shipment)==='port_arrived' ? tx('确认到港','Mark port arrival') : tx('确认到仓库并生成尾款草稿','Mark warehouse arrival & draft balances') }}</button>
-        </div>
-        <div class="shipment-fields"><label>{{ tx('预计到货','ETA') }}<input v-model="shipmentEta[shipment.id]" type="date" /></label><button type="button" :disabled="busy || shipment.status==='arrived_warehouse'" @click="updateShipmentEta(shipment)">{{ tx('更新 ETA','Update ETA') }}</button></div>
-        <div class="shipment-fields"><label>{{ tx('陆运运费','Land freight') }}<input v-model="shipmentCosts[shipment.id].freight_land" inputmode="decimal" /></label><label>{{ tx('海运运费','Sea freight') }}<input v-model="shipmentCosts[shipment.id].freight_sea" inputmode="decimal" /></label><label>{{ tx('实际关税（可选）','Actual duty (optional)') }}<input v-model="shipmentCosts[shipment.id].duty_total" inputmode="decimal" /></label><button type="button" :disabled="busy" @click="saveShipmentCosts(shipment)">{{ tx('保存成本','Save costs') }}</button></div>
-        <p v-if="shipment.status==='arrived_warehouse'" class="success">{{ tx('批次已到仓库','Shipment arrived at warehouse') }} · {{ shipment.invoice_ids?.length || 0 }} {{ tx('张尾款草稿','balance drafts') }}</p>
-      </article></div>
+      <div v-else class="shipment-overview-scroll"><table class="shipment-overview-table shipment-edit-table"><colgroup><col class="ship-name-col"/><col class="ship-status-col"/><col class="ship-date-col"/><col class="ship-date-col"/><col class="ship-date-col"/><col class="ship-date-col"/><col class="ship-date-col"/><col class="ship-orders-col"/><col class="ship-cost-col"/><col class="ship-cost-col"/><col class="ship-cost-col"/><col class="ship-expand-col"/></colgroup><thead><tr><th>{{ tx('批次名称','Batch name') }}</th><th>{{ tx('进度','Progress') }}</th><th>{{ tx('出厂','Factory') }}</th><th>{{ tx('上船','On board') }}</th><th>{{ tx('到港','Port') }}</th><th>{{ tx('到仓','Warehouse') }}</th><th>ETA</th><th>{{ tx('订单','Orders') }}</th><th>{{ tx('陆运','Land') }}</th><th>{{ tx('海运','Sea') }}</th><th>{{ tx('关税','Duty') }}</th><th></th></tr></thead><tbody>
+        <template v-for="shipment in shipments" :key="shipment.id">
+          <tr>
+            <td><input v-model="shipment.name" class="ship-name-input" maxlength="100" :title="shipment.name" :disabled="busy" @blur="renameShipment(shipment)" /></td>
+            <td><select :value="shipmentStatusValue(shipment)" :disabled="busy || !shipmentNextStage(shipment)" @change="setShipmentStage(shipment,($event.target as HTMLSelectElement).value)"><option v-for="stage in [shipmentStatusValue(shipment),shipmentNextStage(shipment)].filter(Boolean)" :key="stage" :value="stage">{{ shipmentStageLabel(stage) }}</option></select></td>
+            <td><input v-model="shipmentMilestones[shipment.id].factory_departed_at" type="date" :disabled="busy" @change="saveShipmentMilestones(shipment)" /></td>
+            <td><input v-model="shipmentMilestones[shipment.id].on_board_at" type="date" :disabled="busy" @change="saveShipmentMilestones(shipment)" /></td>
+            <td><input v-model="shipmentMilestones[shipment.id].port_arrived_at" type="date" :disabled="busy" @change="saveShipmentMilestones(shipment)" /></td>
+            <td><input v-model="shipmentMilestones[shipment.id].warehouse_arrived_at" type="date" :disabled="busy" @change="saveShipmentMilestones(shipment)" /></td>
+            <td><input v-model="shipmentEta[shipment.id]" type="date" :disabled="busy || shipment.status==='arrived_warehouse'" @change="updateShipmentEta(shipment)" /></td>
+            <td>{{ shipment.orders?.length || shipment.order_ids.length }}</td>
+            <td><input v-model="shipmentCosts[shipment.id].freight_land" inputmode="decimal" :disabled="busy" @change="saveShipmentCosts(shipment)" /></td>
+            <td><input v-model="shipmentCosts[shipment.id].freight_sea" inputmode="decimal" :disabled="busy" @change="saveShipmentCosts(shipment)" /></td>
+            <td><input v-model="shipmentCosts[shipment.id].duty_total" inputmode="decimal" :disabled="busy" @change="saveShipmentCosts(shipment)" /></td>
+            <td><button type="button" class="secondary ship-orders-toggle" @click="expandedShipmentId=expandedShipmentId===shipment.id?'':shipment.id">{{ expandedShipmentId===shipment.id ? tx('收起','Hide') : tx('订单','Orders') }}</button></td>
+          </tr>
+          <tr v-if="expandedShipmentId===shipment.id" class="shipment-orders-detail"><td colspan="12"><table><thead><tr><th>{{ tx('订单 ID','Order ID') }}</th><th>{{ tx('客户 / 项目','Customer / project') }}</th><th>{{ tx('进度','Status') }}</th><th>{{ tx('工厂价 USD','Factory price USD') }}</th><th>{{ tx('实测面积 ㎡','Measured m²') }}</th><th>{{ tx('已分摊运费','Freight share') }}</th><th>{{ tx('已分摊关税','Duty share') }}</th></tr></thead><tbody><tr v-for="order in shipment.orders" :key="order.id"><td>{{ order.order_number || order.id }}</td><td>{{ order.company }} · {{ order.project_name }}</td><td>{{ orderStatus(order.status) }}</td><td><input v-if="purchaseForm[order.id]" v-model="purchaseForm[order.id].usd" inputmode="decimal" @change="savePurchase(order)" /></td><td><input v-if="purchaseForm[order.id]" v-model="purchaseForm[order.id].sqm" inputmode="decimal" :placeholder="order.measured_sqm || ''" @change="savePurchase(order)" /></td><td>{{ order.freight_cost ?? '—' }}</td><td>{{ order.duty_cost ?? '—' }}</td></tr></tbody></table><p v-if="shipment.status==='arrived_warehouse'" class="success">{{ tx('批次已到仓库','Shipment arrived at warehouse') }} · {{ shipment.invoice_ids?.length || 0 }} {{ tx('张尾款草稿','balance drafts') }}</p></td></tr>
+        </template>
+      </tbody></table></div>
     </section>
     <section v-if="workspace === 'projects' && projectPane === 'overview'" class="card order-overview">
-      <header><div><h2>{{ tx('订单总览','Order overview') }}</h2><p>{{ tx('仅显示订单级别的付款和履约摘要，不展开窗户行。','Order-level payment and fulfilment summary; window rows are omitted.') }}</p></div></header>
+      <header><h2>{{ tx('订单','Orders') }}</h2><span class="order-count">{{ overviewOrders.length }} / {{ orders.length }}</span></header>
       <div class="overview-bulk">
         <label><input type="checkbox" :checked="allOverviewOrdersPicked" @change="toggleAllOverviewOrders(($event.target as HTMLInputElement).checked)" /> {{ tx('全选当前列表','Select all shown') }} ({{ overviewOrders.length }})</label>
         <span>{{ tx('已选','Selected') }} {{ picked.length }}</span>
-        <div class="overview-progress-edit">
+        <div v-if="picked.length" class="overview-progress-edit">
           <label>{{ tx('订单状态','Order status') }}
             <select v-model="bulkOrderStatus" :disabled="!picked.length"><option value="">{{ tx('保持不变','Keep unchanged') }}</option><option v-for="status in editableOrderStatuses" :key="status" :value="status">{{ orderStatus(status) }}</option></select>
           </label>
@@ -1796,35 +1830,32 @@ async function loadOrderProviders(orderId: string) {
           </label>
           <button type="button" :disabled="busy || !picked.length || (!bulkOrderStatus && !bulkPaymentStatus)" @click="applyBulkProgress">{{ tx('应用到所选订单','Apply to selected orders') }}</button>
         </div>
-        <div class="overview-bulk-group"><strong>{{ tx('订单进度','Order progress') }}</strong>
-          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>orders.find(o=>o.id===id)?.status==='pending_review')" @click="applyBulkStatus('accept')">{{ tx('确认所选报价','Accept selected quotes') }}</button>
-          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>{const o=orders.find(x=>x.id===id);return o?.status==='accepted'&&o?.payment_status==='deposit_received'})" @click="applyBulkStatus('supplier')">{{ tx('标为已向工厂下单','Mark ordered with supplier') }}</button>
-          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>orders.find(o=>o.id===id)?.status==='supplier_ordered')" @click="transitSelected">{{ tx('标为运输中','Mark in transit') }}</button>
-          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>['in_transit','partially_arrived'].includes(orders.find(o=>o.id===id)?.status || ''))" @click="arriveSelected">{{ tx('确认到货','Confirm arrivals') }}</button>
-        </div>
-        <div class="overview-bulk-group"><strong>{{ tx('付款进度','Payment progress') }}</strong>
-          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>{const o=orders.find(x=>x.id===id);return o?.status!=='pending_review'&&o?.payment_status==='deposit_unpaid'})" @click="applyBulkStatus('deposit')">{{ tx('确认定金已收','Confirm deposits received') }}</button>
-          <button type="button" class="secondary" :disabled="busy || !selectedBalanceInvoices.length" @click="receiveSelectedBalances">{{ tx('确认尾款已收','Confirm balances received') }}<span v-if="selectedBalanceInvoices.length">({{ selectedBalanceInvoices.length }})</span></button>
-        </div>
       </div>
-      <div class="overview-scroll"><table><thead>
+      <div class="overview-scroll"><table class="orders-overview-table"><colgroup><col class="col-select"/><col class="col-order-id"/><col class="col-customer"/><col class="col-submitted"/><col class="col-status"/><col class="col-payment"/><col class="col-money"/><col class="col-date"/><col class="col-money"/><col class="col-date"/><col class="col-date"/><col class="col-date"/><col class="col-batch"/></colgroup><thead>
         <tr>
           <th></th>
-          <th><button type="button" class="sort-heading" @click="sortOverview('order')">{{ tx('订单 / 项目','Order / project') }} {{ overviewSort.key==='order' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.order" class="overview-column-filter" :placeholder="tx('筛选','Filter')" /></th>
+          <th><button type="button" class="sort-heading" @click="sortOverview('order')">ORDER ID {{ overviewSort.key==='order' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.order" class="overview-column-filter compact-id-filter" :placeholder="tx('筛选','Filter')" /></th>
+          <th><button type="button" class="sort-heading" @click="sortOverview('customer')">{{ tx('客户','Customer') }} {{ overviewSort.key==='customer' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.customer" class="overview-column-filter" :placeholder="tx('筛选','Filter')" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('submitted')">{{ tx('提交日期','Submitted') }} {{ overviewSort.key==='submitted' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.submitted" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('status')">{{ tx('订单进度','Order progress') }} {{ overviewSort.key==='status' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><select v-model="overviewFilters.status" class="overview-column-filter"><option value="">{{ tx('全部','All') }}</option><option v-for="status in orderStatusChoices" :key="status" :value="status">{{ orderStatus(status) }}</option></select></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('payment')">{{ tx('付款进度','Payment progress') }} {{ overviewSort.key==='payment' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><select v-model="overviewFilters.payment" class="overview-column-filter"><option value="">{{ tx('全部','All') }}</option><option v-for="status in paymentStatusChoices" :key="status" :value="status">{{ orderStatus(status) }}</option></select></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('deposit')">{{ tx('定金','Deposit') }} {{ overviewSort.key==='deposit' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.deposit" class="overview-column-filter" :placeholder="tx('筛选金额','Filter amount')" /></th>
-          <th><button type="button" class="sort-heading" @click="sortOverview('depositDate')">{{ tx('订单日期 / 定金到账日','Order date / deposit paid') }} {{ overviewSort.key==='depositDate' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.depositDate" type="date" class="overview-column-filter" /></th>
+          <th><button type="button" class="sort-heading" :title="tx('订单日期 / 定金到账日','Order date / deposit paid')" @click="sortOverview('depositDate')">{{ tx('订单日期','Order date') }} {{ overviewSort.key==='depositDate' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.depositDate" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('balance')">{{ tx('尾款','Balance') }} {{ overviewSort.key==='balance' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.balance" class="overview-column-filter" :placeholder="tx('筛选金额','Filter amount')" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('balanceDate')">{{ tx('尾款日期','Balance date') }} {{ overviewSort.key==='balanceDate' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.balanceDate" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('completed')">{{ tx('完成日期','Completed') }} {{ overviewSort.key==='completed' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.completed" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('eta')">ETA {{ overviewSort.key==='eta' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.eta" type="date" class="overview-column-filter" /></th>
           <th><button type="button" class="sort-heading" @click="sortOverview('batch')">{{ tx('批次','Batch') }} {{ overviewSort.key==='batch' ? (overviewSort.direction===1?'↑':'↓') : '↕' }}</button><input v-model="overviewFilters.batch" class="overview-column-filter" :placeholder="tx('筛选','Filter')" /></th>
         </tr></thead><tbody>
-        <tr v-for="order in overviewOrders" :key="order.id" class="overview-row" @click="openOrder(order.id)"><td @click.stop><input type="checkbox" :aria-label="tx('选择订单','Select order')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /></td><td><button type="button" class="overview-order-link" @click.stop="openOrder(order.id)"><strong>{{ order.order_number || order.id }}</strong><small>{{ order.company }} · {{ order.project_name }}</small></button></td><td>{{ quoteDate(order.created_at) }}</td><td><span class="order-progress-pill" :class="`order-state-${order.status}`">{{ orderStatus(order.status) }}</span></td><td><span class="payment-progress-pill" :class="`payment-state-${order.payment_status}`">{{ orderStatus(order.payment_status) }}</span></td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.order_date) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td>{{ order.batch_name || '—' }}</td></tr>
+        <tr v-for="order in overviewOrders" :key="order.id" class="overview-row" @click="openOrder(order.id)"><td @click.stop><input type="checkbox" :aria-label="tx('选择订单','Select order')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /></td><td :title="order.order_number || order.id"><button type="button" class="overview-order-link" @click.stop="openOrder(order.id)"><strong>{{ order.order_number || order.id }}</strong><small>{{ order.project_name }}</small></button></td><td :title="`${order.company} · ${order.contact_name || ''}`">{{ order.company }}<small>{{ order.contact_name }}</small></td><td>{{ quoteDate(order.created_at) }}</td><td><span class="order-progress-pill" :class="`order-state-${order.status}`">{{ orderStatus(order.status) }}</span></td><td><span class="payment-progress-pill" :class="`payment-state-${order.payment_status}`">{{ orderStatus(order.payment_status) }}</span></td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.order_date) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td :title="order.batch_name">{{ order.batch_name || '—' }}</td></tr>
       </tbody></table></div>
     </section>
+    <Teleport to="body">
+      <dialog v-if="createOrderOpen" ref="staffOrderDialog" class="staff-order-dialog" :aria-label="tx('新增订单','New order')" @close="onStaffOrderDialogClose" @click="onStaffOrderDialogClick">
+        <button type="button" class="staff-order-dialog-close" :aria-label="tx('关闭','Close')" @click="createOrderOpen=false">✕</button>
+        <StaffOrderEntry @created="staffOrderCreated" />
+      </dialog>
+    </Teleport>
     <Teleport to="body">
       <dialog ref="previewDialog" class="mail-dialog" :aria-label="tx('邮件预览','Email preview')" @close="onDialogClosed" @click="onDialogClick">
         <section v-if="mailPreview" class="mail-modal-card">
@@ -2434,6 +2465,58 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 }
 </style>
 <style scoped>
+.order-list-toolbar{display:flex;align-items:center;gap:10px;margin:0 0 8px;min-height:40px}
+.order-global-search{display:flex;align-items:center;gap:8px;margin:0;max-width:600px;flex:1;color:#52635a;font-size:12px}
+.order-global-search input{width:min(430px,100%);min-height:36px;height:36px;margin:0;padding:6px 10px}
+.current-order-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#455950;font-weight:600}
+.order-overview{height:calc(100dvh - 205px);max-height:calc(100dvh - 150px);min-height:280px;padding:10px 12px}
+.order-overview>header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.order-overview>header h2{font-size:17px;margin:0}
+.order-count{color:#66756f;font-size:12px}
+.overview-bulk{align-items:center;padding:5px 8px;margin:0 0 6px;gap:10px}
+.overview-bulk label{margin:0;white-space:nowrap}
+.overview-progress-edit{width:auto;flex:1;padding:0;border-top:0;justify-content:flex-end;align-items:center}
+.overview-progress-edit label{min-width:145px;max-width:205px;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;white-space:nowrap}
+.overview-progress-edit select{min-width:0;width:100%;min-height:34px;height:34px;padding:4px 26px 4px 7px}
+.overview-progress-edit button{min-height:34px;padding:5px 10px;white-space:nowrap}
+.overview-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+.orders-overview-table{width:100%;min-width:1430px;table-layout:fixed;border-collapse:separate;border-spacing:0}
+.orders-overview-table col.col-select{width:38px}.orders-overview-table col.col-order-id{width:205px}.orders-overview-table col.col-customer{width:145px}.orders-overview-table col.col-submitted{width:108px}.orders-overview-table col.col-status{width:125px}.orders-overview-table col.col-payment{width:128px}.orders-overview-table col.col-money{width:112px}.orders-overview-table col.col-date{width:112px}.orders-overview-table col.col-batch{width:128px}
+.orders-overview-table th,.orders-overview-table td{min-width:0;max-width:0;overflow:hidden;text-overflow:ellipsis;padding:5px 6px}
+.orders-overview-table th{vertical-align:bottom}
+.orders-overview-table th:first-child{min-width:0;width:38px}
+.orders-overview-table .sort-heading{max-width:100%;min-height:24px;font-size:11px;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis}
+.orders-overview-table .overview-column-filter{box-sizing:border-box;width:100%;min-width:0;max-width:100%;height:29px;min-height:29px!important;margin:3px 0 0!important;padding:3px 5px!important;font-size:11px!important}
+.orders-overview-table .compact-id-filter{width:120px;max-width:100%}
+.orders-overview-table td:first-child{text-align:center}
+.orders-overview-table td:first-child input{width:16px;height:16px;min-height:16px}
+.orders-overview-table .overview-order-link{display:block;max-width:100%;overflow:hidden}
+.orders-overview-table .overview-order-link strong,.orders-overview-table .overview-order-link small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orders-overview-table td small{font-size:10px}
+.orders-overview-table .order-progress-pill,.orders-overview-table .payment-progress-pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;padding-inline:6px;font-size:10px}
+.shipment-list-heading{display:flex;justify-content:space-between;align-items:center;flex:none;margin:2px 0 5px}
+.shipment-list-heading h3{margin:0;font-size:14px}
+.shipment-list-heading span{font-size:12px;color:#52635a}
+.shipment-overview-scroll{flex:1;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;margin:0}
+.shipment-edit-table{width:max-content;min-width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0}
+.shipment-edit-table col.ship-name-col{width:160px}.shipment-edit-table col.ship-status-col{width:130px}.shipment-edit-table col.ship-date-col{width:128px}.shipment-edit-table col.ship-orders-col{width:58px}.shipment-edit-table col.ship-cost-col{width:105px}.shipment-edit-table col.ship-expand-col{width:75px}
+.shipment-edit-table th,.shipment-edit-table td{min-width:0;max-width:none;padding:5px 6px;vertical-align:middle}
+.shipment-edit-table thead th{position:sticky;top:0;z-index:2;background:#f5f8f5;font-size:11px}
+.shipment-edit-table input,.shipment-edit-table select{box-sizing:border-box;width:100%;min-width:0;height:31px;min-height:31px;margin:0;padding:3px 5px;font-size:11px;border-radius:4px}
+.shipment-edit-table input[type=date]{width:122px}
+.shipment-edit-table .ship-name-input{min-width:145px}
+.shipment-edit-table .ship-orders-toggle{min-width:0;min-height:29px;height:29px;padding:3px 7px;font-size:11px}
+.shipment-orders-detail>td{padding:7px;background:#f7f9f7}
+.shipment-orders-detail table{width:100%;min-width:920px;border-collapse:collapse}
+.shipment-orders-detail th,.shipment-orders-detail td{padding:5px 7px;border-bottom:1px solid #e2e8e3;text-align:left;font-size:11px}
+.shipment-orders-detail input{max-width:135px}
+.staff-order-dialog{position:fixed;width:min(1180px,94vw);max-width:none;max-height:94dvh;overflow:auto;padding:34px 12px 12px;border:1px solid #cad5ce;border-radius:10px;box-shadow:0 18px 55px #10251b55}
+.staff-order-dialog::backdrop{background:#17251fcc}
+.staff-order-dialog-close{position:absolute;right:12px;top:8px;z-index:2;min-width:34px;min-height:30px;height:30px;padding:2px 8px;background:#fff;color:#30463b;border:1px solid #d5ddd6}
+.staff-order-dialog :deep(.staff-order-entry){padding:8px;border:0;box-shadow:none}
+@media(max-width:700px){.order-overview{height:auto;max-height:none;min-height:60dvh}.overview-progress-edit{justify-content:flex-start;flex-wrap:wrap}.overview-progress-edit label{grid-template-columns:1fr}.order-global-search{max-width:none}.order-global-search input{width:100%}.shipment-workspace{height:auto;max-height:none;min-height:70dvh}.shipment-overview-scroll{min-height:280px}.staff-order-dialog{width:96vw;max-height:96dvh;padding-inline:5px}}
+</style>
+<style scoped>
 .project-panes{gap:6px;margin-bottom:8px}
 .desk .project-panes button{min-height:36px;padding:6px 12px}
 .order-overview{height:calc(100dvh - 250px);min-height:280px;max-height:calc(100dvh - 190px);padding:14px;display:flex;flex-direction:column;overflow:hidden}
@@ -2464,4 +2547,56 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .order-progress-pill,.payment-progress-pill{display:inline-flex;align-items:center;min-height:24px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}
 .order-state-draft{background:#e8ecef;color:#44545f}.order-state-pending_review{background:#fff1d8;color:#82510b}.order-state-accepted{background:#eee8fb;color:#59428b}.order-state-supplier_ordered{background:#e7eafa;color:#3f4d90}.order-state-in_transit{background:#e2f0fa;color:#245b7a}.order-state-ready{background:#dff2ed;color:#17644f}.order-state-complete{background:#e5eee6;color:#376448}
 .payment-state-deposit_unpaid{background:#fff0ed;color:#9b493b}.payment-state-deposit_received{background:#eaf4fb;color:#286181}.payment-state-paid{background:#eaf2eb;color:#376448}
+</style>
+<style scoped>
+.order-list-toolbar{display:flex;align-items:center;gap:10px;margin:0 0 8px;min-height:40px}
+.order-global-search{display:flex;align-items:center;gap:8px;margin:0;max-width:600px;flex:1;color:#52635a;font-size:12px}
+.order-global-search input{width:min(430px,100%);min-height:36px;height:36px;margin:0;padding:6px 10px}
+.current-order-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#455950;font-weight:600}
+.order-overview{height:calc(100dvh - 205px);max-height:calc(100dvh - 150px);min-height:280px;padding:10px 12px}
+.order-overview>header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.order-overview>header h2{font-size:17px;margin:0}
+.order-count{color:#66756f;font-size:12px}
+.overview-bulk{align-items:center;padding:5px 8px;margin:0 0 6px;gap:10px}
+.overview-bulk label{margin:0;white-space:nowrap}
+.overview-progress-edit{width:auto;flex:1;padding:0;border-top:0;justify-content:flex-end;align-items:center}
+.overview-progress-edit label{min-width:145px;max-width:205px;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;white-space:nowrap}
+.overview-progress-edit select{min-width:0;width:100%;min-height:34px;height:34px;padding:4px 26px 4px 7px}
+.overview-progress-edit button{min-height:34px;padding:5px 10px;white-space:nowrap}
+.overview-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+.orders-overview-table{width:100%;min-width:1430px;table-layout:fixed;border-collapse:separate;border-spacing:0}
+.orders-overview-table col.col-select{width:38px}.orders-overview-table col.col-order-id{width:205px}.orders-overview-table col.col-customer{width:145px}.orders-overview-table col.col-submitted{width:108px}.orders-overview-table col.col-status{width:125px}.orders-overview-table col.col-payment{width:128px}.orders-overview-table col.col-money{width:112px}.orders-overview-table col.col-date{width:112px}.orders-overview-table col.col-batch{width:128px}
+.orders-overview-table th,.orders-overview-table td{min-width:0;max-width:0;overflow:hidden;text-overflow:ellipsis;padding:5px 6px}
+.orders-overview-table th{vertical-align:bottom}
+.orders-overview-table th:first-child{min-width:0;width:38px}
+.orders-overview-table .sort-heading{max-width:100%;min-height:24px;font-size:11px;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis}
+.orders-overview-table .overview-column-filter{box-sizing:border-box;width:100%;min-width:0;max-width:100%;height:29px;min-height:29px!important;margin:3px 0 0!important;padding:3px 5px!important;font-size:11px!important}
+.orders-overview-table .compact-id-filter{width:120px;max-width:100%}
+.orders-overview-table td:first-child{text-align:center}
+.orders-overview-table td:first-child input{width:16px;height:16px;min-height:16px}
+.orders-overview-table .overview-order-link{display:block;max-width:100%;overflow:hidden}
+.orders-overview-table .overview-order-link strong,.orders-overview-table .overview-order-link small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orders-overview-table td small{font-size:10px}
+.orders-overview-table .order-progress-pill,.orders-overview-table .payment-progress-pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;padding-inline:6px;font-size:10px}
+.shipment-list-heading{display:flex;justify-content:space-between;align-items:center;flex:none;margin:2px 0 5px}
+.shipment-list-heading h3{margin:0;font-size:14px}
+.shipment-list-heading span{font-size:12px;color:#52635a}
+.shipment-overview-scroll{flex:1;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;margin:0}
+.shipment-edit-table{width:max-content;min-width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0}
+.shipment-edit-table col.ship-name-col{width:160px}.shipment-edit-table col.ship-status-col{width:130px}.shipment-edit-table col.ship-date-col{width:128px}.shipment-edit-table col.ship-orders-col{width:58px}.shipment-edit-table col.ship-cost-col{width:105px}.shipment-edit-table col.ship-expand-col{width:75px}
+.shipment-edit-table th,.shipment-edit-table td{min-width:0;max-width:none;padding:5px 6px;vertical-align:middle}
+.shipment-edit-table thead th{position:sticky;top:0;z-index:2;background:#f5f8f5;font-size:11px}
+.shipment-edit-table input,.shipment-edit-table select{box-sizing:border-box;width:100%;min-width:0;height:31px;min-height:31px;margin:0;padding:3px 5px;font-size:11px;border-radius:4px}
+.shipment-edit-table input[type=date]{width:122px}
+.shipment-edit-table .ship-name-input{min-width:145px}
+.shipment-edit-table .ship-orders-toggle{min-width:0;min-height:29px;height:29px;padding:3px 7px;font-size:11px}
+.shipment-orders-detail>td{padding:7px;background:#f7f9f7}
+.shipment-orders-detail table{width:100%;min-width:920px;border-collapse:collapse}
+.shipment-orders-detail th,.shipment-orders-detail td{padding:5px 7px;border-bottom:1px solid #e2e8e3;text-align:left;font-size:11px}
+.shipment-orders-detail input{max-width:135px}
+.staff-order-dialog{position:fixed;width:min(1180px,94vw);max-width:none;max-height:94dvh;overflow:auto;padding:34px 12px 12px;border:1px solid #cad5ce;border-radius:10px;box-shadow:0 18px 55px #10251b55}
+.staff-order-dialog::backdrop{background:#17251fcc}
+.staff-order-dialog-close{position:absolute;right:12px;top:8px;z-index:2;min-width:34px;min-height:30px;height:30px;padding:2px 8px;background:#fff;color:#30463b;border:1px solid #d5ddd6}
+.staff-order-dialog :deep(.staff-order-entry){padding:8px;border:0;box-shadow:none}
+@media(max-width:700px){.order-overview{height:auto;max-height:none;min-height:60dvh}.overview-progress-edit{justify-content:flex-start;flex-wrap:wrap}.overview-progress-edit label{grid-template-columns:1fr}.order-global-search{max-width:none}.order-global-search input{width:100%}.shipment-workspace{height:auto;max-height:none;min-height:70dvh}.shipment-overview-scroll{min-height:280px}.staff-order-dialog{width:96vw;max-height:96dvh;padding-inline:5px}}
 </style>

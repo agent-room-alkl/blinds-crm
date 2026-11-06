@@ -6,11 +6,15 @@ const props = defineProps<{ locale: string }>();
 const tx = (zh: string, en: string) => (props.locale === "zh" ? zh : en);
 const notice = ref("");
 type PaymentDetails = { account_name: string; bank_name: string; account_number: string; reference_note: string; configured?: boolean };
-const settings = ref<{ email?: { configured?: boolean; sender?: string; mode?:string }; storage?: string; database?: string; payment_details?: PaymentDetails } | null>(null);
+const settings = ref<{ email?: { configured?: boolean; sender?: string; mode?:string }; storage?: string; database?: string; payment_details?: PaymentDetails; order_number_max_length?: number } | null>(null);
 const payment = reactive<PaymentDetails>({ account_name: "", bank_name: "", account_number: "", reference_note: "" });
+const orderNumberMaxLength = ref(32);
 const paymentBusy = ref(false);
 const paymentError = ref("");
 const paymentSaved = ref("");
+const orderNumberBusy = ref(false);
+const orderNumberError = ref("");
+const orderNumberSaved = ref("");
 
 function fillPayment(details?: PaymentDetails) {
   for (const key of ["account_name", "bank_name", "account_number", "reference_note"] as const) payment[key] = details?.[key] ?? "";
@@ -33,10 +37,22 @@ async function savePayment() {
   } finally { paymentBusy.value = false; }
 }
 
+async function saveOrderNumberLimit() {
+  orderNumberError.value = ""; orderNumberSaved.value = ""; orderNumberBusy.value = true;
+  try {
+    const result = await request<{ max_length: number }>("operations/settings/order-number-limit", { max_length: Number(orderNumberMaxLength.value) });
+    orderNumberMaxLength.value = result.max_length;
+    if (settings.value) settings.value.order_number_max_length = result.max_length;
+    orderNumberSaved.value = tx("已保存。此限制仅用于之后创建或修改的订单 ID。", "Saved. This limit applies only to order IDs created or edited from now on.");
+  } catch (cause) { orderNumberError.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { orderNumberBusy.value = false; }
+}
+
 onMounted(async () => {
   try {
     settings.value = await request("operations/settings");
     fillPayment(settings.value?.payment_details);
+    orderNumberMaxLength.value = settings.value?.order_number_max_length ?? 32;
   } catch {
     notice.value = tx("暂时无法读取服务配置", "Could not load service settings");
   }
@@ -75,6 +91,14 @@ onMounted(async () => {
       <p v-if="paymentError" class="payment-error" role="alert">{{ paymentError }}</p>
       <p v-if="paymentSaved" class="payment-ok" role="status">{{ paymentSaved }}</p>
       <button type="submit" :disabled="paymentBusy">{{ paymentBusy ? tx("保存中…", "Saving…") : tx("保存收款信息", "Save payment details") }}</button>
+    </form>
+    <form v-if="settings" class="payment-form order-id-limit-form" @submit.prevent="saveOrderNumberLimit">
+      <h3>{{ tx("订单 ID 最大长度", "Maximum Order ID length") }}</h3>
+      <p>{{ tx("只限制之后新建或手动修改的订单 ID，不会改动已有编号。客户类型为批发时，新建编号超过上限会提示缩短项目名称。范围：10–100 个字符。", "Applies only to newly created or manually edited order IDs; existing IDs are left as they are. Wholesale IDs over the limit require a shorter project name. Range: 10–100 characters.") }}</p>
+      <div class="payment-grid"><label>{{ tx("最大字符数", "Maximum characters") }}<input v-model.number="orderNumberMaxLength" type="number" min="10" max="100" step="1" required /></label></div>
+      <p v-if="orderNumberError" class="payment-error" role="alert">{{ orderNumberError }}</p>
+      <p v-if="orderNumberSaved" class="payment-ok" role="status">{{ orderNumberSaved }}</p>
+      <button type="submit" :disabled="orderNumberBusy">{{ orderNumberBusy ? tx("保存中…", "Saving…") : tx("保存订单 ID 限制", "Save Order ID limit") }}</button>
     </form>
   </section>
 </template>
